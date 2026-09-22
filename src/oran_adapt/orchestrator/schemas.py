@@ -1,0 +1,24 @@
+"""What the orchestrator hands back for one drift event: which of the four members ran, what
+each produced, and how the job ended."""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel
+
+from oran_adapt.adaptation.schemas import CandidateModel
+from oran_adapt.core.enums import Strategy
+from oran_adapt.decision.schemas import Decision
+from oran_adapt.validation.schemas import ValidationReport
+
+
+class JobResult(BaseModel):
+    model_id: str
+    outcome: Literal["NO_ACTION", "REGISTERED", "REJECTED"]
+    reason: str
+    strategy: Strategy | None = None
+    decision: Decision | None = None
+    candidate: CandidateModel | None = None
+    validation: ValidationReport | None = None
+    registered_version: str | None = None
