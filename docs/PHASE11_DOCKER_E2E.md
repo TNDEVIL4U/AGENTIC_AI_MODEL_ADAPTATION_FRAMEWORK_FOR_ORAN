@@ -64,3 +64,40 @@ What remains genuinely unverified until Docker is available somewhere: whether `
 actually succeeds against `docker/sandbox/Dockerfile`, whether the memory/network flags passed to
 `docker run` behave as intended, and whether the full `docker-compose.yml` stack actually comes
 up healthy and serves a real request end-to-end.
+
+## Line-by-line file review (still no Docker CLI — static review only)
+
+`docs/IMPLEMENTATION_CHECKLIST.md`'s "Known gaps" item 5 flagged that `Dockerfile`,
+`docker/sandbox/Dockerfile`, and `docker-compose.yml` had been confirmed to exist but not read
+line-by-line. Read in full and cross-checked against the code that depends on them:
+
+- **`docker-compose.yml`** — parses as valid YAML (`yaml.safe_load`, verified this session).
+  Three services: `postgres:16`, `ghcr.io/mlflow/mlflow:latest`, and `api` (built from the root
+  `Dockerfile`). `api`'s `DATABASE_URL`/`MLFLOW_TRACKING_URI` correctly override `.env`'s local
+  SQLite defaults with the in-compose Postgres/MLflow service hostnames, and `depends_on` waits
+  for Postgres's `pg_isready` healthcheck before starting the API. **Not independently verified:**
+  whether `ghcr.io/mlflow/mlflow:latest` actually resolves to a pullable image — this repo has no
+  network-checked Docker registry access in this environment, so that image reference is taken on
+  faith, not confirmed.
+- **Root `Dockerfile`** — multi-stage-style single stage on `python:3.11-slim`; copies
+  `pyproject.toml`/`alembic.ini`/`src`/`migrations`, `pip install`s the package itself (not
+  `-e`, so this is a real, non-editable install inside the image — consistent with, and actually
+  resolving, the "package not installed editable" gap noted for local dev in `docs/MANUAL.md`
+  §11), creates a non-root `app` user, and its `CMD` runs `upgrade_to_head()` before starting
+  `uvicorn`. This correctly matches `api`'s service definition in `docker-compose.yml` (same
+  `DATABASE_URL` env var name the migration call reads via `get_settings()`). No mismatches found.
+- **`docker/sandbox/Dockerfile`** — `WORKDIR /sandbox` matches the `-v <workdir>:/sandbox -w
+  /sandbox` bind mount `run_in_docker()` constructs at `src/oran_adapt/sandbox/runner.py:181-184`
+  exactly. The installed package list (`numpy, pandas, scikit-learn, xgboost, torch, joblib`)
+  matches `sandbox/security.py`'s `ALLOWED_IMPORT_ROOTS` one-for-one — no import the AST scanner
+  would permit is missing from the image, and no extra package (e.g. no shell utilities, no
+  networking libraries) is present beyond what's needed. Tag convention in the file's own header
+  comment (`oran-adapt-sandbox:latest`) matches `Settings.sandbox_docker_image`'s default in
+  `src/oran_adapt/core/config.py:30`, confirmed by direct read.
+
+**Conclusion: no defects found in this static review.** All three files are internally consistent
+with each other and with the Python code that constructs `docker run`/reads these env vars. This
+raises confidence but is **not a substitute for actually building and running them** — a `docker
+build` failure (bad base image, a typo in a path) or a runtime failure (wrong permissions, a port
+conflict) would not be caught by reading the files. That remains the one item in the "Known gaps"
+list that genuinely requires a Docker install to close.

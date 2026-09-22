@@ -194,6 +194,26 @@ covered by integration tests, but those tests have never actually executed here 
 themselves for the documented reason. See `docs/PHASE11_DOCKER_E2E.md` for exactly what was
 and wasn't verified.
 
+## Known limitations
+
+- **Windows: no enforced sandbox memory ceiling.** `SANDBOX_MEMORY_MB` is only enforced on
+  POSIX (`resource.setrlimit`); on Windows the subprocess sandbox backend has a real wall-clock
+  timeout but no memory cap. Use `SANDBOX_BACKEND=docker` for an enforced limit on any OS.
+- **A timed-out job's worker thread keeps running.** Python cannot forcibly kill a thread, so
+  past `JOB_TIMEOUT_S` the caller is unblocked but the abandoned worker may still write a late
+  result to the database after the client was told it failed — check `AdaptationJob.status`
+  directly for jobs that timed out.
+
+See `docs/MANUAL.md` §12 and `docs/IMPLEMENTATION_CHECKLIST.md`'s "Known gaps" for details.
+
+## Manual
+
+`docs/MANUAL.md` is the complete operator reference: every setup/run/test/lint/Docker command,
+the full API endpoint reference (request/response schemas, status codes, error codes), the
+environment variable table, how to seed a test model, how to independently verify a run actually
+happened (not just trust the API's response), and a troubleshooting table for issues hit while
+developing this on Windows/Git-Bash.
+
 ## Project history
 
 - `docs/PHASE0_AUDIT.md` — the original repository audit and the 13-phase build plan this
