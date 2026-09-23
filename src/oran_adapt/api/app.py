@@ -47,9 +47,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def _status_for(exc: AdaptationError) -> int:
     return {
         "MODEL_NOT_FOUND": 404,
+        "JOB_NOT_FOUND": 404,
         "DATASET_NOT_FOUND": 404,
         "CONFLICT": 409,
         "DATA_VERSION_CONFLICT": 409,
+        "MODEL_BUSY": 409,
+        "INVALID_STATE_TRANSITION": 409,
+        "ARTIFACT_INTEGRITY_FAILED": 422,
         "MLFLOW_UNAVAILABLE": 503,
         "DATABASE_UNAVAILABLE": 503,
         "JOB_TIMEOUT": 504,

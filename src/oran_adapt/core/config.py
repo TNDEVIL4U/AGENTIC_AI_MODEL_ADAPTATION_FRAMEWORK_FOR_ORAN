@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     sandbox_docker_image: str = "oran-adapt-sandbox:latest"
 
     live_alias: str = "live"
+    # Points at the newest registered, validated candidate (whether or not it went live).
+    candidate_alias: str = "candidate"
     log_level: str = "INFO"
     log_json: bool = True
 
@@ -48,6 +50,23 @@ class Settings(BaseSettings):
     analysis_psi_reuse_threshold: float = Field(0.1, ge=0)
     analysis_ks_pvalue_reuse_threshold: float = Field(0.05, gt=0, lt=1)
     analysis_drift_score_reuse_threshold: float = Field(0.3, ge=0, le=1)
+
+    # Member 1 historical version reuse. Once drift is confirmed, every registered version (the
+    # newest reuse_max_versions of them) is scored on the held-out newest drifted rows. A non-live
+    # version is reused, instead of training anything, when it beats LIVE there by at least
+    # reuse_min_accuracy_gain (classifiers, absolute) or reuse_min_rmse_reduction_ratio
+    # (regressors, a fraction of LIVE's RMSE), and is no older than reuse_max_model_age_days
+    # when that is set. reuse_confidence_rows is how many scored rows count as full confidence.
+    reuse_enabled: bool = True
+    reuse_max_versions: int = Field(10, ge=1)
+    reuse_min_accuracy_gain: float = Field(0.02, ge=0, le=1)
+    reuse_min_rmse_reduction_ratio: float = Field(0.05, ge=0, lt=1)
+    reuse_max_model_age_days: float | None = Field(None, gt=0)
+    reuse_confidence_rows: int = Field(100, ge=1)
+
+    # A job holds its model's lock while it runs so two drift events cannot both move LIVE. A
+    # lock older than this is treated as abandoned (e.g. the process died) and can be taken over.
+    model_lock_ttl_s: float = Field(3600.0, gt=0)
 
     # Member 2 (decision) hard constraints. A DecisionPackage needs at least
     # decision_min_drifted_rows drifted rows to be actionable at all; a framework outside

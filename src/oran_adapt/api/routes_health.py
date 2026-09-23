@@ -19,6 +19,7 @@ def health() -> HealthResponse:
 
 
 @router.get("/ready", response_model=ReadyResponse)
+@router.get("/readiness", response_model=ReadyResponse)
 def ready(request: Request, response: Response) -> ReadyResponse:
     """Readiness: PostgreSQL and MLflow must both be reachable."""
     checks = {

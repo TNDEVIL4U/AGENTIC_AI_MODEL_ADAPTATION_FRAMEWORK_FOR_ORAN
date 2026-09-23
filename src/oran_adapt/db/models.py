@@ -134,15 +134,69 @@ class AdaptationEvent(Base):
     job: Mapped[AdaptationJob] = relationship(back_populates="events")
 
 
+class ModelPromotion(Base):
+    """Every move of a model's live alias: a validated candidate going live, an older version
+    reused, or a rollback. ``from_version`` is what LIVE pointed at before, so any move can be
+    undone. ``idempotency_key`` makes a repeated request return the first result."""
+
+    __tablename__ = "model_promotion"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_id: Mapped[str] = mapped_column(ForeignKey("model_metadata.model_id"), index=True)
+    kind: Mapped[str] = mapped_column(String(30))  # PromotionKind
+    from_version: Mapped[str | None] = mapped_column(String(50))
+    to_version: Mapped[str] = mapped_column(String(50), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)  # APPLIED | NO_CHANGE
+    reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(100), default="system")
+    job_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(200), unique=True)
+    artifact_sha256: Mapped[str | None] = mapped_column(String(64))
+    detail: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = _ts()
+
+
+class ModelLock(Base):
+    """At most one running adaptation job per model. The primary key makes acquiring it a
+    single INSERT that only one caller can win, on SQLite and PostgreSQL alike."""
+
+    __tablename__ = "model_lock"
+    model_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64))
+    acquired_at: Mapped[datetime] = _ts()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ModelVersionEvaluation(Base):
+    """How one registered version scored on the current data during one job - the evidence
+    behind a reuse decision."""
+
+    __tablename__ = "model_version_evaluation"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    model_id: Mapped[str] = mapped_column(String(200), index=True)
+    model_version: Mapped[str] = mapped_column(String(50), index=True)
+    is_live: Mapped[bool] = mapped_column(default=False)
+    compatible: Mapped[bool] = mapped_column(default=False)
+    reusable: Mapped[bool] = mapped_column(default=False)
+    metric_name: Mapped[str | None] = mapped_column(String(50))
+    metric_value: Mapped[float | None] = mapped_column(Float)
+    reuse_score: Mapped[float | None] = mapped_column(Float)
+    n_rows: Mapped[int] = mapped_column(Integer, default=0)
+    result: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = _ts()
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(primary_key=True)
     job_id: Mapped[str | None] = mapped_column(String(64), index=True)
     action: Mapped[str] = mapped_column(String(60), index=True)
     component: Mapped[str] = mapped_column(String(50))
-    model_id: Mapped[str | None] = mapped_column(String(200))
+    model_id: Mapped[str | None] = mapped_column(String(200), index=True)
     model_version: Mapped[str | None] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(String(20), default="OK")
     detail: Mapped[dict | None] = mapped_column(JSON)
     error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = _ts()
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )

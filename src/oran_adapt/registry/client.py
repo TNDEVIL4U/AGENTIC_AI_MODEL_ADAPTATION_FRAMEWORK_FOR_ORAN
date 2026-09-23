@@ -261,6 +261,45 @@ class MlflowRegistry:
         except MlflowException as exc:
             raise RegistryUnavailableError("MLflow tag update failed", cause=str(exc)) from exc
 
+    def get_version(self, name: str, version: str) -> Any:
+        """One registered version (tags, run id, creation time). Raises ModelNotFoundError if
+        it does not exist."""
+        try:
+            return self.client.get_model_version(name, version)
+        except MlflowException as exc:
+            if getattr(exc, "error_code", "") in ("RESOURCE_DOES_NOT_EXIST", "INVALID_PARAMETER_VALUE"):
+                raise ModelNotFoundError(
+                    f"Model '{name}' version '{version}' not found", model=name, version=version
+                ) from exc
+            raise RegistryUnavailableError("MLflow query failed", cause=str(exc)) from exc
+
+    def get_run_metrics(self, run_id: str | None) -> dict[str, float]:
+        """The metrics logged on a version's source run (its training-time baseline); empty
+        when the version has no run or the run is gone."""
+        if not run_id:
+            return {}
+        try:
+            return dict(self.client.get_run(run_id).data.metrics or {})
+        except MlflowException:
+            return {}
+
+    def delete_alias(self, name: str, alias: str) -> None:
+        try:
+            self.client.delete_registered_model_alias(name, alias)
+        except MlflowException as exc:
+            raise RegistryUnavailableError("MLflow alias delete failed", cause=str(exc)) from exc
+
+    def record_artifact_checksum(self, name: str, version: str, workdir: str) -> str:
+        """Download ``version``'s artifacts, hash them and store the hash as the
+        ``artifact.sha256`` version tag; returns the hash. Called right after registration so
+        every later load can be checked against it."""
+        from oran_adapt.core.integrity import sha256_path
+
+        local = self.download_artifacts(name, version, os.path.join(workdir, f"sha-{version}"))
+        digest = sha256_path(local)
+        self.set_version_tags(name, version, {"artifact.sha256": digest})
+        return digest
+
     def describe_versions(self, name: str) -> list[dict[str, Any]]:
         """Every registered version of ``name`` with its aliases, tags and source run - the
         registry half of a model's lineage (the data half lives in the database)."""

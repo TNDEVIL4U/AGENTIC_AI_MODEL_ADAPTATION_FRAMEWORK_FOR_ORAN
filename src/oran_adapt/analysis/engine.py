@@ -38,10 +38,13 @@ def _ref(data_slice: DataSlice | None) -> DataVersionRef | None:
     )
 
 
-def analyze(session: Session, event: DriftEvent, settings: Settings) -> AnalysisResult:
+def analyze(
+    session: Session, event: DriftEvent, settings: Settings, *, live_version: str | None = None
+) -> AnalysisResult:
     """Run the full Member 1 pipeline for a single drift event. Raises ModelNotFoundError if
-    ``event.model_id`` is not registered."""
-    context = retrieve_context(session, event)
+    ``event.model_id`` is not registered. ``live_version`` picks the baseline: the data that
+    version was trained on."""
+    context = retrieve_context(session, event, live_version=live_version)
 
     if context.historical is None or context.drifted is None:
         missing = "historical" if context.historical is None else "drifted"

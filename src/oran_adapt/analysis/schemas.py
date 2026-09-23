@@ -34,6 +34,43 @@ class DataVersionRef(BaseModel):
     data_end: datetime | None = None
 
 
+class VersionEvaluation(BaseModel):
+    """How one registered version scored on the current (held-out, newest drifted) data."""
+
+    version: str
+    is_live: bool = False
+    compatible: bool = False
+    incompatibility_reason: str | None = None
+    estimator_type: str | None = None
+    metric_name: str | None = None
+    metric_value: float | None = None
+    # Metrics logged on the version's source run when it was trained, and how far the current
+    # score has fallen from that (positive = worse now), in the metric's own units.
+    baseline_metrics: dict[str, float] = Field(default_factory=dict)
+    degradation: float | None = None
+    age_days: float | None = None
+    n_rows: int = 0
+    artifact_sha256: str | None = None
+
+
+class ReuseDecision(BaseModel):
+    """Member 1's deterministic verdict after scoring every version. REUSE_EXISTING_VERSION is
+    final; ADAPT_MODEL / RETRAIN_MODEL are only hints for Member 2, which stays the authority on
+    how to adapt."""
+
+    verdict: str  # ReuseVerdict
+    live_version: str | None = None
+    selected_version: str | None = None
+    metric_name: str | None = None
+    live_value: float | None = None
+    selected_value: float | None = None
+    improvement: float | None = None
+    # min(1, scored rows / reuse_confidence_rows): a heuristic for how much evidence the
+    # comparison rests on, not a statistical confidence level.
+    confidence: float = 0.0
+    reason: str
+
+
 class DecisionPackage(BaseModel):
     """Everything Member 2 needs to choose a strategy, without re-deriving it."""
 
@@ -49,6 +86,9 @@ class DecisionPackage(BaseModel):
     min_ks_pvalue: float = 1.0
     merge_overlap_count: int = 0
     recent_performance: dict[str, float] = Field(default_factory=dict)
+    # Filled in by the orchestrator after Member 1 scored the registered versions.
+    version_evaluations: list[VersionEvaluation] = Field(default_factory=list)
+    reuse_decision: ReuseDecision | None = None
 
 
 class AnalysisResult(BaseModel):
