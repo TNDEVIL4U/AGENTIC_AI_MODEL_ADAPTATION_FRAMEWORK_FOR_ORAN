@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-sonnet-5"
     gemini_api_key: SecretStr | None = None
-    gemini_model: str = "gemini-2.5-pro"
+    gemini_model: str = "gemini-3.6-flash"
     llm_timeout_s: float = Field(60.0, gt=0)
 
     sandbox_backend: Literal["docker", "subprocess"] = "subprocess"
@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     # than a warm-start fine-tune to get back to the current model's quality.
     torch_fine_tune_epochs: int = Field(5, ge=1)
     torch_full_retrain_epochs: int = Field(300, ge=1)
+    torch_learning_rate: float = Field(1e-2, gt=0)  # Adam step size for both torch engines
 
     @model_validator(mode="after")
     def _llm_key_present(self) -> Settings:

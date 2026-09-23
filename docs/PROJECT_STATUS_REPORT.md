@@ -1,6 +1,6 @@
 # Project Status Report — Agentic AI Model Adaptation Framework for O-RAN
 
-**Date:** 2026-09-23 · **Branch:** `phase13-registry-data-versioning` (commit `52f14a2`)
+**Date:** 2026-09-23 · **Branch:** `phase13-registry-data-versioning` (pushed to GitHub; pull request to `main` open)
 
 This report answers four questions: what is done, what is left, how much is complete, and
 whether everything is real or hardcoded. It is based on the code as it is now, a fresh run of
@@ -95,14 +95,13 @@ decide that scope first.
 
 ### B. Small improvements
 
-6. **Torch learning rate is fixed at `1e-2`** (a function default in
-   `adaptation/torch_engine.py`), unlike the epochs which are settings. Should become
-   `TORCH_LEARNING_RATE`.
-7. **Default `GEMINI_MODEL` (`gemini-2.5-pro`) is out of date** — it returned 404 for your
-   account. Update the default or document "set `GEMINI_MODEL` in `.env`".
+6. **Done — torch learning rate is now a setting:** `TORCH_LEARNING_RATE` (default `0.01`),
+   passed to both torch engines; covered by a new test in `test_phase6_torch.py`.
+7. **Done — default `GEMINI_MODEL` is now `gemini-3.6-flash`**, the model that worked for your
+   account (the old `gemini-2.5-pro` returned 404). Also updated in `.env.example` and MANUAL.
 8. **Done — full test suite re-run after the fix:** 163 passed, 6 skipped (Docker-only).
-9. **Housekeeping:** `src/oran_adapt.egg-info/` is untracked build output and could be added
-   to `.gitignore`; the Phase 13 branch is not yet merged to `main`.
+9. **Done — housekeeping:** `*.egg-info/` is in `.gitignore`, and a pull request to merge
+   the Phase 13 branch into `main` is open on GitHub (merging it is your call).
 
 ### C. Scope questions (not started — confirm whether they are required)
 
@@ -147,6 +146,7 @@ These are **defaults, not hardcoded** — each can be changed without editing co
 | `VALIDATION_ACCURACY_TOLERANCE` | 0.02 | Allowed accuracy drop for classifiers |
 | `VALIDATION_RMSE_TOLERANCE_RATIO` | 0.05 | Allowed relative RMSE rise for regressors |
 | `TORCH_FINE_TUNE_EPOCHS` / `TORCH_FULL_RETRAIN_EPOCHS` | 5 / 300 | Torch training budgets |
+| `TORCH_LEARNING_RATE` | 0.01 | Adam learning rate for both torch engines |
 | `JOB_MAX_RETRIES` / `JOB_RETRY_BACKOFF_S` / `JOB_TIMEOUT_S` | 2 / 1.0 / 600 | Job hardening |
 | `SANDBOX_TIMEOUT_S` / `SANDBOX_MEMORY_MB` | 120 / 1024 | Sandbox limits |
 | `MLFLOW_SKOPS_TRUSTED_TYPES` | two sklearn tree types | Extra types allowed when saving sklearn models |
@@ -159,7 +159,6 @@ case passes validation. It is a tuned default, not a universal value.
 | Value | Where | Assessment |
 |---|---|---|
 | PSI uses 10 bins, `1e-6` floor | `analysis/comparison.py` | Standard PSI practice; fine, could be a setting |
-| Torch learning rate `1e-2` | `adaptation/torch_engine.py` | Should be a setting (§4 item 6) |
 | Fallback decision `confidence=0.5`, hard-constraint `confidence=1.0` | `decision/engine.py` | Fixed labels only reported in the result; they do not affect any decision |
 | Fallback priority order: fine-tuning → full retraining → rollback → no action | `decision/fallback.py` | Deliberate deterministic rule ("cheapest compatible first") |
 | LLM system prompts, sandbox allowed-imports list | `decision/llm_selector.py`, `adaptation/llm_adapter.py`, `sandbox/security.py` | Deliberate, part of the design |
@@ -175,7 +174,6 @@ the pipeline chose differently, the demo would print FAIL and exit 1.
 
 ## 6. Recommended next steps
 
-1. Make the torch learning rate a setting and refresh the `GEMINI_MODEL` default (§4 items 6–7).
-2. Merge `phase13-registry-data-versioning` into `main`.
-3. When available: retry the live LLM decision call; install Docker to close Phase 11.
-4. Decide whether live O-RAN integration and real datasets are in scope (§4 C).
+1. Review and merge the open pull request into `main`.
+2. When available: retry the live LLM decision call; install Docker to close Phase 11.
+3. Decide whether live O-RAN integration and real datasets are in scope (§4 C).

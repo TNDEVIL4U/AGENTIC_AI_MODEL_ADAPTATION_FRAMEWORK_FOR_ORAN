@@ -76,6 +76,7 @@ def _produce_candidate(
             artifact_dir=os.path.join(workdir, "engine"),
             torch_fine_tune_epochs=settings.torch_fine_tune_epochs,
             torch_full_retrain_epochs=settings.torch_full_retrain_epochs,
+            torch_learning_rate=settings.torch_learning_rate,
         )
     except UnsupportedAdaptationError:
         if llm_client is None:
