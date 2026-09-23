@@ -33,13 +33,13 @@ laptop (Docker, the LLM decision call), a few small improvements, and some scope
 | Phase | What it does | Status | How it was verified |
 |---|---|---|---|
 | 1 — Foundation | Settings from `.env`, logging, DB models, Alembic migrations, MLflow client, health/ready endpoints | ✅ Done | Unit tests; `/api/v1/ready` → 200 in today's demo |
-| 2 — Analysis | Loads historical + drifted data, KS test and PSI per feature, decides "reuse" vs "adapt" | ✅ Done | Unit tests; demo: `kpi-stable-sgd` reused, second cycle detects shift |
+| 2 — Analysis | Loads historical + drifted data, KS test and PSI per feature (Evidently AI), decides "reuse" vs "adapt" | ✅ Done | Unit tests; demo: `kpi-stable-sgd` reused, second cycle detects shift |
 | 3 — Decision | Hard constraints (min rows, framework support, PSI cut-off), LLM strategy choice, rule fallback | 🟡 Partly | Rules and fallback verified; live LLM **decision** call never returned a success (see §4) |
 | 4 — Adaptation: inspection | Detects framework, estimator type, `partial_fit` / warm-start support | ✅ Done | Unit tests |
 | 5 — Adaptation: sklearn/xgboost engines | `partial_fit` fine-tuning, clone-and-refit full retraining | ✅ Done | Unit tests; demo: SGD, Ridge, RandomForest, XGBoost all REGISTERED |
 | 6 — Adaptation: torch engine | Warm-start fine-tune vs reset-and-retrain | ✅ Done | Unit tests; demo: both torch models REGISTERED |
 | 7 — Sandbox | AST security scanner + subprocess runner for LLM-generated code | 🟡 Partly | Scanner and subprocess runner verified; Docker backend not run; memory limit not enforced on Windows |
-| 8 — Validation | Compares candidate vs current model (accuracy / RMSE gate) on a time-based hold-out | ✅ Done | Gate maths verified; hold-out fixed today and tested (40 unseen rows, 360-row training snapshot) |
+| 8 — Validation | Compares candidate vs current model (accuracy / RMSE gate, scored by Evidently AI) on a time-based hold-out | ✅ Done | Gate maths verified; hold-out fixed today and tested (40 unseen rows, 360-row training snapshot) |
 | 9 — Orchestrator | analyze → decide → adapt → validate → register, one drift event end to end | ✅ Done | Unit tests; demo sections 3 and 6 |
 | 10 — Hardening | Idempotent events, concurrency, selective retries, job timeout | ✅ Done | Unit tests incl. a real thread race; demo section 4 (`duplicate=True`) |
 | 11 — Docker sandbox + compose | Dockerfiles, compose file, Docker runner | 🟡 Partly | Code and command building unit-tested; never run (no Docker on this laptop) |
@@ -121,11 +121,11 @@ decide that scope first.
 
 | Part | Evidence |
 |---|---|
-| Drift statistics | Real `scipy` two-sample KS test and the standard PSI formula on the actual data |
+| Drift statistics | Real two-sample KS test and PSI from Evidently AI's `ValueDrift` metric on the actual data (the KS statistic itself still comes from `scipy`, as Evidently reports only the p-value) |
 | Training | Real `partial_fit`, clone-and-refit, XGBoost fit, torch training loops — the demo's v2 models give different predictions and metrics from v1 |
 | Registration | Real MLflow model versions, `live` alias moves, tags; models are downloaded back and asked for predictions in the demo |
 | Data versioning | Real SHA-256 content hashes; identical re-ingest returns 200, changed content with the same name returns 409 |
-| Validation | Real accuracy / RMSE on the newest 20% of the drifted rows, which the candidate never trains on |
+| Validation | Real accuracy / RMSE, computed by Evidently AI, on the newest 20% of the drifted rows, which the candidate never trains on |
 | Idempotency / retries / timeout | Enforced by DB constraints and real retry/timeout code, tested with real threads |
 | LLM code generation path | Verified live against Gemini in an earlier session (real network call, generated code ran in the sandbox, model registered) |
 | Tests | Use real SQLite and real MLflow stores; the only stand-in is `FakeLlmClient` for LLM calls, which is a test double, not used in the app |
@@ -158,7 +158,7 @@ case passes validation. It is a tuned default, not a universal value.
 
 | Value | Where | Assessment |
 |---|---|---|
-| PSI uses 10 bins, `1e-6` floor | `analysis/comparison.py` | Standard PSI practice; fine, could be a setting |
+| PSI binning (Sturges equal-width bins, `0.0001` floor) | Evidently AI's PSI, used by `analysis/comparison.py` | Evidently's defaults; noisy on small samples (see README "Known limitations") |
 | Fallback decision `confidence=0.5`, hard-constraint `confidence=1.0` | `decision/engine.py` | Fixed labels only reported in the result; they do not affect any decision |
 | Fallback priority order: fine-tuning → full retraining → rollback → no action | `decision/fallback.py` | Deliberate deterministic rule ("cheapest compatible first") |
 | LLM system prompts, sandbox allowed-imports list | `decision/llm_selector.py`, `adaptation/llm_adapter.py`, `sandbox/security.py` | Deliberate, part of the design |

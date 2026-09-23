@@ -491,6 +491,11 @@ only this manual (not the source) still learns about them. See
   consume unbounded memory on a Windows host. The only way to get an actually-enforced memory
   limit today is `SANDBOX_BACKEND=docker` (see §9), which applies `--memory`/`--memory-swap` at
   the container level on every host OS — untested here for lack of a local Docker install.
+- **PSI is noisy on small samples.** Drift statistics come from Evidently AI's `ValueDrift`
+  metric. Its PSI uses equal-width (Sturges) bins, and with only a few dozen rows per segment it
+  can exceed `ANALYSIS_PSI_REUSE_THRESHOLD` (0.1), or even `DECISION_FULL_RETRAIN_PSI_THRESHOLD`
+  (0.5), with no real drift. With about 200 rows per segment, as in the demo, it behaves like a
+  standard PSI. Send enough drifted rows, or raise the thresholds for small batches.
 - **MLflow global URI state during model logging and download.** MLflow's fluent
   `log_model` API, and its resolution of the nested `models:/m-<id>` sources it creates, read
   only the process-global tracking and registry URIs. `MlflowRegistry._fluent_uris()` therefore

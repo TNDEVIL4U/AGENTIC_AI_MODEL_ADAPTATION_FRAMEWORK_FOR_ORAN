@@ -8,7 +8,7 @@ in MLflow.
 
 Given a `POST /api/v1/adaptation/events` drift notification for a `model_id`, the pipeline:
 
-1. **Analyzes** drift (Member 1) — compares historical vs. drifted data (PSI, KS test) and
+1. **Analyzes** drift (Member 1) — compares historical vs. drifted data (PSI, KS test, via Evidently AI) and
    decides whether the existing model can simply be reused, or produces a `DecisionPackage`.
 2. **Decides** a strategy (Member 2) — applies hard constraints (enough drifted rows? a
    supported framework?) and an LLM-assisted, Pydantic-validated decision between
@@ -263,6 +263,11 @@ and wasn't verified.
   tracking and registry URIs. The registry client therefore sets those URIs for the duration
   of each call and restores them exactly afterwards. This is not safe when jobs run in
   parallel against *different* MLflow servers in the same process.
+- **PSI is noisy on small samples.** Drift statistics come from Evidently AI's `ValueDrift`
+  metric. Its PSI uses equal-width (Sturges) bins, and with only a few dozen rows per segment it
+  can exceed `ANALYSIS_PSI_REUSE_THRESHOLD` (0.1), or even `DECISION_FULL_RETRAIN_PSI_THRESHOLD`
+  (0.5), with no real drift. With about 200 rows per segment, as in the demo, it behaves like a
+  standard PSI. Send enough drifted rows, or raise the thresholds for small batches.
 - **Training snapshots grow on every cycle.** Each snapshot is the full merged training set
   (the previous baseline plus the drifted data). No windowing or down-sampling is applied.
 
