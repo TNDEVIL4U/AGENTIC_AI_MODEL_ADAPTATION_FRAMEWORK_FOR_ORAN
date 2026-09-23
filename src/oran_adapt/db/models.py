@@ -74,6 +74,16 @@ class DataVersion(Base):
     # Column schema, source and producer (e.g. which adaptation job snapshotted it).
     extra: Mapped[dict | None] = mapped_column(JSON)
     ingested_at: Mapped[datetime] = _ts()
+    # Where the version came from (upload, CDC, adaptation snapshot, CurrentData build).
+    source: Mapped[str | None] = mapped_column(Text)
+    # SHA-256 of the column -> dtype map: equal schema hashes mean interchangeable versions.
+    schema_hash: Mapped[str | None] = mapped_column(String(64))
+    # Where the rows live. Today always the data_record table of this database.
+    storage_uri: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(20), default="AVAILABLE")
+    # For CDC-derived versions: the changelog/Kafka offsets and source transactions it covers.
+    cdc_range: Mapped[dict | None] = mapped_column(JSON)
+    source_tx: Mapped[list | None] = mapped_column(JSON)
     dataset: Mapped[DatasetMetadata] = relationship(back_populates="versions")
     records: Mapped[list[DataRecord]] = relationship(back_populates="data_version")
 
@@ -86,6 +96,9 @@ class DataRecord(Base):
     data_version_id: Mapped[int] = mapped_column(ForeignKey("data_version.id"), index=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
+    # Primary key of the source row (CDC-derived rows), used to resolve conflicting versions of
+    # the same row when CurrentData is built. None for uploaded files.
+    record_key: Mapped[str | None] = mapped_column(String(200), index=True)
     data_version: Mapped[DataVersion] = relationship(back_populates="records")
 
 
@@ -194,6 +207,8 @@ class ModelVersionEvaluation(Base):
     reuse_score: Mapped[float | None] = mapped_column(Float)
     n_rows: Mapped[int] = mapped_column(Integer, default=0)
     result: Mapped[dict] = mapped_column(JSON)
+    # The CurrentData the version was scored on.
+    current_data_id: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = _ts()
 
 
@@ -214,6 +229,90 @@ class AuditLog(Base):
     correlation_id: Mapped[str | None] = mapped_column(String(128), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )
+
+
+class CurrentData(Base):
+    """The cleaned data one job evaluated versions and validated its candidate on: which data
+    versions it came from, what cleaning removed, and the immutable CURRENT data version that
+    holds its rows. Answers "which data was this decision made on?"."""
+
+    __tablename__ = "current_data"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    current_data_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    data_version_id: Mapped[int] = mapped_column(ForeignKey("data_version.id"), index=True)
+    model_id: Mapped[str] = mapped_column(String(200), index=True)
+    job_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_versions: Mapped[list] = mapped_column(JSON)
+    data_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    data_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    schema: Mapped[dict] = mapped_column(JSON)
+    schema_hash: Mapped[str] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    quality: Mapped[dict] = mapped_column(JSON)  # rows removed by each cleaning step
+    created_at: Mapped[datetime] = _ts()
+
+
+class KpiSample(Base):
+    """The framework-owned source table that CDC watches: one KPI observation per row, keyed by
+    ``id``. Producers insert/update/delete here; Debezium (production) or the changelog
+    triggers (local fallback) turn every change into a CDC event."""
+
+    __tablename__ = "kpi_sample"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(200), index=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
+class CdcChangelog(Base):
+    """Row changes captured by database triggers on the watched tables - the local-dev CDC
+    fallback (``CDC_MODE=polling``). Written only by the triggers (migration 0005); ``seq`` is
+    the poller's offset. Row images are JSON text as the triggers produce them."""
+
+    __tablename__ = "cdc_changelog"
+    seq: Mapped[int] = mapped_column(primary_key=True)
+    table_name: Mapped[str] = mapped_column(String(100))
+    operation: Mapped[str] = mapped_column(String(10))  # INSERT | UPDATE | DELETE
+    pk: Mapped[str] = mapped_column(String(200))
+    old_row: Mapped[str | None] = mapped_column(Text)
+    new_row: Mapped[str | None] = mapped_column(Text)
+    tx_id: Mapped[str | None] = mapped_column(String(64))
+    changed_at: Mapped[str] = mapped_column(String(40))  # ISO-8601 UTC, set by the trigger
+
+
+class CdcEventRecord(Base):
+    """Every CDC event the consumer accepted, once: ``event_id`` is derived from the event's
+    source position, so a redelivered event hits the unique constraint and is skipped.
+    ``data_version_id`` is set when the event is materialized into a data version."""
+
+    __tablename__ = "cdc_event"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    source: Mapped[str] = mapped_column(String(20))  # polling | debezium
+    source_table: Mapped[str] = mapped_column(String(100))
+    operation: Mapped[str] = mapped_column(String(10))
+    primary_key: Mapped[str] = mapped_column(String(200), index=True)
+    dataset_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    old_value: Mapped[dict | None] = mapped_column(JSON)
+    new_value: Mapped[dict | None] = mapped_column(JSON)
+    event_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    transaction_id: Mapped[str | None] = mapped_column(String(64))
+    source_offset: Mapped[str] = mapped_column(String(200))
+    schema_version: Mapped[str] = mapped_column(String(50))
+    data_version_id: Mapped[int | None] = mapped_column(ForeignKey("data_version.id"), index=True)
+    processed_at: Mapped[datetime] = _ts()
+
+
+class CdcOffset(Base):
+    """How far each consumer has read, committed in the same transaction as the events."""
+
+    __tablename__ = "cdc_offset"
+    consumer: Mapped[str] = mapped_column(String(200), primary_key=True)
+    position: Mapped[str] = mapped_column(String(200))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
 

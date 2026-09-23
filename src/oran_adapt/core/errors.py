@@ -98,6 +98,20 @@ class PromotionError(AdaptationError):
     code = "PROMOTION_FAILED"
 
 
+class CdcUnavailableError(AdaptationError):
+    """The CDC source (Kafka, or its client library) cannot be reached. Nothing was consumed
+    and no offset moved, so the next run picks up where the last one stopped."""
+
+    code = "CDC_UNAVAILABLE"
+
+
+class CdcProcessingError(AdaptationError):
+    """A CDC batch could not be stored. The transaction was rolled back and the source offset
+    not acknowledged, so the batch is redelivered (and deduplicated) on the next run."""
+
+    code = "CDC_PROCESSING_FAILED"
+
+
 class JobTimeoutError(AdaptationError):
     """Raised by the Phase 10 job wrapper when a job's total wall-clock budget
     (``Settings.job_timeout_s``) is exceeded. Python cannot forcibly kill the worker thread that

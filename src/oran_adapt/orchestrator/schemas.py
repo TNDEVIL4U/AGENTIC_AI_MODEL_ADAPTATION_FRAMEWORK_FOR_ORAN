@@ -31,6 +31,8 @@ class JobResult(BaseModel):
     # What LIVE pointed at before this job moved it (None when LIVE did not move).
     previous_live_version: str | None = None
     live_version: str | None = None
+    # The CurrentData (cleaned, versioned evaluation rows) this job decided on.
+    current_data_id: str | None = None
     version_evaluations: list[VersionEvaluation] = Field(default_factory=list)
     reuse_decision: ReuseDecision | None = None
     promotion: dict | None = None

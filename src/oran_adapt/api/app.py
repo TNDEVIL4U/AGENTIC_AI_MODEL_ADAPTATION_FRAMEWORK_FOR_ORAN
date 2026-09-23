@@ -11,6 +11,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from oran_adapt import __version__
 from oran_adapt.api.routes_adaptation import router as adaptation_router
+from oran_adapt.api.routes_data import current_router as current_data_router
 from oran_adapt.api.routes_data import router as data_router
 from oran_adapt.api.routes_health import router as health_router
 from oran_adapt.api.routes_models import router as models_router
@@ -84,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(adaptation_router, prefix="/api/v1", dependencies=authenticated)
     app.include_router(data_router, prefix="/api/v1", dependencies=authenticated)
+    app.include_router(current_data_router, prefix="/api/v1", dependencies=authenticated)
     app.include_router(models_router, prefix="/api/v1", dependencies=authenticated)
     return app
 

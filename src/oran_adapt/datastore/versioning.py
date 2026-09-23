@@ -56,6 +56,13 @@ class VersionInfo:
     data_end: datetime | None
     columns: dict[str, str] = field(default_factory=dict)
     created: bool = True  # False when the ingest was an idempotent replay
+    source: str | None = None
+    schema_hash: str | None = None
+    storage_uri: str | None = None
+    status: str | None = None
+    cdc_range: dict | None = None
+    source_tx: list | None = None
+    created_at: datetime | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -70,6 +77,13 @@ class VersionInfo:
             "data_end": self.data_end.isoformat() if self.data_end else None,
             "columns": self.columns,
             "created": self.created,
+            "source": self.source,
+            "schema_hash": self.schema_hash,
+            "storage_uri": self.storage_uri,
+            "status": self.status,
+            "cdc_range": self.cdc_range,
+            "source_tx": self.source_tx,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 
@@ -88,6 +102,11 @@ def content_hash(frame: pd.DataFrame, observed_at: list[datetime]) -> str:
     order and timestamps do."""
     canonical = json.dumps(_canonical_records(frame, observed_at), sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def schema_hash(columns: dict[str, str]) -> str:
+    """SHA-256 of a column -> dtype map (column order does not matter)."""
+    return hashlib.sha256(json.dumps(columns, sort_keys=True).encode()).hexdigest()
 
 
 def _as_utc(ts: datetime) -> datetime:
@@ -169,6 +188,13 @@ def _info(dv: DataVersion, dataset_id: str, *, created: bool, session: Session) 
         data_end=dv.data_end,
         columns=extra.get("columns", {}),
         created=created,
+        source=dv.source or extra.get("source"),
+        schema_hash=dv.schema_hash,
+        storage_uri=dv.storage_uri,
+        status=dv.status,
+        cdc_range=dv.cdc_range,
+        source_tx=dv.source_tx,
+        created_at=dv.ingested_at,
     )
 
 
@@ -217,6 +243,10 @@ def ingest_version(
     source: str | None = None,
     dataset_name: str | None = None,
     actor: str = "system",
+    record_keys: list[str | None] | None = None,
+    deleted_keys: list[str] | None = None,
+    cdc_range: dict | None = None,
+    source_tx: list | None = None,
 ) -> VersionInfo:
     """Store ``frame`` as data version ``version`` of ``dataset_id`` (created on first use).
 
@@ -224,13 +254,24 @@ def ingest_version(
     i * ``spacing``. With ``model_id``/``model_version``/``role`` the version is also linked to
     that model version (e.g. role TRAINING for its training data, DRIFT_OBSERVED for data a
     drift detector flagged). Idempotent for an identical re-ingest; raises
-    DataVersionConflictError if the name is taken by different content."""
-    if frame.empty:
+    DataVersionConflictError if the name is taken by different content.
+
+    CDC-derived versions also pass ``record_keys`` (the source primary key of each row),
+    ``deleted_keys`` (source rows deleted in this window; such a version may have no rows),
+    ``cdc_range`` (offsets covered) and ``source_tx`` (source transaction ids)."""
+    if frame.empty and not deleted_keys:
         raise ArtifactError("refusing to ingest an empty data version", version=version)
+    if record_keys is not None and len(record_keys) != len(frame):
+        raise ArtifactError("record_keys must have one key per row", version=version)
     kind = DataKind(kind)
     dataset = get_or_create_dataset(session, dataset_id, name=dataset_name)
     features, observed_at = _timestamps(frame, timestamp_column, start, spacing)
     digest = content_hash(features, observed_at)
+    if record_keys is not None or deleted_keys:
+        # Keys and deletions are part of what the version says, so part of its identity.
+        digest = hashlib.sha256(
+            json.dumps([digest, record_keys, sorted(deleted_keys or [])]).encode()
+        ).hexdigest()
 
     existing = _find_version(session, dataset, version)
     if existing is not None:
@@ -257,23 +298,35 @@ def ingest_version(
         parent_id = parent.id
 
     columns = {c: str(t) for c, t in features.dtypes.items()}
+    extra: dict = {"columns": columns, "source": source}
+    if deleted_keys:
+        extra["deleted_keys"] = sorted(deleted_keys)
     dv = DataVersion(
         dataset_id=dataset.id,
         version=version,
         kind=kind,
         parent_version_id=parent_id,
-        data_start=min(observed_at),
-        data_end=max(observed_at),
+        data_start=min(observed_at) if observed_at else None,
+        data_end=max(observed_at) if observed_at else None,
         row_count=len(features),
         content_hash=digest,
-        extra={"columns": columns, "source": source},
+        extra=extra,
+        source=source,
+        schema_hash=schema_hash(columns),
+        status="AVAILABLE",
+        cdc_range=cdc_range,
+        source_tx=source_tx,
     )
     session.add(dv)
     session.flush()
-    payloads = json.loads(features.to_json(orient="records", double_precision=15))
+    dv.storage_uri = f"db://data_record?data_version_id={dv.id}"
+    payloads = (
+        json.loads(features.to_json(orient="records", double_precision=15)) if len(features) else []
+    )
+    keys = record_keys if record_keys is not None else [None] * len(payloads)
     session.add_all(
-        DataRecord(data_version_id=dv.id, observed_at=ts, payload=row)
-        for ts, row in zip(observed_at, payloads, strict=True)
+        DataRecord(data_version_id=dv.id, observed_at=ts, payload=row, record_key=key)
+        for ts, row, key in zip(observed_at, payloads, keys, strict=True)
     )
     if model_id and model_version and role:
         link_model_data(session, model_id, model_version, dv.id, role)
@@ -293,6 +346,8 @@ def ingest_version(
             "content_hash": digest,
             "parent_version": parent_version,
             "role": str(role) if role else None,
+            "schema_hash": dv.schema_hash,
+            "cdc_range": cdc_range,
         },
     )
     session.flush()

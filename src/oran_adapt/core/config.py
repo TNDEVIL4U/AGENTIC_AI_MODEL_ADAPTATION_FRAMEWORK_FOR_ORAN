@@ -119,6 +119,19 @@ class Settings(BaseSettings):
     api_keys: dict[str, str] = Field(default_factory=dict)
     metrics_public: bool = True
 
+    # Change data capture from the kpi_sample source table (see docs/CDC.md).
+    #   kafka    - production: Debezium streams PostgreSQL's WAL to Kafka, the consumer reads
+    #              the topic (needs the optional confluent-kafka package).
+    #   polling  - local fallback: database triggers write every change to cdc_changelog and
+    #              the consumer reads it by offset. Works on SQLite and PostgreSQL.
+    #   disabled - no CDC; data arrives only through uploads.
+    cdc_mode: Literal["disabled", "polling", "kafka"] = "disabled"
+    cdc_batch_size: int = Field(500, ge=1)
+    kafka_bootstrap_servers: str = "localhost:9092"
+    cdc_kafka_topic: str = "oran.public.kpi_sample"  # Debezium: <prefix>.<schema>.<table>
+    cdc_consumer_group: str = "oran-adapt-cdc"
+    cdc_kafka_poll_timeout_s: float = Field(1.0, gt=0)
+
     @model_validator(mode="after")
     def _llm_key_present(self) -> Settings:
         if self.llm_provider == "anthropic" and self.anthropic_api_key is None:

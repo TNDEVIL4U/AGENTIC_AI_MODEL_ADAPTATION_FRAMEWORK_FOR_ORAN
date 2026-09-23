@@ -21,6 +21,8 @@ oran-adapt = "oran_adapt.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "ruff"]
+# CDC_MODE=kafka (production CDC from Debezium). Not needed for the polling fallback.
+kafka = ["confluent-kafka>=2.3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

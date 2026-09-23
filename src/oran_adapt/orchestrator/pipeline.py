@@ -61,6 +61,7 @@ from oran_adapt.core.errors import (
 )
 from oran_adapt.core.integrity import sha256_file, verify_checksum
 from oran_adapt.core.schemas import DriftEvent
+from oran_adapt.datastore.current_data import clean_records, persist_current_data
 from oran_adapt.datastore.versioning import snapshot_training_data
 from oran_adapt.db.models import ModelMetadata, ModelVersionEvaluation
 from oran_adapt.decision.engine import decide
@@ -139,7 +140,11 @@ def _audit(session: Session, action: AuditAction, model_id: str, **fields) -> No
 
 
 def _record_evaluations(
-    session: Session, model_id: str, evaluations: list[VersionEvaluation], reuse: ReuseDecision
+    session: Session,
+    model_id: str,
+    evaluations: list[VersionEvaluation],
+    reuse: ReuseDecision,
+    current_data_id: str | None,
 ) -> None:
     job_id = current_job_id()
     for ev in evaluations:
@@ -157,6 +162,7 @@ def _record_evaluations(
                 reuse_score=reuse.improvement if chosen else None,
                 n_rows=ev.n_rows,
                 result=ev.model_dump(mode="json"),
+                current_data_id=current_data_id,
             )
         )
         _audit(
@@ -171,6 +177,7 @@ def _record_evaluations(
                 "metric_name": ev.metric_name,
                 "metric_value": ev.metric_value,
                 "n_rows": ev.n_rows,
+                "current_data_id": current_data_id,
             },
         )
     session.flush()
@@ -234,13 +241,22 @@ def run_adaptation_job(
     assert package is not None  # PACKAGED always carries one
     target = model_meta.target_column
 
-    # CurrentData: hold out the newest drifted rows (all sources when there is no drifted
-    # version). Every registered version is scored on them, the candidate never trains on
-    # them, and the validation gate scores the candidate on them too.
+    # CurrentData: clean the source rows (conflicts, deletions, duplicates, missing targets,
+    # timestamp order), then hold out the newest drifted rows (all sources when there is no
+    # drifted version). Every registered version is scored on them, the candidate never trains
+    # on them, and the validation gate scores the candidate on them too. They are frozen as a
+    # CURRENT data version so the job's decisions can be traced to the exact rows.
     train_ids = [
         ref.data_version_id for ref in (package.historical_data, package.drifted_data) if ref
     ]
-    records = load_records(session, train_ids)
+    cleaned = clean_records(
+        session, load_records(session, train_ids), required_columns=[target] if target else []
+    )
+    if not cleaned.records:
+        raise ArtifactError(
+            "no usable rows left after cleaning the source data", quality=cleaned.quality
+        )
+    records = cleaned.records
     pool_id = package.drifted_data.data_version_id if package.drifted_data else None
     pool = [r for r in records if pool_id is None or r.data_version_id == pool_id]
     n_holdout = holdout_size(
@@ -249,6 +265,15 @@ def run_adaptation_job(
     holdout = pool[len(pool) - n_holdout :]
     holdout_ids = {r.id for r in holdout}
     holdout_frame = records_frame(holdout)
+    current = persist_current_data(
+        session,
+        model_id=event.model_id,
+        job_id=current_job_id(),
+        records=holdout,
+        source_version_ids=train_ids,
+        quality={**cleaned.quality, "pool_rows": len(pool), "evaluation_rows": len(holdout)},
+    )
+    current_data_id = current["current_data_id"] if current else None
     _audit(
         session,
         AuditAction.CURRENT_DATA_CREATED,
@@ -256,10 +281,14 @@ def run_adaptation_job(
         model_version=live_version,
         reason="newest drifted rows held out for version scoring and validation",
         metadata={
+            "current_data_id": current_data_id,
+            "data_version": current["data_version"] if current else None,
+            "content_hash": current["content_hash"] if current else None,
             "source_data_version_ids": train_ids,
             "pool_data_version_id": pool_id,
             "rows": len(holdout),
             "pool_rows": len(pool),
+            "quality": cleaned.quality,
         },
     )
 
@@ -289,7 +318,7 @@ def run_adaptation_job(
         reuse = decide_reuse(
             evaluations, live_version=live_version, max_psi=package.max_psi, settings=settings
         )
-        _record_evaluations(session, event.model_id, evaluations, reuse)
+        _record_evaluations(session, event.model_id, evaluations, reuse, current_data_id)
         _stage(session, JobStatus.REUSE_DECISION, reuse.reason)
 
         if reuse.verdict == ReuseVerdict.REUSE_EXISTING_VERSION:
@@ -325,6 +354,7 @@ def run_adaptation_job(
                 previous_live_version=live_version,
                 live_version=reuse.selected_version,
                 version_evaluations=evaluations,
+                current_data_id=current_data_id,
                 reuse_decision=reuse,
                 promotion=promotion.to_dict(),
                 reason=reuse.reason,
@@ -357,6 +387,7 @@ def run_adaptation_job(
             decision=decision,
             live_version=live_version,
             version_evaluations=evaluations,
+            current_data_id=current_data_id,
             reuse_decision=reuse,
             reason=decision.rationale,
         )
@@ -457,7 +488,11 @@ def run_adaptation_job(
         AuditAction.VALIDATION_STARTED,
         event.model_id,
         model_version=live_version,
-        metadata={"engine": candidate.engine.value, "holdout_rows": len(Xv)},
+        metadata={
+            "engine": candidate.engine.value,
+            "holdout_rows": len(Xv),
+            "current_data_id": current_data_id,
+        },
     )
     report = validate_candidate(
         candidate,
@@ -495,6 +530,7 @@ def run_adaptation_job(
             validation=report,
             live_version=live_version,
             version_evaluations=evaluations,
+            current_data_id=current_data_id,
             reuse_decision=reuse,
             reason=report.reason,
         )
@@ -523,6 +559,7 @@ def run_adaptation_job(
             "validation.candidate_value": f"{report.candidate_value:.6f}",
             "validation.current_value": f"{report.current_value:.6f}",
             "validation.holdout_rows": str(len(holdout)),
+            "validation.current_data_id": current_data_id or "",
             "data.source_versions": ",".join(ref.version for ref in source_versions),
         },
     )
@@ -572,6 +609,7 @@ def run_adaptation_job(
         previous_live_version=live_version,
         live_version=new_version,
         version_evaluations=evaluations,
+        current_data_id=current_data_id,
         reuse_decision=reuse,
         reason=f"candidate validated ({report.reason}) and registered as version {new_version}",
     )

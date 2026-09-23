@@ -64,6 +64,14 @@ class PromotionKind(StrEnum):
 class DataKind(StrEnum):
     HISTORICAL = "HISTORICAL"
     DRIFTED = "DRIFTED"
+    CDC = "CDC"  # net row changes captured by CDC since the previous CDC version
+    CURRENT = "CURRENT"  # the cleaned rows one adaptation job evaluated on (CurrentData)
+
+
+class CdcOperation(StrEnum):
+    INSERT = "INSERT"
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
 
 
 class AssociationRole(StrEnum):

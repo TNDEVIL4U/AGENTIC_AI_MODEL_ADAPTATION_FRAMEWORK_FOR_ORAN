@@ -12,6 +12,9 @@ the same database / MLflow registry the API uses (configured through the usual s
     python -m oran_adapt.cli model show --model-id m1
     python -m oran_adapt.cli event submit --model-id m1 --dataset kpi --drifted-version v2
     python -m oran_adapt.cli auth new-key --role OPERATOR --name noc-dashboard
+    python -m oran_adapt.cli cdc run --mode polling --once
+    python -m oran_adapt.cli cdc materialize --dataset kpi
+    python -m oran_adapt.cli data current --model-id m1
 
 ``--model-file`` is loaded with joblib (i.e. unpickled): only pass files you trust.
 """
@@ -107,6 +110,41 @@ def _cmd_data_lineage(args, settings: Settings) -> Any:
 
     with session_scope(_session_factory(settings)) as session:
         return lineage(session, args.dataset, args.version)
+
+
+def _cmd_data_current(args, settings: Settings) -> Any:
+    from oran_adapt.datastore.current_data import get_current_data, list_current_data
+    from oran_adapt.db.base import session_scope
+
+    with session_scope(_session_factory(settings)) as session:
+        if args.id:
+            found = get_current_data(session, args.id)
+            if found is None:
+                raise AdaptationError(f"current data '{args.id}' not found")
+            return found
+        return list_current_data(session, model_id=args.model_id)
+
+
+def _cmd_cdc_run(args, settings: Settings) -> Any:
+    from oran_adapt.cdc import run_cdc, run_cdc_once
+
+    if args.mode:
+        settings = settings.model_copy(update={"cdc_mode": args.mode})
+    factory = _session_factory(settings)
+    if args.once:
+        return run_cdc_once(factory, settings)
+    return run_cdc(factory, settings, max_batches=args.max_batches)
+
+
+def _cmd_cdc_materialize(args, settings: Settings) -> Any:
+    from oran_adapt.cdc import materialize_cdc
+    from oran_adapt.db.base import session_scope
+
+    with session_scope(_session_factory(settings)) as session:
+        info = materialize_cdc(session, args.dataset)
+        if info is None:
+            return {"dataset_id": args.dataset, "materialized": False, "reason": "no pending events"}
+        return {"materialized": True, **info.as_dict()}
 
 
 def _cmd_model_onboard(args, settings: Settings) -> Any:
@@ -258,6 +296,20 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--dataset", required=True)
     c.add_argument("--version", required=True)
     c.set_defaults(fn=_cmd_data_lineage)
+    c = data.add_parser("current", help="show the CurrentData adaptation jobs decided on")
+    c.add_argument("--id", help="one current_data_id (default: the latest, newest first)")
+    c.add_argument("--model-id")
+    c.set_defaults(fn=_cmd_data_current)
+
+    cdc = top.add_parser("cdc").add_subparsers(dest="cmd", required=True)
+    c = cdc.add_parser("run", help="consume CDC events from the configured source (CDC_MODE)")
+    c.add_argument("--mode", choices=["polling", "kafka"], help="override CDC_MODE")
+    c.add_argument("--once", action="store_true", help="process one batch and exit")
+    c.add_argument("--max-batches", type=int, help="stop after this many batches")
+    c.set_defaults(fn=_cmd_cdc_run)
+    c = cdc.add_parser("materialize", help="fold pending CDC events into a new data version")
+    c.add_argument("--dataset", required=True)
+    c.set_defaults(fn=_cmd_cdc_materialize)
 
     model = top.add_parser("model").add_subparsers(dest="cmd", required=True)
     c = model.add_parser("onboard", help="register a trusted local joblib model + training data")
