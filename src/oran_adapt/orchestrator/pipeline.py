@@ -32,6 +32,7 @@ from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy
 from oran_adapt.core.errors import ArtifactError, UnsupportedAdaptationError
 from oran_adapt.core.schemas import DriftEvent
+from oran_adapt.datastore.versioning import snapshot_training_data
 from oran_adapt.db.models import ModelMetadata
 from oran_adapt.decision.engine import decide
 from oran_adapt.llm.client import LlmClient
@@ -68,6 +69,8 @@ def _produce_candidate(
             y=y,
             target_column=target_column,
             artifact_dir=os.path.join(workdir, "engine"),
+            torch_fine_tune_epochs=settings.torch_fine_tune_epochs,
+            torch_full_retrain_epochs=settings.torch_full_retrain_epochs,
         )
     except UnsupportedAdaptationError:
         if llm_client is None:
@@ -186,11 +189,45 @@ def run_adaptation_job(
             reason=report.reason,
         )
 
+    source_versions = [
+        ref for ref in (package.historical_data, package.drifted_data) if ref is not None
+    ]
     new_version = registry.register_candidate(
         model_meta.mlflow_model_name,
         candidate.artifact_path,
         framework=candidate.framework,
         metrics=candidate.metrics,
+        tags={
+            "oran.model_id": event.model_id,
+            "oran.parent_version": live_version,
+            "oran.event_id": event.event_id or "",
+            "adaptation.strategy": decision.strategy.value,
+            "adaptation.engine": candidate.engine.value,
+            "validation.metric": report.metric_name,
+            "validation.candidate_value": f"{report.candidate_value:.6f}",
+            "validation.current_value": f"{report.current_value:.6f}",
+            "data.source_versions": ",".join(ref.version for ref in source_versions),
+        },
+    )
+    # Data lineage: freeze what v<new> was trained on as its own data version, linked to it, so
+    # the next drift event is compared against the live model's real baseline.
+    snapshot = snapshot_training_data(
+        session,
+        model_id=event.model_id,
+        model_version=new_version,
+        source_version_ids=train_ids,
+        parent_version_id=package.historical_data.data_version_id
+        if package.historical_data
+        else None,
+        job_ref=event.event_id,
+    )
+    registry.set_version_tags(
+        model_meta.mlflow_model_name,
+        new_version,
+        {
+            "data.training_version": snapshot.version,
+            "data.training_hash": snapshot.content_hash or "",
+        },
     )
     registry.set_alias(model_meta.mlflow_model_name, settings.live_alias, new_version)
 
@@ -202,5 +239,6 @@ def run_adaptation_job(
         candidate=candidate,
         validation=report,
         registered_version=new_version,
+        training_data_version=snapshot.version,
         reason=f"candidate validated ({report.reason}) and registered as version {new_version}",
     )

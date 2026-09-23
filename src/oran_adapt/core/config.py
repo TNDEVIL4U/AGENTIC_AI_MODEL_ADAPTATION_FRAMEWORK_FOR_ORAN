@@ -68,6 +68,23 @@ class Settings(BaseSettings):
     validation_accuracy_tolerance: float = Field(0.02, ge=0, le=1)
     validation_rmse_tolerance_ratio: float = Field(0.05, ge=0)
 
+    # MLflow >= 3 serializes sklearn models with skops, which refuses to save or load any type
+    # not on its built-in safe list. These are the extra types the framework has reviewed and
+    # trusts - the tree node stores behind DecisionTree*/RandomForest*/ExtraTrees*/
+    # GradientBoosting*/IsolationForest and HistGradientBoosting*. A model needing any other
+    # untrusted type is refused with ARTIFACT_ERROR instead of being trusted blindly.
+    mlflow_skops_trusted_types: list[str] = Field(
+        default_factory=lambda: [
+            "sklearn.tree._tree.Tree",
+            "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
+        ]
+    )
+
+    # Torch engine budgets (full-batch Adam steps). A from-scratch retrain needs far more steps
+    # than a warm-start fine-tune to get back to the current model's quality.
+    torch_fine_tune_epochs: int = Field(5, ge=1)
+    torch_full_retrain_epochs: int = Field(300, ge=1)
+
     @model_validator(mode="after")
     def _llm_key_present(self) -> Settings:
         if self.llm_provider == "anthropic" and self.anthropic_api_key is None:

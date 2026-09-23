@@ -83,7 +83,7 @@ def _latest_association(
                 ModelDataAssociation.model_id == model_id,
                 ModelDataAssociation.role == role,
             )
-            .order_by(ModelDataAssociation.created_at.desc())
+            .order_by(ModelDataAssociation.created_at.desc(), ModelDataAssociation.id.desc())
         )
         .scalars()
         .first()

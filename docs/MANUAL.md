@@ -95,6 +95,24 @@ Expected output includes, in order: a readiness check, a no-drift event resultin
 moves the `live` alias to it, and a duplicate-submission check proving idempotency. See
 `docs/PHASE12_DEMO_DOCS.md` for a fully verified sample run.
 
+**Multi-model demo against a real MLflow server.** Run `python scripts/demo_models.py --start-server`.
+It starts a local `mlflow server` on port 5000 (via `scripts/run_mlflow_server.py`), runs every
+scenario against it, and stops the server on exit. Without `--start-server` it uses a throwaway
+SQLite MLflow store instead. `--tracking-uri http://host:port` points it at a server you already
+run.
+
+The run covers:
+
+- eight models onboarded through `onboard_model()`: sklearn Ridge, RandomForest, SGD
+  `partial_fit`, a classifier, xgboost, and torch MLPs;
+- a drift event for each model, where every scenario must reach its expected outcome;
+- an idempotent resubmission;
+- a lineage check on every registered version: the MLflow tags, the snapshot's row count and
+  hash, its ancestors, and the `TRAINING` link;
+- a second cycle on `cell-throughput-ridge`. It ingests `drift-2` through `POST /datasets/.../versions`
+  (201, then 200 on replay, then 409 on a clash), confirms the analysis baseline is now the
+  cycle-1 snapshot `train-cell-throughput-ridge-v2`, and registers v3.
+
 ---
 
 ## 5. Calling the API endpoints
@@ -215,7 +233,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/adaptation/events \
 | `job_id` | Stable id for this job; resubmitting the same `event_id` returns the same one |
 | `status` | One of the `JobStatus` values below — `COMPLETED` unless something failed |
 | `strategy` | `FINE_TUNING`, `FULL_RETRAINING`, `ROLLBACK`, `NO_ACTION`, `INSUFFICIENT_INFORMATION`, or `NO_COMPATIBLE_STRATEGY` |
-| `result` | A `JobResult` — `outcome` is `NO_ACTION`, `REGISTERED`, or `REJECTED`, plus the full decision/candidate/validation trail |
+| `result` | A `JobResult`. Its `outcome` is `NO_ACTION`, `REGISTERED`, or `REJECTED`. It also carries the full decision/candidate/validation trail and, when a version is registered, `training_data_version` (the snapshot it was trained on). |
 | `error` | `null` on success; otherwise `{"code": ..., "message": ..., "context": {...}}` (see error codes below) |
 | `duplicate` | `true` if this `event_id` had already been processed |
 
@@ -232,7 +250,30 @@ curl -X POST http://127.0.0.1:8000/api/v1/adaptation/events \
 | `UNSAFE_CODE_REJECTED` | 500 | LLM-generated adaptation code failed the AST security scan |
 | `SANDBOX_EXECUTION_FAILED` | 500 | Sandboxed code ran but errored, timed out, or exceeded limits |
 | `LLM_UNAVAILABLE` | 500 | `LLM_PROVIDER` set but the provider call failed |
+| `DATASET_NOT_FOUND` | 404 | Unknown dataset or data version |
+| `DATA_VERSION_CONFLICT` | 409 | Version name already exists with different content |
+| `CONFLICT` | 409 | `model_id` already onboarded (attach/onboard) |
 | `CONFIGURATION_ERROR` / `ARTIFACT_ERROR` | 500 | Misconfiguration or artifact I/O failure |
+
+### Data versioning and model endpoints
+
+All routes are under `/api/v1`. Errors use the same `{"code", "message", "context"}` body as
+the adaptation endpoint.
+
+| Method and path | Purpose | Status codes |
+|---|---|---|
+| `POST /datasets` `{"dataset_id", "name"?, "description"?}` | Create a dataset (get-or-create) | 201 |
+| `GET /datasets` | List datasets with their version names | 200 |
+| `POST /datasets/{id}/versions` | Ingest a version. Body: `version`, `records` (at least 1 row), and optionally `kind` (`HISTORICAL`/`DRIFTED`), `timestamp_column` *or* `start`, `parent_version`, `model_id` + `model_version` + `role`, `source` | 201 when created, 200 for an identical replay, 409 `DATA_VERSION_CONFLICT`, 404 for an unknown model, 422 for an invalid body |
+| `GET /datasets/{id}/versions` | List the versions (hash, rows, columns, time range, parent) | 200, or 404 `DATASET_NOT_FOUND` |
+| `GET /datasets/{id}/versions/{v}` | Show one version | 200, or 404 |
+| `GET /datasets/{id}/versions/{v}/lineage` | Show the version, its ancestor chain, and the model versions linked to it | 200, or 404 |
+| `GET /models` | List onboarded models | 200 |
+| `GET /models/{id}` | Show metadata, data links, all MLflow versions with their tags and aliases, `live_alias`, and `live_version` | 200, or 404 `MODEL_NOT_FOUND` |
+| `POST /models/attach` | Adopt a model version already in MLflow. Body: `model_id`, `mlflow_model_name`, `framework`, `task_type`, `target_column`, and optionally `version`, `dataset_id`, `training_version` | 201, 409 `CONFLICT`, or 404 |
+
+No endpoint accepts model file uploads, because loading an uploaded pickle would execute
+arbitrary code. Use `onboard_model()` or the CLI with a trusted local file instead.
 
 ---
 
@@ -249,6 +290,59 @@ get one:
   `MlflowRegistry.set_alias(...)`, and insert a `ModelMetadata` row plus historical/drifted
   `DataVersion`/`DataRecord` rows pointing at the same `model_id`, against whatever
   `DATABASE_URL`/`MLFLOW_TRACKING_URI` your running server is using.
+- **`oran_adapt.registry.onboarding.onboard_model(...)`** is the supported programmatic path.
+  In one call it:
+  - validates the target column,
+  - logs the model to MLflow with `data.*` tags,
+  - aliases it `live`,
+  - writes the `ModelMetadata` row,
+  - ingests the training data (and, optionally, the drifted data) as immutable data versions
+    linked to model version 1.
+
+  `attach_existing_model(...)` adopts a version that is already in MLflow.
+- **CLI:** the `oran-adapt` command (also `python -m oran_adapt.cli`) exposes the same operations:
+  - `oran-adapt data ingest --dataset kpi --version v1 --csv train.csv`
+  - `oran-adapt model onboard --model-id m1 --model-file m1.joblib --framework sklearn --task-type regressor --target y --dataset kpi --training-csv train.csv`
+  - `oran-adapt model show --model-id m1`
+  - `oran-adapt event submit --model-id m1 --dataset kpi --drifted-version v2`
+
+  `--model-file` is unpickled, so only pass files you trust.
+
+  Row timestamps are part of a version's content hash. If the CSV has no timestamp column,
+  pass `--start 2026-01-01T00:00:00+00:00` to `data ingest` (or use `--timestamp-column`).
+  Otherwise the rows are stamped from "now", and re-ingesting the same file is reported as
+  `DATA_VERSION_CONFLICT` instead of being treated as a no-op.
+
+### Data versioning model
+
+A data version is immutable. Its identity is its SHA-256 `content_hash`, computed over the
+canonically ordered columns, the values, and the timestamps.
+
+- Re-ingesting identical content under the same version name is an idempotent no-op.
+- Ingesting different content under that name raises `DATA_VERSION_CONFLICT` (409).
+
+Versions carry a `parent_version`, which gives each version an ancestor chain. `ModelDataAssociation` rows link a
+model version to data versions by role: `TRAINING`, `VALIDATION`, or `DRIFT_OBSERVED`.
+
+After the pipeline registers a candidate, it does three things:
+
+1. It snapshots the exact merged training set as `train-<model_id>-v<N>`. The parent version
+   is the baseline it came from.
+2. It links that snapshot to the new version as `TRAINING`, which makes it the baseline for
+   the next drift cycle.
+3. It adds these tags to the MLflow version:
+   - `oran.model_id` / `oran.parent_version` / `oran.event_id`
+   - `adaptation.strategy` / `adaptation.engine`
+   - `validation.metric` / `validation.candidate_value` / `validation.current_value`
+   - `data.source_versions` / `data.training_version` / `data.training_hash`
+
+### Running a real MLflow server
+
+`python scripts/run_mlflow_server.py [--port 5000]` serves tracking and the model registry
+from `data/mlflow_server/`. It uses a `mlflow.db` SQLite backend and proxies artifacts through
+`--serve-artifacts` into `artifacts/`, and it writes its log to `server.log`. Ctrl+C stops the
+server together with its uvicorn worker. Set
+`MLFLOW_TRACKING_URI=MLFLOW_REGISTRY_URI=http://127.0.0.1:5000` for the API and CLI.
 
 ---
 
@@ -267,6 +361,8 @@ get one:
 | `SANDBOX_BACKEND` | `subprocess` | `subprocess` (restricted, resource-limited) \| `docker` (network-isolated container) |
 | `SANDBOX_TIMEOUT_S` / `SANDBOX_MEMORY_MB` | `120` / `1024` | Limits on LLM-generated adaptation code |
 | `SANDBOX_DOCKER_IMAGE` | `oran-adapt-sandbox:latest` | Image used when `SANDBOX_BACKEND=docker` |
+| `MLFLOW_SKOPS_TRUSTED_TYPES` | `["sklearn.tree._tree.Tree", "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor"]` | Extra types skops may serialize and load for sklearn models. Anything else fails fast with a non-retryable `ARTIFACT_ERROR`. |
+| `TORCH_FINE_TUNE_EPOCHS` / `TORCH_FULL_RETRAIN_EPOCHS` | `5` / `300` | Epochs for torch warm-start fine-tuning / from-scratch retraining |
 | `LIVE_ALIAS` | `live` | MLflow alias the pipeline promotes candidates to |
 | `LOG_LEVEL` / `LOG_JSON` | `INFO` / `true` | Logging verbosity/format |
 | `JOB_MAX_RETRIES` / `JOB_RETRY_BACKOFF_S` | `2` / `1.0` | Retry policy for transient MLflow/DB errors |
@@ -370,6 +466,7 @@ EOF
 |---|---|---|
 | `ModuleNotFoundError: No module named 'oran_adapt'` running a bare `python` command | Package not installed editable in `.venv` | `pip install -e ".[dev]"`, or `export PYTHONPATH="$(pwd -W)/src"` for that one command |
 | A `C:\c\...` folder appears outside the project after setting `DATABASE_URL`/`MLFLOW_TRACKING_URI` manually | Used `$(pwd)` (POSIX path) instead of `$(pwd -W)` (Windows path) inside a Git-Bash `sqlite:///` URL | Rebuild the URL with `pwd -W`; delete the stray folder once confirmed unused |
+| `UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f3c3'` when registering against an `http://` MLflow server | MLflow prints an emoji "View run" link; a redirected stdout on Windows defaults to cp1252 | The demo and `oran-adapt` CLI switch stdout to UTF-8 themselves; for `uvicorn` or your own scripts set `PYTHONIOENCODING=utf-8` |
 | `GET /api/v1/ready` returns `503` | Database or MLflow store unreachable — often just means migrations haven't run yet | Run the migration command in §2 |
 | `POST /adaptation/events` returns `MODEL_NOT_FOUND` | No `ModelMetadata` row for that `model_id` | Seed one first — see §6 |
 | Docker-related commands fail with "command not found" | No `docker` CLI installed on this machine | Expected here; those code paths are written and unit-tested but not integration-verified — see §9 |
@@ -392,6 +489,17 @@ only this manual (not the source) still learns about them. See
   consume unbounded memory on a Windows host. The only way to get an actually-enforced memory
   limit today is `SANDBOX_BACKEND=docker` (see §9), which applies `--memory`/`--memory-swap` at
   the container level on every host OS — untested here for lack of a local Docker install.
+- **MLflow global URI state during model logging and download.** MLflow's fluent
+  `log_model` API, and its resolution of the nested `models:/m-<id>` sources it creates, read
+  only the process-global tracking and registry URIs. `MlflowRegistry._fluent_uris()` therefore
+  sets them for the duration of those calls and restores them exactly afterwards, including
+  the `MLFLOW_*_URI` environment variables that MLflow's setters write. This is correct for
+  sequential jobs and for concurrent jobs against the *same* MLflow server. It is not safe for
+  concurrent jobs in one process that use *different* MLflow servers.
+- **Training snapshots grow every cycle.** A snapshot is the full merged training set: the
+  baseline plus all drifted rows. No windowing or down-sampling is applied, so storage and
+  training time grow linearly with the number of adaptation cycles. The `overlap_count`
+  reported by the merge is informational only.
 - **A timed-out adaptation job's worker thread is not actually stopped.** Python has no API to
   forcibly kill a running thread. When a job exceeds `JOB_TIMEOUT_S`, the caller gets back a
   `JOB_TIMEOUT` error and the HTTP request returns immediately — but the abandoned worker thread

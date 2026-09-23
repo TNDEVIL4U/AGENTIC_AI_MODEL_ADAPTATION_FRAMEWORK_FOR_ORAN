@@ -29,6 +29,21 @@ class ModelNotFoundError(AdaptationError):
     code = "MODEL_NOT_FOUND"
 
 
+class ConflictError(AdaptationError):
+    """The request clashes with something already recorded (e.g. a model_id that is already
+    onboarded, or a data version name reused for different content)."""
+
+    code = "CONFLICT"
+
+
+class DataVersionConflictError(ConflictError):
+    code = "DATA_VERSION_CONFLICT"
+
+
+class DatasetNotFoundError(AdaptationError):
+    code = "DATASET_NOT_FOUND"
+
+
 class ArtifactError(AdaptationError):
     code = "ARTIFACT_ERROR"
 

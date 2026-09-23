@@ -148,6 +148,66 @@ Per `docs/PHASE11_DOCKER_E2E.md`, re-verified rather than trusted:
 
 ---
 
+## Phase 13 — Real model registry, built-in data versioning, pipeline integration
+
+- [x] **Data versioning** (`src/oran_adapt/datastore/`, migration `0002_data_version_hash`):
+  - Immutable versions, each with a SHA-256 content hash.
+  - Idempotent re-ingest; `DATA_VERSION_CONFLICT` when a version name is reused for different
+    content.
+  - Parent-version lineage.
+  - Model↔data links by role, with a `ModelNotFoundError` instead of a raw FK error for an
+    unknown model.
+  - Covered by `tests/unit/test_phase13_versioning.py`.
+
+  **DONE — verified.**
+- [x] **Pipeline integration** (`orchestrator/pipeline.py`):
+  - Every registered candidate is tagged in MLflow (`oran.*`, `adaptation.*`, `validation.*`,
+    `data.*`).
+  - The exact merged training set is snapshotted as `train-<model_id>-v<N>` and linked as
+    `TRAINING`.
+  - `JobResult.training_data_version` is reported.
+  - The next cycle's analysis uses that snapshot as its baseline. Retrieval is ordered by
+    `created_at desc, id desc`, with the id as a deterministic tie-break.
+
+  **DONE — verified** (unit test, plus the second cycle in the demo).
+- [x] **Fix: tree models failed MLflow registration.** skops refused `sklearn.tree._tree.Tree`,
+  and the error was wrapped as a *retryable* `MLFLOW_UNAVAILABLE`. Types are now pre-checked
+  against `MLFLOW_SKOPS_TRUSTED_TYPES`: allow-listed types are trusted, and anything else
+  raises a non-retryable `ARTIFACT_ERROR`. **DONE — verified** (RandomForest registers; a strict
+  allowlist raises `ARTIFACT_ERROR`).
+- [x] **Fix: torch full retrain was REJECTED.** The epoch defaults were too low (30). They are
+  now configurable (`TORCH_FINE_TUNE_EPOCHS`=5, `TORCH_FULL_RETRAIN_EPOCHS`=300) and passed
+  through `run_engine`. **DONE — verified** (the demo's `energy-mlp-torch` is REGISTERED:
+  RMSE 0.165 vs 0.367).
+- [x] **Fix: MLflow global-state leak.** `mlflow.set_tracking_uri` / `set_registry_uri` also
+  write `MLFLOW_*_URI` environment variables. Later `Settings()` instances read them, which
+  pointed a subsequent test at the wrong registry (a registered version of `6` instead of
+  `2`). `MlflowRegistry._fluent_uris()` now restores the private globals and the environment
+  exactly, and a regression test covers this. **DONE — verified.**
+- [x] **Fix: `describe_versions` returned no aliases.** `search_model_versions` does not
+  populate them, so aliases are now read from `get_registered_model(...).aliases`. **DONE —
+  verified** (`live_version` asserted in the unit test).
+- [x] **Onboarding** (`registry/onboarding.py`): `onboard_model` / `attach_existing_model`,
+  with the drifted data starting strictly after the training data. **DONE — verified.**
+- [x] **HTTP API** (`api/routes_data.py`, `api/routes_models.py`) and **CLI** (`oran_adapt/cli.py`,
+  the `oran-adapt` script). There is no model-upload endpoint, because that would mean
+  unpickling user-supplied files. The API is **DONE — verified** by the status-code test. The
+  CLI is **DONE — verified** by `tests/unit/test_phase13_cli.py`. It drives `cli.main` end to end
+  against a real DB and a real MLflow store: `db upgrade`, `model onboard` from a joblib file,
+  `data ingest`/`list`/`lineage`, `event submit` through the full pipeline (registers v2 and
+  moves `live`), and `model show`. It also checks the structured-JSON errors with exit code 1.
+  **Fix found by that test:** without `--timestamp-column`, the row times defaulted to "now",
+  so re-ingesting the same CSV raised `DATA_VERSION_CONFLICT`. `data ingest` now takes
+  `--start` (like the API's `start`), which makes that re-ingest idempotent.
+- [x] **Real MLflow server** (`scripts/run_mlflow_server.py`): a SQLite backend with proxied
+  artifacts, run in its own process group and stopped with CTRL_BREAK/SIGTERM. The
+  `scripts/demo_models.py --start-server` run results are recorded in the summary table
+  below.
+
+**Phase 13 verdict: DONE — verified.**
+
+---
+
 ## Summary table
 
 | Phase | Status | One-line reason |
@@ -162,6 +222,7 @@ Per `docs/PHASE11_DOCKER_E2E.md`, re-verified rather than trusted:
 | 10 — Hardening | DONE — verified* | DB-constraint idempotency (incl. real concurrent-thread race test), selective retries, timeout-unblocks-caller all real; *worker-thread-can't-be-killed limitation is disclosed in code but not in user docs. |
 | 11 — Docker E2E | WRITTEN BUT UNVERIFIED | Docker/compose code and tests are real and correct on inspection but have never executed on this machine (no Docker CLI) — matches the project's own prior honesty doc. |
 | 12 — Demo/docs | DONE — verified | Demo script independently re-run this session with a live server; README/MANUAL cross-checked against code, one known gap noted (see above). |
+| 13 — Registry + data versioning | DONE — verified | Content-hashed immutable data versions, lineage, pipeline snapshots and MLflow tags, a real `mlflow server`, and tree-model/torch/global-URI fixes. The CLI is covered end to end by its own test. |
 
 ## Known gaps (nothing below is fully DONE — verified)
 
@@ -171,7 +232,10 @@ documentation/review work; gaps 1 and 2 remain open because they require resourc
 API key; a Docker install) that were not available in this environment and were not assumed
 without asking.
 
-1. **OPEN — LLM provider SDK calls (Anthropic/Gemini) are WRITTEN BUT UNVERIFIED.** `src/oran_adapt/llm/client.py:22-81` — the real SDK call code exists and is structurally sound, but no API key is configured in this environment (confirmed: no `.env` file present, `LLM_PROVIDER` unset), so `AnthropicLlmClient.complete()`/`GeminiLlmClient.complete()` have never actually reached a live provider. Every test uses a hand-written `FakeLlmClient`. **Requires a real `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` from the user to close.**
+1. **PARTIALLY CLOSED — LLM provider SDK calls, tested live against a real Gemini API key.** The user supplied a real `GEMINI_API_KEY`. Verified with a standalone script mirroring `tests/unit/test_phase9_orchestrator.py`'s scenario 3 exactly (a `LogisticRegression(warm_start=True)` model — fine-tuning-compatible in the abstract but with no `partial_fit`, so the native sklearn engine raises `UnsupportedAdaptationError` and the pipeline falls back to the LLM/sandbox adapter), but with `build_llm_client(settings)` — the **real** `GeminiLlmClient`, not `FakeLlmClient`.
+   - **Member 3's LLM-generated-fallback-adaptation call (`adaptation/llm_adapter.py`) — CLOSED, DONE — verified live.** Two separate real runs each: made a genuine network call to `generativelanguage.googleapis.com` (via `google-genai` + `tenacity` retry, confirmed by full real tracebacks through that library), received a freshly LLM-generated `adapt(current_model, X, y)` function (two runs produced two different-but-equivalent implementations — proof the response isn't cached/hardcoded), passed it through the real AST safety scanner, executed it in the real subprocess sandbox, validated the candidate (accuracy 1.0 vs current 0.9833, within tolerance), registered it as MLflow version 2, and moved the `live` alias to it. Independently re-verified outside the app: raw SQL against `mlflow.db` confirms `version=2`/`status=READY`/`alias=live→2`, and `mlflow.sklearn.load_model("models:/...@live")` loads a real fitted `LogisticRegression` (`coef_` populated, non-stub) that correctly predicts `[0, 1]` for `rsrp=-100`/`rsrp=-70`.
+   - **Member 2's LLM-assisted decision call (`decision/llm_selector.py`) — still not cleanly verified.** Every attempt this session (across three different `GEMINI_MODEL` values, needed because the first two were rejected by Google outright) hit a real but non-2xx response for this specific call: a `404` (deprecated model), a `429 RESOURCE_EXHAUSTED` (zero free-tier quota for that model), and finally a `503 UNAVAILABLE` ("high demand, try again later") on the two runs where Member 3's call subsequently succeeded. Each is a distinct, live, provider-side response (not a static mock), so the request-construction and error-handling code (`llm_selector.py:80-87`, catching `LlmUnavailableError` and falling back to the deterministic rule) is now proven correct under real failure conditions — but a genuine 2xx success for *this specific call shape* (the JSON-strategy-choice prompt) was never observed in this session, only for the code-generation call shape. Worth a further retry if the user wants this specific path closed too.
+   - Real key/model note: `.env`'s `GEMINI_MODEL` needed updating twice during this session as Google's model catalog had moved past the `GEMINI_MODEL` default hardcoded in `core/config.py:` (`gemini-2.5-pro`) and even past `gemini-2.5-flash`; `gemini-3.6-flash` was what actually worked for this account at verification time. This is expected drift for any hardcoded LLM model-id default and not itself a code defect, but an operator hitting a `404` on a fresh setup should try a newer model name via `GEMINI_MODEL` in `.env` first.
 2. **OPEN — Docker sandbox backend is WRITTEN BUT UNVERIFIED.** `src/oran_adapt/sandbox/runner.py:134-215`, `docker/sandbox/Dockerfile`, `docker-compose.yml`, and both `tests/integration/test_docker_*.py` files — real code, self-skipping tests, never executed (`docker --version` confirmed "command not found" again in this pass). This was already honestly disclosed in `docs/PHASE11_DOCKER_E2E.md`. A static line-by-line review of all three Docker files was completed in this pass (see `docs/PHASE11_DOCKER_E2E.md`'s "Line-by-line file review" section) and found no internal inconsistencies, but that is not a substitute for an actual build/run. **Requires a Docker install from the user to close.**
 3. **CLOSED — Windows sandbox memory ceiling now disclosed.** `src/oran_adapt/sandbox/runner.py:63-65` still silently skips `RLIMIT_AS` on non-POSIX (that's a code fact, not something docs can change), but this is now explicitly called out in `README.md`'s new "Known limitations" section and `docs/MANUAL.md` §12, so an operator reading only the user-facing docs now learns about it.
 4. **CLOSED — worker-thread-not-actually-killed limitation now disclosed.** `src/oran_adapt/orchestrator/jobs.py:17-22` / `JobTimeoutError`'s docstring describe a real Python limitation that can't be fixed in code (no thread-kill API), but it is now documented in `README.md`'s "Known limitations" section and `docs/MANUAL.md` §12, including the practical implication (check `AdaptationJob.status` directly for jobs that timed out, don't trust only the synchronous response).

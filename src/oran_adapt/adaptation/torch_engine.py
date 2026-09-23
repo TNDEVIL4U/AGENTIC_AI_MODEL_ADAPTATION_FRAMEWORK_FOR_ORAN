@@ -116,7 +116,7 @@ def full_retrain_torch(
     target_column: str,
     estimator_type: str,
     artifact_dir: str,
-    epochs: int = 30,
+    epochs: int = 300,
     lr: float = 1e-2,
 ) -> CandidateModel:
     fresh = copy.deepcopy(current_model)

@@ -10,3 +10,4 @@ mlartifacts/
 node_modules/
 headroom/
 data/
+.claude/
