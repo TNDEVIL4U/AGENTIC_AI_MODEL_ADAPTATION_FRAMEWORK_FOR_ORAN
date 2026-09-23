@@ -58,6 +58,11 @@ class DataVersion(Base):
     data_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     data_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     row_count: Mapped[int] = mapped_column(Integer, default=0)
+    # SHA-256 of the version's canonical content (see datastore.versioning.content_hash) - what
+    # makes a version name immutable: re-ingesting it with different rows is a conflict.
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    # Column schema, source and producer (e.g. which adaptation job snapshotted it).
+    extra: Mapped[dict | None] = mapped_column(JSON)
     ingested_at: Mapped[datetime] = _ts()
     dataset: Mapped[DatasetMetadata] = relationship(back_populates="versions")
     records: Mapped[list[DataRecord]] = relationship(back_populates="data_version")

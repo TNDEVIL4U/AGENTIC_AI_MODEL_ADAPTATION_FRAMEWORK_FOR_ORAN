@@ -136,6 +136,51 @@ The one scenario it can't cover without a real API key is LLM-generated fallback
 key in `.env` to try that path; see `tests/unit/test_phase9_orchestrator.py`'s third scenario
 for the exact request shape that triggers it.
 
+### Multi-model demo against a real MLflow server
+
+`scripts/demo_models.py` onboards eight models covering sklearn (Ridge, RandomForest, SGD
+`partial_fit`), xgboost, and torch. It fires a drift event at each one and then checks the
+following:
+
+- idempotency,
+- the lineage of every registered version: MLflow tags, training-data snapshots, and the
+  model↔data links,
+- a second adaptation cycle. That cycle ingests new drifted data through the data API and
+  confirms that the previous cycle's snapshot is used as the new baseline.
+
+```bash
+python scripts/demo_models.py --start-server   # starts, uses, and stops a local MLflow server
+python scripts/demo_models.py                  # uses a throwaway SQLite MLflow store instead
+```
+
+## Model registry and data versioning
+
+- **MLflow server:** `python scripts/run_mlflow_server.py [--port 5000]` runs a real tracking
+  and model-registry server under `data/mlflow_server/`. It uses a SQLite backend and a
+  proxied artifact store, and it stops cleanly on Ctrl+C. To use it, set
+  `MLFLOW_TRACKING_URI=MLFLOW_REGISTRY_URI=http://127.0.0.1:5000`.
+- **Data versioning (built in, with no DVC):** each dataset version is stored immutably in
+  the database and carries a SHA-256 content hash.
+  - Re-ingesting identical content is a no-op. Ingesting *different* content under an
+    existing version name returns `409 DATA_VERSION_CONFLICT`.
+  - Versions record their parent version, and models are linked to data versions by role:
+    `TRAINING`, `VALIDATION`, or `DRIFT_OBSERVED`.
+- **Pipeline integration:** each registered candidate version gets these MLflow tags:
+  - `oran.*`, `adaptation.*`, `validation.*`
+  - `data.source_versions`, `data.training_version`, `data.training_hash`
+
+  The exact data the candidate was trained on is also snapshotted as a new version,
+  `train-<model_id>-v<N>`. That version is linked as the model's `TRAINING` data, so it
+  becomes the baseline for the next drift cycle.
+- **Tree models:** `MLFLOW_SKOPS_TRUSTED_TYPES` lists the skops types that are allowed to be
+  serialized. By default it covers sklearn trees and hist-gradient-boosting predictors.
+  Anything outside the list fails fast with a non-retryable `ARTIFACT_ERROR`.
+- **CLI:** the `oran-adapt` command (or `python -m oran_adapt.cli`) has these subcommands:
+  - `db upgrade`
+  - `data create-dataset|ingest|list|lineage`
+  - `model onboard|attach|show`
+  - `event submit`
+
 ## API
 
 - `POST /api/v1/adaptation/events` — submit a `DriftEvent` (`model_id`, `event_id`,
@@ -145,6 +190,16 @@ for the exact request shape that triggers it.
 - `GET /api/v1/health` — liveness only; does not touch dependencies.
 - `GET /api/v1/ready` — readiness; checks the database and MLflow are both reachable, `503`
   if either is down.
+- `POST/GET /api/v1/datasets` — create or list datasets.
+- `POST /api/v1/datasets/{id}/versions` — ingest a data version from JSON records. Returns
+  `201` when the version is new, `200` for an identical replay, and `409` for conflicting
+  content.
+- `GET /api/v1/datasets/{id}/versions[/{version}[/lineage]]` — list versions, show one
+  version, or show its lineage.
+- `GET /api/v1/models`, `GET /api/v1/models/{id}` — onboarded models. Each model's view
+  includes its MLflow versions and tags, its live version, and its data links.
+- `POST /api/v1/models/attach` — adopt a model version that is already in MLflow. There is no
+  upload endpoint, because model files are pickles.
 
 ## Testing
 
@@ -193,6 +248,33 @@ Docker sandbox backend, the sandbox Dockerfile, and the compose stack are writte
 covered by integration tests, but those tests have never actually executed here — they skip
 themselves for the documented reason. See `docs/PHASE11_DOCKER_E2E.md` for exactly what was
 and wasn't verified.
+
+## Known limitations
+
+- **Windows: no enforced sandbox memory ceiling.** `SANDBOX_MEMORY_MB` is only enforced on
+  POSIX (`resource.setrlimit`); on Windows the subprocess sandbox backend has a real wall-clock
+  timeout but no memory cap. Use `SANDBOX_BACKEND=docker` for an enforced limit on any OS.
+- **A timed-out job's worker thread keeps running.** Python cannot forcibly kill a thread, so
+  past `JOB_TIMEOUT_S` the caller is unblocked but the abandoned worker may still write a late
+  result to the database after the client was told it failed — check `AdaptationJob.status`
+  directly for jobs that timed out.
+- **Concurrent jobs share MLflow's global URI state during model logging and download.**
+  MLflow's fluent `log_model` API and its `models:/` URI resolution only read the global
+  tracking and registry URIs. The registry client therefore sets those URIs for the duration
+  of each call and restores them exactly afterwards. This is not safe when jobs run in
+  parallel against *different* MLflow servers in the same process.
+- **Training snapshots grow on every cycle.** Each snapshot is the full merged training set
+  (the previous baseline plus the drifted data). No windowing or down-sampling is applied.
+
+See `docs/MANUAL.md` §12 and `docs/IMPLEMENTATION_CHECKLIST.md`'s "Known gaps" for details.
+
+## Manual
+
+`docs/MANUAL.md` is the complete operator reference: every setup/run/test/lint/Docker command,
+the full API endpoint reference (request/response schemas, status codes, error codes), the
+environment variable table, how to seed a test model, how to independently verify a run actually
+happened (not just trust the API's response), and a troubleshooting table for issues hit while
+developing this on Windows/Git-Bash.
 
 ## Project history
 

@@ -59,9 +59,12 @@ def run_engine(
     y: pd.Series,
     target_column: str,
     artifact_dir: str,
+    torch_fine_tune_epochs: int | None = None,
+    torch_full_retrain_epochs: int | None = None,
 ) -> CandidateModel:
     """Carry out the engine chosen by select_engine() against the real current model and real
-    training data, producing a saved candidate artifact ready for validation/registration."""
+    training data, producing a saved candidate artifact ready for validation/registration.
+    The torch epoch budgets default to the engines' own defaults when not given."""
     if engine not in (
         EngineKind.SKLEARN_FULL_RETRAIN,
         EngineKind.XGBOOST_FULL_RETRAIN,
@@ -116,6 +119,7 @@ def run_engine(
             target_column=target_column,
             estimator_type=inspection.estimator_type,
             artifact_dir=artifact_dir,
+            **({"epochs": torch_full_retrain_epochs} if torch_full_retrain_epochs else {}),
         )
     if engine == EngineKind.TORCH_FINE_TUNE:
         return fine_tune_torch(
@@ -126,5 +130,6 @@ def run_engine(
             target_column=target_column,
             estimator_type=inspection.estimator_type,
             artifact_dir=artifact_dir,
+            **({"epochs": torch_fine_tune_epochs} if torch_fine_tune_epochs else {}),
         )
     raise AssertionError(f"unreachable: engine {engine} passed the support check above")

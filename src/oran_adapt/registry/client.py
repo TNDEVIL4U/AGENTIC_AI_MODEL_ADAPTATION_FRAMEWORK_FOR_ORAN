@@ -3,16 +3,60 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
+import pandas as pd
 from mlflow import MlflowClient
 from mlflow.exceptions import MlflowException
 
-from oran_adapt.core.errors import ModelNotFoundError, RegistryUnavailableError
+from oran_adapt.core.errors import (
+    ArtifactError,
+    ModelNotFoundError,
+    RegistryUnavailableError,
+    UnsupportedAdaptationError,
+)
+
+# Types beyond skops' built-in safe list that sklearn tree models need (see
+# Settings.mlflow_skops_trusted_types, which overrides this default).
+DEFAULT_SKOPS_TRUSTED_TYPES = (
+    "sklearn.tree._tree.Tree",
+    "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
+)
+
+
+def resolve_skops_trusted_types(model: object, allowed: tuple[str, ...] | list[str]) -> list[str]:
+    """The skops types ``model`` needs trusted to be saved by ``mlflow.sklearn``. Raises
+    ArtifactError - a deterministic failure, never retried - when it needs any type outside
+    ``allowed``, rather than letting MLflow fail later with a generic error that looks like an
+    outage."""
+    import skops.io as sio
+
+    try:
+        needed = sio.get_untrusted_types(data=sio.dumps(model))
+    except Exception as exc:
+        raise ArtifactError(
+            f"could not serialize {type(model).__name__} with skops", cause=str(exc)
+        ) from exc
+    refused = sorted(set(needed) - set(allowed))
+    if refused:
+        raise ArtifactError(
+            f"{type(model).__name__} needs skops types that are not on the trusted list",
+            untrusted_types=refused,
+            hint="review them, then add to MLFLOW_SKOPS_TRUSTED_TYPES",
+        )
+    return sorted(needed)
 
 
 class MlflowRegistry:
-    def __init__(self, tracking_uri: str, registry_uri: str | None = None) -> None:
+    def __init__(
+        self,
+        tracking_uri: str,
+        registry_uri: str | None = None,
+        *,
+        skops_trusted_types: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
         # MLflow's default HTTP policy (7 retries with exponential backoff) makes an outage
         # take minutes to surface. Fail fast unless the operator configured otherwise.
         os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "1")
@@ -21,6 +65,9 @@ class MlflowRegistry:
         self.tracking_uri = tracking_uri
         self.registry_uri = registry_uri or tracking_uri
         self.client = MlflowClient(tracking_uri=tracking_uri, registry_uri=self.registry_uri)
+        self.skops_trusted_types = tuple(
+            DEFAULT_SKOPS_TRUSTED_TYPES if skops_trusted_types is None else skops_trusted_types
+        )
 
     def ping(self) -> None:
         """Raise RegistryUnavailableError if the tracking/registry backend is unreachable."""
@@ -48,18 +95,55 @@ class MlflowRegistry:
             raise RegistryUnavailableError("MLflow query failed", cause=str(exc)) from exc
         return sorted(versions, key=lambda v: int(v.version))
 
+    @contextmanager
+    def _fluent_uris(self) -> Iterator[None]:
+        """Point MLflow's *global* tracking/registry URIs at this registry for the duration of
+        the block, then restore whatever was there before. Needed because the fluent APIs
+        (``mlflow.<flavor>.log_model``) and the resolution of a model version's nested
+        ``models:/m-<id>`` source only consult the global URIs, whatever is passed explicitly -
+        without this they silently talk to a different store.
+
+        The setters also write MLFLOW_TRACKING_URI / MLFLOW_REGISTRY_URI into os.environ, which
+        Settings reads, so the previous *unset* state is restored exactly (not replaced by
+        MLflow's resolved default) - otherwise every later Settings() in the process would
+        silently pick up a registry URI nobody configured."""
+        import mlflow
+        from mlflow.tracking import _model_registry, _tracking_service
+
+        env_keys = ("MLFLOW_TRACKING_URI", "MLFLOW_REGISTRY_URI")
+        saved_env = {key: os.environ.get(key) for key in env_keys}
+        tracking_mod = _tracking_service.utils
+        registry_mod = _model_registry.utils
+        saved_tracking = getattr(tracking_mod, "_tracking_uri", None)
+        saved_registry = getattr(registry_mod, "_registry_uri", None)
+        mlflow.set_tracking_uri(self.tracking_uri)
+        mlflow.set_registry_uri(self.registry_uri)
+        try:
+            yield
+        finally:
+            if hasattr(tracking_mod, "_tracking_uri"):
+                tracking_mod._tracking_uri = saved_tracking
+            if hasattr(registry_mod, "_registry_uri"):
+                registry_mod._registry_uri = saved_registry
+            for key, value in saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def download_artifacts(self, name: str, version: str, dst_path: str) -> str:
         """Download a registered model version's artifacts to a local directory and return the
         local path. Member 3's loaders load the native model object from that path."""
         import mlflow.artifacts
 
         try:
-            return mlflow.artifacts.download_artifacts(
-                artifact_uri=f"models:/{name}/{version}",
-                dst_path=dst_path,
-                tracking_uri=self.tracking_uri,
-                registry_uri=self.registry_uri,
-            )
+            with self._fluent_uris():
+                return mlflow.artifacts.download_artifacts(
+                    artifact_uri=f"models:/{name}/{version}",
+                    dst_path=dst_path,
+                    tracking_uri=self.tracking_uri,
+                    registry_uri=self.registry_uri,
+                )
         except MlflowException as exc:
             if getattr(exc, "error_code", "") == "RESOURCE_DOES_NOT_EXIST":
                 raise ModelNotFoundError(
@@ -88,46 +172,115 @@ class MlflowRegistry:
         except MlflowException as exc:
             raise RegistryUnavailableError("MLflow alias update failed", cause=str(exc)) from exc
 
-    def register_candidate(self, name: str, artifact_path: str, *, framework: str, metrics: dict[str, float]) -> str:
-        """Log a candidate artifact (a local joblib file, as produced by Member 3's engines) to
-        MLflow as a new run and register it as a new version of ``name``. Returns the new
-        version number. Raises UnsupportedAdaptationError if ``framework`` has no MLflow log_model
-        flavor wired up."""
-        import joblib
+    def log_model(
+        self,
+        name: str,
+        model: object,
+        *,
+        framework: str,
+        metrics: dict[str, float] | None = None,
+        tags: dict[str, str] | None = None,
+        input_frame: pd.DataFrame | None = None,
+        input_name: str | None = None,
+        input_digest: str | None = None,
+    ) -> str:
+        """Log a native model object to MLflow as a new run and register it as a new version of
+        ``name``; returns the version number. ``tags`` are set on both the run and the model
+        version (that is where data lineage lives - see datastore.versioning). ``input_frame``
+        is recorded as the run's training dataset (schema + digest only, not the rows).
+
+        Raises UnsupportedAdaptationError for a framework with no MLflow flavor, ArtifactError
+        for a model that cannot be serialized safely, RegistryUnavailableError when MLflow
+        itself fails."""
         import mlflow
 
-        from oran_adapt.core.errors import UnsupportedAdaptationError
-
         fw = framework.lower()
-        model = joblib.load(artifact_path)
+        if fw not in ("sklearn", "xgboost", "torch", "pytorch"):
+            raise UnsupportedAdaptationError(f"no MLflow log_model flavor for framework {framework!r}")
+        trusted = (
+            resolve_skops_trusted_types(model, self.skops_trusted_types) if fw == "sklearn" else []
+        )
 
-        # mlflow.*.log_model only knows how to talk to the *global* fluent tracking/registry URI,
-        # so we point it at this registry's backend for the duration of the call - and always
-        # restore whatever was there before, so this call never leaves lasting global side effects
-        # for any other MlflowRegistry instance (or test) running in the same process.
-        prev_tracking_uri = mlflow.get_tracking_uri()
-        prev_registry_uri = mlflow.get_registry_uri()
-        mlflow.set_tracking_uri(self.tracking_uri)
-        mlflow.set_registry_uri(self.registry_uri)
         try:
-            with mlflow.start_run():
+            with self._fluent_uris(), mlflow.start_run():
+                if input_frame is not None:
+                    dataset = mlflow.data.from_pandas(
+                        input_frame, name=input_name, digest=input_digest
+                    )
+                    mlflow.log_input(dataset, context="training")
                 if fw == "sklearn":
-                    info = mlflow.sklearn.log_model(model, name="model", registered_model_name=name)
+                    info = mlflow.sklearn.log_model(
+                        model,
+                        name="model",
+                        registered_model_name=name,
+                        skops_trusted_types=trusted or None,
+                    )
                 elif fw == "xgboost":
                     info = mlflow.xgboost.log_model(model, name="model", registered_model_name=name)
-                elif fw in ("torch", "pytorch"):
+                else:
                     info = mlflow.pytorch.log_model(
                         model, name="model", registered_model_name=name, serialization_format="pickle"
                     )
-                else:
-                    raise UnsupportedAdaptationError(
-                        f"no MLflow log_model flavor for framework {framework!r}"
-                    )
-                for metric_name, value in metrics.items():
+                for metric_name, value in (metrics or {}).items():
                     mlflow.log_metric(metric_name, value)
+                if tags:
+                    mlflow.set_tags(tags)
         except MlflowException as exc:
             raise RegistryUnavailableError("MLflow model registration failed", cause=str(exc)) from exc
-        finally:
-            mlflow.set_tracking_uri(prev_tracking_uri)
-            mlflow.set_registry_uri(prev_registry_uri)
-        return str(info.registered_model_version)
+
+        version = str(info.registered_model_version)
+        if tags:
+            self.set_version_tags(name, version, tags)
+        return version
+
+    def register_candidate(
+        self,
+        name: str,
+        artifact_path: str,
+        *,
+        framework: str,
+        metrics: dict[str, float],
+        tags: dict[str, str] | None = None,
+    ) -> str:
+        """Register a candidate artifact (a local joblib file, as produced by Member 3's
+        engines) as a new version of ``name``. See log_model for the errors it raises."""
+        import joblib
+
+        try:
+            model = joblib.load(artifact_path)
+        except Exception as exc:
+            raise ArtifactError(
+                f"could not load candidate artifact: {artifact_path}", cause=str(exc)
+            ) from exc
+        return self.log_model(name, model, framework=framework, metrics=metrics, tags=tags)
+
+    def set_version_tags(self, name: str, version: str, tags: dict[str, str]) -> None:
+        try:
+            for key, value in tags.items():
+                self.client.set_model_version_tag(name, version, key, str(value))
+        except MlflowException as exc:
+            raise RegistryUnavailableError("MLflow tag update failed", cause=str(exc)) from exc
+
+    def describe_versions(self, name: str) -> list[dict[str, Any]]:
+        """Every registered version of ``name`` with its aliases, tags and source run - the
+        registry half of a model's lineage (the data half lives in the database)."""
+        versions = self.list_versions(name)
+        # search_model_versions does not return aliases; the registered model has the map.
+        try:
+            alias_map = dict(self.client.get_registered_model(name).aliases or {})
+        except MlflowException as exc:
+            raise RegistryUnavailableError("MLflow alias lookup failed", cause=str(exc)) from exc
+        by_version: dict[str, list[str]] = {}
+        for alias, version in alias_map.items():
+            by_version.setdefault(str(version), []).append(alias)
+        return [
+            {
+                "version": str(v.version),
+                "aliases": sorted(by_version.get(str(v.version), [])),
+                "tags": dict(v.tags or {}),
+                "run_id": v.run_id,
+                "status": v.status,
+                "created_at_ms": v.creation_timestamp,
+            }
+            for v in versions
+        ]

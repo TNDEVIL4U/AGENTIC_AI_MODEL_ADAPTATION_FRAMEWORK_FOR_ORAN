@@ -64,9 +64,30 @@ class Settings(BaseSettings):
     # more than validation_accuracy_tolerance below V_current's; a regressor candidate passes
     # when its RMSE is no more than validation_rmse_tolerance_ratio (a fraction of V_current's
     # RMSE, since RMSE has no fixed scale) higher than V_current's.
+    # The hold-out is the newest validation_holdout_fraction of the drifted rows (at least
+    # validation_min_rows of them, always leaving one drifted row to train on). Those rows are
+    # never trained on, so both models are scored on data neither has seen.
     validation_min_rows: int = Field(5, ge=1)
+    validation_holdout_fraction: float = Field(0.2, gt=0, lt=1)
     validation_accuracy_tolerance: float = Field(0.02, ge=0, le=1)
     validation_rmse_tolerance_ratio: float = Field(0.05, ge=0)
+
+    # MLflow >= 3 serializes sklearn models with skops, which refuses to save or load any type
+    # not on its built-in safe list. These are the extra types the framework has reviewed and
+    # trusts - the tree node stores behind DecisionTree*/RandomForest*/ExtraTrees*/
+    # GradientBoosting*/IsolationForest and HistGradientBoosting*. A model needing any other
+    # untrusted type is refused with ARTIFACT_ERROR instead of being trusted blindly.
+    mlflow_skops_trusted_types: list[str] = Field(
+        default_factory=lambda: [
+            "sklearn.tree._tree.Tree",
+            "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
+        ]
+    )
+
+    # Torch engine budgets (full-batch Adam steps). A from-scratch retrain needs far more steps
+    # than a warm-start fine-tune to get back to the current model's quality.
+    torch_fine_tune_epochs: int = Field(5, ge=1)
+    torch_full_retrain_epochs: int = Field(300, ge=1)
 
     @model_validator(mode="after")
     def _llm_key_present(self) -> Settings:

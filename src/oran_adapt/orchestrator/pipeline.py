@@ -21,7 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from oran_adapt.adaptation.capability import assess_capability
-from oran_adapt.adaptation.data import build_training_frame, split_features_target
+from oran_adapt.adaptation.data import (
+    holdout_size,
+    load_records,
+    records_frame,
+    split_features_target,
+)
 from oran_adapt.adaptation.engines import run_engine, select_engine
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
@@ -32,6 +37,7 @@ from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy
 from oran_adapt.core.errors import ArtifactError, UnsupportedAdaptationError
 from oran_adapt.core.schemas import DriftEvent
+from oran_adapt.datastore.versioning import snapshot_training_data
 from oran_adapt.db.models import ModelMetadata
 from oran_adapt.decision.engine import decide
 from oran_adapt.llm.client import LlmClient
@@ -68,6 +74,8 @@ def _produce_candidate(
             y=y,
             target_column=target_column,
             artifact_dir=os.path.join(workdir, "engine"),
+            torch_fine_tune_epochs=settings.torch_fine_tune_epochs,
+            torch_full_retrain_epochs=settings.torch_full_retrain_epochs,
         )
     except UnsupportedAdaptationError:
         if llm_client is None:
@@ -140,7 +148,17 @@ def run_adaptation_job(
     train_ids = [
         ref.data_version_id for ref in (package.historical_data, package.drifted_data) if ref
     ]
-    train_frame = build_training_frame(session, train_ids)
+    # Hold out the newest drifted rows (all sources when there is no drifted version): both
+    # models are scored on them, and the candidate never trains on them.
+    records = load_records(session, train_ids)
+    pool_id = package.drifted_data.data_version_id if package.drifted_data else None
+    pool = [r for r in records if pool_id is None or r.data_version_id == pool_id]
+    n_holdout = holdout_size(
+        len(pool), settings.validation_holdout_fraction, settings.validation_min_rows
+    )
+    holdout = pool[len(pool) - n_holdout :]
+    holdout_ids = {r.id for r in holdout}
+    train_frame = records_frame([r for r in records if r.id not in holdout_ids])
     feature_names = inspection.feature_names_in or [
         c for c in train_frame.columns if c != model_meta.target_column
     ]
@@ -159,10 +177,9 @@ def run_adaptation_job(
         workdir=workdir,
     )
 
-    validation_ids = (
-        [package.drifted_data.data_version_id] if package.drifted_data else train_ids
-    )
-    validation_frame = build_training_frame(session, validation_ids)
+    validation_frame = records_frame(holdout)
+    if validation_frame.empty:  # validate_candidate then reports "not enough validation rows"
+        validation_frame = pd.DataFrame(columns=[*feature_names, model_meta.target_column])
     Xv, yv = split_features_target(validation_frame, feature_names, model_meta.target_column)
     report = validate_candidate(
         candidate,
@@ -186,11 +203,47 @@ def run_adaptation_job(
             reason=report.reason,
         )
 
+    source_versions = [
+        ref for ref in (package.historical_data, package.drifted_data) if ref is not None
+    ]
     new_version = registry.register_candidate(
         model_meta.mlflow_model_name,
         candidate.artifact_path,
         framework=candidate.framework,
         metrics=candidate.metrics,
+        tags={
+            "oran.model_id": event.model_id,
+            "oran.parent_version": live_version,
+            "oran.event_id": event.event_id or "",
+            "adaptation.strategy": decision.strategy.value,
+            "adaptation.engine": candidate.engine.value,
+            "validation.metric": report.metric_name,
+            "validation.candidate_value": f"{report.candidate_value:.6f}",
+            "validation.current_value": f"{report.current_value:.6f}",
+            "validation.holdout_rows": str(len(holdout)),
+            "data.source_versions": ",".join(ref.version for ref in source_versions),
+        },
+    )
+    # Data lineage: freeze what v<new> was trained on as its own data version, linked to it, so
+    # the next drift event is compared against the live model's real baseline.
+    snapshot = snapshot_training_data(
+        session,
+        model_id=event.model_id,
+        model_version=new_version,
+        source_version_ids=train_ids,
+        exclude_record_ids=holdout_ids,
+        parent_version_id=package.historical_data.data_version_id
+        if package.historical_data
+        else None,
+        job_ref=event.event_id,
+    )
+    registry.set_version_tags(
+        model_meta.mlflow_model_name,
+        new_version,
+        {
+            "data.training_version": snapshot.version,
+            "data.training_hash": snapshot.content_hash or "",
+        },
     )
     registry.set_alias(model_meta.mlflow_model_name, settings.live_alias, new_version)
 
@@ -202,5 +255,6 @@ def run_adaptation_job(
         candidate=candidate,
         validation=report,
         registered_version=new_version,
+        training_data_version=snapshot.version,
         reason=f"candidate validated ({report.reason}) and registered as version {new_version}",
     )

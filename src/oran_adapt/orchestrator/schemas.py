@@ -22,3 +22,5 @@ class JobResult(BaseModel):
     candidate: CandidateModel | None = None
     validation: ValidationReport | None = None
     registered_version: str | None = None
+    # The data version the pipeline froze as the new model version's training set.
+    training_data_version: str | None = None
