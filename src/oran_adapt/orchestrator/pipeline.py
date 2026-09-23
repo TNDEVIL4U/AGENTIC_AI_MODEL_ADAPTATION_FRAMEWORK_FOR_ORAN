@@ -21,7 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from oran_adapt.adaptation.capability import assess_capability
-from oran_adapt.adaptation.data import build_training_frame, split_features_target
+from oran_adapt.adaptation.data import (
+    holdout_size,
+    load_records,
+    records_frame,
+    split_features_target,
+)
 from oran_adapt.adaptation.engines import run_engine, select_engine
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
@@ -143,7 +148,17 @@ def run_adaptation_job(
     train_ids = [
         ref.data_version_id for ref in (package.historical_data, package.drifted_data) if ref
     ]
-    train_frame = build_training_frame(session, train_ids)
+    # Hold out the newest drifted rows (all sources when there is no drifted version): both
+    # models are scored on them, and the candidate never trains on them.
+    records = load_records(session, train_ids)
+    pool_id = package.drifted_data.data_version_id if package.drifted_data else None
+    pool = [r for r in records if pool_id is None or r.data_version_id == pool_id]
+    n_holdout = holdout_size(
+        len(pool), settings.validation_holdout_fraction, settings.validation_min_rows
+    )
+    holdout = pool[len(pool) - n_holdout :]
+    holdout_ids = {r.id for r in holdout}
+    train_frame = records_frame([r for r in records if r.id not in holdout_ids])
     feature_names = inspection.feature_names_in or [
         c for c in train_frame.columns if c != model_meta.target_column
     ]
@@ -162,10 +177,9 @@ def run_adaptation_job(
         workdir=workdir,
     )
 
-    validation_ids = (
-        [package.drifted_data.data_version_id] if package.drifted_data else train_ids
-    )
-    validation_frame = build_training_frame(session, validation_ids)
+    validation_frame = records_frame(holdout)
+    if validation_frame.empty:  # validate_candidate then reports "not enough validation rows"
+        validation_frame = pd.DataFrame(columns=[*feature_names, model_meta.target_column])
     Xv, yv = split_features_target(validation_frame, feature_names, model_meta.target_column)
     report = validate_candidate(
         candidate,
@@ -206,6 +220,7 @@ def run_adaptation_job(
             "validation.metric": report.metric_name,
             "validation.candidate_value": f"{report.candidate_value:.6f}",
             "validation.current_value": f"{report.current_value:.6f}",
+            "validation.holdout_rows": str(len(holdout)),
             "data.source_versions": ",".join(ref.version for ref in source_versions),
         },
     )
@@ -216,6 +231,7 @@ def run_adaptation_job(
         model_id=event.model_id,
         model_version=new_version,
         source_version_ids=train_ids,
+        exclude_record_ids=holdout_ids,
         parent_version_id=package.historical_data.data_version_id
         if package.historical_data
         else None,

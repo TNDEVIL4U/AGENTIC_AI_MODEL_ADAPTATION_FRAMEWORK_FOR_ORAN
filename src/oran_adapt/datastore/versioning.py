@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -380,10 +381,12 @@ def snapshot_training_data(
     model_version: str,
     source_version_ids: list[int],
     parent_version_id: int | None,
+    exclude_record_ids: Collection[int] = (),
     job_ref: str | None = None,
 ) -> VersionInfo:
     """After the pipeline registers a new model version, freeze exactly the rows it was trained
-    on (every source version, timestamps preserved) as one new HISTORICAL data version, derived
+    on (every source version minus the validation hold-out ``exclude_record_ids``, timestamps
+    preserved) as one new HISTORICAL data version, derived
     from the previous baseline, and link it to the new model version as TRAINING data. The next
     drift event for this model is then compared against the data the *live* model actually
     learned from, instead of the stale pre-adaptation baseline."""
@@ -399,6 +402,8 @@ def snapshot_training_data(
         .where(DataRecord.data_version_id.in_(source_version_ids))
         .order_by(DataRecord.observed_at, DataRecord.id)
     ).scalars().all()
+    excluded = set(exclude_record_ids)
+    rows = [r for r in rows if r.id not in excluded]
     frame = pd.DataFrame([r.payload for r in rows])
     stamps = [_as_utc(r.observed_at) for r in rows]
     frame["__observed_at"] = stamps
@@ -416,5 +421,6 @@ def snapshot_training_data(
         model_version=model_version,
         role=AssociationRole.TRAINING,
         source=f"adaptation snapshot of {'+'.join(source_names)}"
+        + (f" minus {len(excluded)} held-out rows" if excluded else "")
         + (f" (job {job_ref})" if job_ref else ""),
     )

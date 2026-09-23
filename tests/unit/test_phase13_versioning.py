@@ -14,6 +14,7 @@ import pytest
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 
+from oran_adapt.adaptation.data import holdout_size
 from oran_adapt.core.errors import (
     ArtifactError,
     ConflictError,
@@ -170,6 +171,14 @@ def test_onboard_rejects_missing_target_before_touching_mlflow(session_factory, 
 
 
 # --------------------------------------------------------------------------- pipeline + API
+def test_holdout_size():
+    assert holdout_size(200, 0.2, 5) == 40
+    assert holdout_size(10, 0.2, 5) == 5  # raised to the validation minimum
+    assert holdout_size(5, 0.2, 5) == 4  # but one row is always left to train on
+    assert holdout_size(1, 0.2, 5) == 0 and holdout_size(0, 0.2, 5) == 0
+
+
+
 def test_pipeline_snapshots_training_data_and_tags_lineage(client, migrated_settings):
     app = client.app
     hist = _frame(200, seed=1)
@@ -188,6 +197,8 @@ def test_pipeline_snapshots_training_data_and_tags_lineage(client, migrated_sett
     result = body["result"]
     assert result["outcome"] == "REGISTERED" and result["registered_version"] == "2"
     assert result["training_data_version"] == "train-thr-v2"
+    # Validation is on the newest 20% of the 200 drifted rows, which training never saw.
+    assert result["validation"]["n_validation_rows"] == 40
 
     model_view = client.get("/api/v1/models/thr").json()
     assert model_view["live_version"] == "2"
@@ -195,9 +206,12 @@ def test_pipeline_snapshots_training_data_and_tags_lineage(client, migrated_sett
     assert v2["tags"]["data.training_version"] == "train-thr-v2"
     assert v2["tags"]["data.source_versions"] == "v1,drift-1"
     assert v2["tags"]["adaptation.strategy"] == "FULL_RETRAINING"
+    assert v2["tags"]["validation.holdout_rows"] == "40"
 
     lin = client.get("/api/v1/datasets/thr-kpis/versions/train-thr-v2/lineage").json()
-    assert lin["version"]["row_count"] == 400
+    assert lin["version"]["row_count"] == 360  # 200 historical + 160 drifted, hold-out excluded
+    drift = client.get("/api/v1/datasets/thr-kpis/versions/drift-1").json()
+    assert lin["version"]["data_end"] < drift["data_end"]  # the newest drifted rows are held out
     assert lin["version"]["content_hash"] == v2["tags"]["data.training_hash"]
     assert [a["version"] for a in lin["ancestors"]] == ["v1"]
     assert {"model_id": "thr", "model_version": "2", "role": "TRAINING",

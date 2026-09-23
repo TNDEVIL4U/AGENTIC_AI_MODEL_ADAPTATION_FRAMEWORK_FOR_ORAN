@@ -54,6 +54,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from oran_adapt.adaptation.data import holdout_size
 from oran_adapt.analysis.engine import analyze
 from oran_adapt.api.app import create_app
 from oran_adapt.core.config import Settings
@@ -367,7 +368,8 @@ class Demo:
         print(f"  MLflow v2 tags: data.training_version={tags.get('data.training_version')} "
               f"adaptation.engine={tags.get('adaptation.engine')} "
               f"data.source_versions={tags.get('data.source_versions')}")
-        print(f"  data {snapshot}: rows={version.get('row_count')} hash={str(version.get('content_hash'))[:10]} "
+        print(f"  data {snapshot}: rows={version.get('row_count')} "
+              f"held-out={tags.get('validation.holdout_rows')} hash={str(version.get('content_hash'))[:10]} "
               f"ancestors={ancestors} linked={sorted(linked)}")
         problems = []
         if model.get("live_version") != "2":
@@ -380,8 +382,14 @@ class Demo:
             problems.append(f"snapshot parent {ancestors[:1]} != [{HIST}]")
         if ("2", "TRAINING") not in linked:
             problems.append("snapshot not linked to v2 as TRAINING")
-        if version.get("row_count") != N_ROWS + sc.drift_rows:
-            problems.append(f"snapshot rows {version.get('row_count')} != {N_ROWS + sc.drift_rows}")
+        # The snapshot is exactly what v2 trained on: the newest drifted rows were held out.
+        held_out = holdout_size(sc.drift_rows, self.settings.validation_holdout_fraction,
+                                self.settings.validation_min_rows)
+        expected_rows = N_ROWS + sc.drift_rows - held_out
+        if version.get("row_count") != expected_rows:
+            problems.append(f"snapshot rows {version.get('row_count')} != {expected_rows}")
+        if tags.get("validation.holdout_rows") != str(held_out):
+            problems.append(f"validation.holdout_rows={tags.get('validation.holdout_rows')} != {held_out}")
         self.record(f"lineage:{sc.model_id}", sc.framework, "-", "-", not problems,
                     "; ".join(problems) or "MLflow <-> data lineage consistent")
 

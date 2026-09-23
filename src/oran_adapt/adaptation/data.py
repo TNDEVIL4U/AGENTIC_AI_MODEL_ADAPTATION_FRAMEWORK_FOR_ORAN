@@ -4,6 +4,8 @@ never synthetic or re-derived data."""
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -32,6 +34,35 @@ def load_data_version_frame(session: Session, data_version_id: int) -> pd.DataFr
 def build_training_frame(session: Session, data_version_ids: list[int]) -> pd.DataFrame:
     frames = [load_data_version_frame(session, dv_id) for dv_id in data_version_ids]
     return pd.concat(frames, ignore_index=True)
+
+
+def load_records(session: Session, data_version_ids: list[int]) -> list[DataRecord]:
+    """All records of the given data versions, oldest first (id breaks timestamp ties)."""
+    rows = (
+        session.execute(
+            select(DataRecord)
+            .where(DataRecord.data_version_id.in_(data_version_ids))
+            .order_by(DataRecord.observed_at, DataRecord.id)
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        raise ArtifactError(
+            "no data records found for data versions", data_version_ids=data_version_ids
+        )
+    return list(rows)
+
+
+def records_frame(records: list[DataRecord]) -> pd.DataFrame:
+    return pd.DataFrame([r.payload for r in records])
+
+
+def holdout_size(n_rows: int, fraction: float, min_rows: int) -> int:
+    """How many of the newest ``n_rows`` to hold back for validation: ``fraction`` of them, at
+    least ``min_rows`` so the validation gate can score them, but always leaving one row to
+    train on. 0 when there is nothing to split (validation then refuses to score)."""
+    return max(0, min(max(math.ceil(n_rows * fraction), min_rows), n_rows - 1))
 
 
 def split_features_target(

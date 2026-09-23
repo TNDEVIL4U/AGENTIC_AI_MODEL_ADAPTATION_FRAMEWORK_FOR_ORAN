@@ -241,6 +241,14 @@ without asking.
 4. **CLOSED — worker-thread-not-actually-killed limitation now disclosed.** `src/oran_adapt/orchestrator/jobs.py:17-22` / `JobTimeoutError`'s docstring describe a real Python limitation that can't be fixed in code (no thread-kill API), but it is now documented in `README.md`'s "Known limitations" section and `docs/MANUAL.md` §12, including the practical implication (check `AdaptationJob.status` directly for jobs that timed out, don't trust only the synchronous response).
 5. **CLOSED — Docker files reviewed line-by-line.** `docker/sandbox/Dockerfile`, root `Dockerfile`, and `docker-compose.yml` were read in full and cross-checked against the Python code that depends on them (volume mount paths, image tag defaults, allowed-import package lists, env var names). No defects found; write-up is in `docs/PHASE11_DOCKER_E2E.md`'s new "Line-by-line file review" section. The one thing this review could *not* confirm — whether `ghcr.io/mlflow/mlflow:latest` actually resolves to a pullable image — is called out there as still unverified, folded into gap 2 above rather than tracked separately, since closing it needs the same Docker install.
 
+6. **CLOSED — validation is now on held-out data (found and fixed 2026-09-23).** Before the
+   fix, `orchestrator/pipeline.py` trained the candidate on historical + drifted data and then
+   validated on the same drifted rows, so scores were optimistic. Now the newest
+   `VALIDATION_HOLDOUT_FRACTION` (default 0.2) of the drifted rows are held back, never trained
+   on, and excluded from the training-data snapshot (MLflow tag `validation.holdout_rows`).
+   Covered by `tests/unit/test_phase13_versioning.py` and the demo. Details are in
+   `docs/PROJECT_STATUS_REPORT.md` §4 item 1.
+
 ## Surprising findings
 
 **None of the "DONE" claims turned out to be stubbed or fake.** The most notable positive

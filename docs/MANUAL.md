@@ -372,6 +372,7 @@ server together with its uvicorn worker. Set
 | `DECISION_FULL_RETRAIN_PSI_THRESHOLD` | `0.5` | PSI above which fine-tuning is ruled out in favor of full retraining |
 | `DECISION_SUPPORTED_FRAMEWORKS` | `["sklearn","xgboost","torch","pytorch"]` | Frameworks with a dedicated training engine |
 | `VALIDATION_MIN_ROWS` | `5` | Minimum held-out rows to score a candidate at all |
+| `VALIDATION_HOLDOUT_FRACTION` | `0.2` | Share of the newest drifted rows held back for validation and never trained on (at least `VALIDATION_MIN_ROWS`, always leaving one drifted row for training) |
 | `VALIDATION_ACCURACY_TOLERANCE` | `0.02` | Max accuracy drop allowed for classifiers to pass |
 | `VALIDATION_RMSE_TOLERANCE_RATIO` | `0.05` | Max RMSE increase (as a fraction of current RMSE) allowed for regressors to pass |
 

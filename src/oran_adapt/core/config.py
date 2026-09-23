@@ -64,7 +64,11 @@ class Settings(BaseSettings):
     # more than validation_accuracy_tolerance below V_current's; a regressor candidate passes
     # when its RMSE is no more than validation_rmse_tolerance_ratio (a fraction of V_current's
     # RMSE, since RMSE has no fixed scale) higher than V_current's.
+    # The hold-out is the newest validation_holdout_fraction of the drifted rows (at least
+    # validation_min_rows of them, always leaving one drifted row to train on). Those rows are
+    # never trained on, so both models are scored on data neither has seen.
     validation_min_rows: int = Field(5, ge=1)
+    validation_holdout_fraction: float = Field(0.2, gt=0, lt=1)
     validation_accuracy_tolerance: float = Field(0.02, ge=0, le=1)
     validation_rmse_tolerance_ratio: float = Field(0.05, ge=0)
 
