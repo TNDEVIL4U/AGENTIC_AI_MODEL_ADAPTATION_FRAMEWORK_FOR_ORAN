@@ -10,11 +10,12 @@ from __future__ import annotations
 import os
 import uuid
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
+from oran_adapt.api.security import DATA_ROLES, Promoter, require_roles
 from oran_adapt.core.errors import ModelBusyError, ModelNotFoundError
 from oran_adapt.datastore import model_data_links
 from oran_adapt.db.base import session_scope
@@ -90,7 +91,7 @@ def get_model(model_id: str, request: Request) -> dict:
     return body
 
 
-@router.post("/attach", status_code=201)
+@router.post("/attach", status_code=201, dependencies=[Depends(require_roles(*DATA_ROLES))])
 def attach_model(body: AttachModel, request: Request) -> dict:
     state = request.app.state
     with session_scope(state.session_factory) as session:
@@ -183,7 +184,12 @@ def get_model_promotions(model_id: str, request: Request) -> list[dict]:
 
 
 @router.post("/{model_id}/rollback")
-def rollback(model_id: str, body: RollbackRequest, request: Request) -> dict:
+def rollback(
+    model_id: str,
+    body: RollbackRequest,
+    request: Request,
+    principal: Promoter,
+) -> dict:
     """Move LIVE back to an earlier version. Holds the model's lock, so it cannot interleave
     with a running adaptation job (409 MODEL_BUSY while one runs)."""
     state = request.app.state
@@ -213,7 +219,7 @@ def rollback(model_id: str, body: RollbackRequest, request: Request) -> dict:
                 workdir=os.path.join(settings.artifact_workdir, holder),
                 target_version=body.target_version,
                 reason=body.reason,
-                actor="api",
+                actor=principal.name,
                 idempotency_key=f"rollback:{model_id}:{body.idempotency_key}"
                 if body.idempotency_key
                 else None,

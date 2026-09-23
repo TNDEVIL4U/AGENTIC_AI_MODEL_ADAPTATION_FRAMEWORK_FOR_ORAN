@@ -18,6 +18,7 @@ orchestrator.context.
 from __future__ import annotations
 
 import os
+import time
 
 import pandas as pd
 from sqlalchemy import select
@@ -39,15 +40,25 @@ from oran_adapt.analysis.engine import analyze
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import ReuseDecision, VersionEvaluation
 from oran_adapt.analysis.version_eval import evaluate_versions
+from oran_adapt.core import metrics
+from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import (
+    AuditAction,
+    EngineKind,
     JobStatus,
     ModelVersionStatus,
     PromotionKind,
     ReuseVerdict,
     Strategy,
 )
-from oran_adapt.core.errors import ArtifactError, PromotionError, UnsupportedAdaptationError
+from oran_adapt.core.errors import (
+    ArtifactError,
+    PromotionError,
+    SandboxExecutionError,
+    UnsafeCodeError,
+    UnsupportedAdaptationError,
+)
 from oran_adapt.core.integrity import sha256_file, verify_checksum
 from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.datastore.versioning import snapshot_training_data
@@ -119,6 +130,14 @@ def _stage(session: Session, status: JobStatus, message: str = "") -> None:
     report_stage(status, message)
 
 
+def _audit(session: Session, action: AuditAction, model_id: str, **fields) -> None:
+    """An audit row for this job, on the pipeline's session (it commits with the stage)."""
+    record_audit(
+        session, action, component="orchestrator", job_id=current_job_id(), model_id=model_id,
+        **fields,
+    )
+
+
 def _record_evaluations(
     session: Session, model_id: str, evaluations: list[VersionEvaluation], reuse: ReuseDecision
 ) -> None:
@@ -139,6 +158,20 @@ def _record_evaluations(
                 n_rows=ev.n_rows,
                 result=ev.model_dump(mode="json"),
             )
+        )
+        _audit(
+            session,
+            AuditAction.MODEL_VERSION_EVALUATED,
+            model_id,
+            model_version=ev.version,
+            decision="SELECTED" if chosen else None,
+            metadata={
+                "is_live": ev.is_live,
+                "compatible": ev.compatible,
+                "metric_name": ev.metric_name,
+                "metric_value": ev.metric_value,
+                "n_rows": ev.n_rows,
+            },
         )
     session.flush()
 
@@ -216,6 +249,19 @@ def run_adaptation_job(
     holdout = pool[len(pool) - n_holdout :]
     holdout_ids = {r.id for r in holdout}
     holdout_frame = records_frame(holdout)
+    _audit(
+        session,
+        AuditAction.CURRENT_DATA_CREATED,
+        event.model_id,
+        model_version=live_version,
+        reason="newest drifted rows held out for version scoring and validation",
+        metadata={
+            "source_data_version_ids": train_ids,
+            "pool_data_version_id": pool_id,
+            "rows": len(holdout),
+            "pool_rows": len(pool),
+        },
+    )
 
     evaluations: list[VersionEvaluation] = []
     reuse: ReuseDecision | None = None
@@ -228,6 +274,7 @@ def run_adaptation_job(
     )
     if can_evaluate:
         _stage(session, JobStatus.EVALUATING_VERSIONS, "scoring registered versions")
+        eval_started = time.perf_counter()
         evaluations = evaluate_versions(
             registry,
             mlflow_name=model_meta.mlflow_model_name,
@@ -238,6 +285,7 @@ def run_adaptation_job(
             settings=settings,
             workdir=workdir,
         )
+        metrics.MODEL_EVALUATION_DURATION.observe(time.perf_counter() - eval_started)
         reuse = decide_reuse(
             evaluations, live_version=live_version, max_psi=package.max_psi, settings=settings
         )
@@ -246,6 +294,16 @@ def run_adaptation_job(
 
         if reuse.verdict == ReuseVerdict.REUSE_EXISTING_VERSION:
             assert reuse.selected_version is not None
+            _audit(
+                session,
+                AuditAction.MODEL_REUSE_SELECTED,
+                event.model_id,
+                model_version=reuse.selected_version,
+                decision=str(reuse.verdict),
+                reason=reuse.reason,
+                metadata={"previous_live": live_version, "improvement": reuse.improvement},
+            )
+            metrics.MODEL_REUSE.inc()
             _stage(session, JobStatus.PROMOTING, f"reusing version {reuse.selected_version}")
             promotion = promote_version(
                 session,
@@ -277,6 +335,19 @@ def run_adaptation_job(
         update={"version_evaluations": evaluations, "reuse_decision": reuse}
     )
     decision = decide(package, settings, llm_client)
+    _audit(
+        session,
+        AuditAction.ADAPTATION_DECISION_CREATED,
+        event.model_id,
+        model_version=live_version,
+        decision=decision.strategy.value,
+        reason=decision.rationale,
+        metadata={
+            "confidence": decision.confidence,
+            "source": decision.source,
+            "compatible_strategies": [s.value for s in decision.compatible_strategies],
+        },
+    )
 
     if decision.strategy not in _ADAPTING_STRATEGIES:
         return JobResult(
@@ -300,6 +371,16 @@ def run_adaptation_job(
             model_meta.mlflow_model_name, settings.live_alias
         )
 
+    fine_tune = decision.strategy == Strategy.FINE_TUNING
+    _audit(
+        session,
+        AuditAction.FINE_TUNE_STARTED if fine_tune else AuditAction.RETRAIN_STARTED,
+        event.model_id,
+        model_version=live_version,
+        decision=decision.strategy.value,
+        reason=decision.rationale,
+    )
+    (metrics.FINE_TUNE if fine_tune else metrics.RETRAIN).inc()
     _stage(session, JobStatus.ADAPTING, f"{decision.strategy.value} from version {live_version}")
     local_path, _ = verify_version_artifact(
         registry, model_meta.mlflow_model_name, live_version, os.path.join(workdir, "current")
@@ -311,19 +392,59 @@ def run_adaptation_job(
     feature_names = inspection.feature_names_in or [c for c in train_frame.columns if c != target]
     X, y = split_features_target(train_frame, feature_names, target)
 
-    candidate = _produce_candidate(
-        decision.strategy,
-        current_model,
-        inspection=inspection,
-        framework=model_meta.framework,
-        X=X,
-        y=y,
-        target_column=target,
-        settings=settings,
-        llm_client=llm_client,
-        workdir=workdir,
-    )
+    try:
+        candidate = _produce_candidate(
+            decision.strategy,
+            current_model,
+            inspection=inspection,
+            framework=model_meta.framework,
+            X=X,
+            y=y,
+            target_column=target,
+            settings=settings,
+            llm_client=llm_client,
+            workdir=workdir,
+        )
+    except (UnsafeCodeError, SandboxExecutionError) as exc:
+        # Only the LLM adapter raises these. Commit the audit rows now: the job's session is
+        # rolled back when the error escapes.
+        unsafe = isinstance(exc, UnsafeCodeError)
+        _audit(
+            session,
+            AuditAction.ADAPTER_GENERATED,
+            event.model_id,
+            model_version=live_version,
+            status="FAILED" if unsafe else "OK",
+            reason=exc.message if unsafe else "adapter code passed the safety scan",
+        )
+        if not unsafe:
+            _audit(
+                session,
+                AuditAction.SANDBOX_EXECUTED,
+                event.model_id,
+                model_version=live_version,
+                status="FAILED",
+                reason=exc.message,
+            )
+        session.commit()
+        raise
     candidate_sha = sha256_file(candidate.artifact_path)
+    if candidate.engine == EngineKind.LLM_GENERATED:
+        _audit(
+            session,
+            AuditAction.ADAPTER_GENERATED,
+            event.model_id,
+            model_version=live_version,
+            reason="adapter code passed the safety scan",
+        )
+        _audit(
+            session,
+            AuditAction.SANDBOX_EXECUTED,
+            event.model_id,
+            model_version=live_version,
+            reason="adapter ran in the sandbox",
+            metadata={"artifact_sha256": candidate_sha, "train_rows": candidate.n_train_rows},
+        )
 
     _stage(session, JobStatus.VALIDATING_CANDIDATE, "scoring the candidate on held-out data")
     verify_checksum(candidate.artifact_path, candidate_sha, stage="validation")
@@ -331,6 +452,13 @@ def run_adaptation_job(
     if validation_frame.empty:  # validate_candidate then reports "not enough validation rows"
         validation_frame = pd.DataFrame(columns=[*feature_names, target])
     Xv, yv = split_features_target(validation_frame, feature_names, target)
+    _audit(
+        session,
+        AuditAction.VALIDATION_STARTED,
+        event.model_id,
+        model_version=live_version,
+        metadata={"engine": candidate.engine.value, "holdout_rows": len(Xv)},
+    )
     report = validate_candidate(
         candidate,
         current_model,
@@ -342,7 +470,22 @@ def run_adaptation_job(
         settings=settings,
     )
 
+    _audit(
+        session,
+        AuditAction.VALIDATION_PASSED if report.passed else AuditAction.VALIDATION_FAILED,
+        event.model_id,
+        model_version=live_version,
+        decision="PASS" if report.passed else "FAIL",
+        reason=report.reason,
+        metadata={
+            "metric": report.metric_name,
+            "candidate_value": report.candidate_value,
+            "current_value": report.current_value,
+            "artifact_sha256": candidate_sha,
+        },
+    )
     if not report.passed:
+        metrics.VALIDATION_FAILURE.inc()
         return JobResult(
             model_id=event.model_id,
             outcome="REJECTED",
@@ -384,6 +527,15 @@ def run_adaptation_job(
         },
     )
     registry.record_artifact_checksum(name, new_version, os.path.join(workdir, "registered"))
+    _audit(
+        session,
+        AuditAction.MODEL_REGISTERED,
+        event.model_id,
+        model_version=new_version,
+        decision=decision.strategy.value,
+        reason=f"validated candidate registered (parent version {live_version})",
+        metadata={"artifact_sha256": candidate_sha, "engine": candidate.engine.value},
+    )
     registry.set_alias(name, settings.candidate_alias, new_version)
     # Data lineage: freeze what v<new> was trained on as its own data version, linked to it, so
     # the next drift event is compared against the live model's real baseline.
@@ -438,6 +590,7 @@ def run_adaptation_job(
             idempotency_key=_promotion_key("promote"),
         )
     except PromotionError as exc:
+        metrics.ROLLBACK.labels("promotion_failure").inc()
         return result.model_copy(
             update={
                 "outcome": "ROLLED_BACK",

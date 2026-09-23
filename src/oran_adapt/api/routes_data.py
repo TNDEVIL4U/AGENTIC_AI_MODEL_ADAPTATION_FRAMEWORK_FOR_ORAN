@@ -9,9 +9,10 @@ from datetime import datetime
 from typing import Any, Literal
 
 import pandas as pd
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
+from oran_adapt.api.security import DATA_ROLES, DataEditor, require_roles
 from oran_adapt.datastore import (
     get_or_create_dataset,
     get_version,
@@ -45,7 +46,7 @@ class VersionCreate(BaseModel):
     source: str | None = None
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require_roles(*DATA_ROLES))])
 def create_dataset(body: DatasetCreate, request: Request) -> dict:
     with session_scope(request.app.state.session_factory) as session:
         ds = get_or_create_dataset(
@@ -62,7 +63,11 @@ def get_datasets(request: Request) -> list[dict]:
 
 @router.post("/{dataset_id}/versions")
 def create_version(
-    dataset_id: str, body: VersionCreate, request: Request, response: Response
+    dataset_id: str,
+    body: VersionCreate,
+    request: Request,
+    response: Response,
+    principal: DataEditor,
 ) -> dict:
     with session_scope(request.app.state.session_factory) as session:
         info = ingest_version(
@@ -78,6 +83,7 @@ def create_version(
             model_version=body.model_version,
             role=body.role,
             source=body.source or "api",
+            actor=principal.name,
         )
         response.status_code = 201 if info.created else 200
         return info.as_dict()

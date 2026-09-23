@@ -45,6 +45,8 @@ def settings(tmp_path, database_url) -> Settings:
         mlflow_tracking_uri=f"sqlite:///{(tmp_path / 'mlflow.db').as_posix()}",
         artifact_workdir=str(tmp_path / "work"),
         log_json=False,
+        # Most tests exercise behaviour, not access control; test_phase14_stage_b turns it on.
+        auth_enabled=False,
     )
 
 

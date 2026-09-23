@@ -14,7 +14,9 @@ import joblib
 import pandas as pd
 
 from oran_adapt.adaptation.schemas import CandidateModel
+from oran_adapt.core import metrics
 from oran_adapt.core.enums import EngineKind
+from oran_adapt.core.errors import SandboxExecutionError, UnsafeCodeError
 from oran_adapt.llm.client import LlmClient
 from oran_adapt.sandbox.runner import run_sandboxed
 from oran_adapt.sandbox.security import check_code_safety
@@ -80,19 +82,27 @@ def adapt_via_llm(
         prompt=_build_user_prompt(framework, model_class, feature_names, target_column),
     )
     code = _extract_code(raw)
-    check_code_safety(code)
+    try:
+        check_code_safety(code)
+    except UnsafeCodeError:
+        metrics.SANDBOX_FAILURES.labels("unsafe_code").inc()
+        raise
 
-    model = run_sandboxed(
-        code,
-        current_model=current_model,
-        X=X,
-        y=y,
-        timeout_s=sandbox_timeout_s,
-        memory_mb=sandbox_memory_mb,
-        workdir=workdir,
-        backend=sandbox_backend,
-        docker_image=sandbox_docker_image,
-    )
+    try:
+        model = run_sandboxed(
+            code,
+            current_model=current_model,
+            X=X,
+            y=y,
+            timeout_s=sandbox_timeout_s,
+            memory_mb=sandbox_memory_mb,
+            workdir=workdir,
+            backend=sandbox_backend,
+            docker_image=sandbox_docker_image,
+        )
+    except SandboxExecutionError:
+        metrics.SANDBOX_FAILURES.labels("execution").inc()
+        raise
 
     os.makedirs(workdir, exist_ok=True)
     artifact_path = os.path.join(workdir, "model.joblib")

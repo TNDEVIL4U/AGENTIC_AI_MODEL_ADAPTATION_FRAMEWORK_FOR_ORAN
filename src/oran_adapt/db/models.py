@@ -9,7 +9,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from oran_adapt.db.base import Base
@@ -112,6 +122,7 @@ class AdaptationJob(Base):
     event: Mapped[dict] = mapped_column(JSON)
     result: Mapped[dict | None] = mapped_column(JSON)
     error: Mapped[dict | None] = mapped_column(JSON)
+    correlation_id: Mapped[str | None] = mapped_column(String(128), index=True)
     created_at: Mapped[datetime] = _ts()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -195,8 +206,18 @@ class AuditLog(Base):
     model_id: Mapped[str | None] = mapped_column(String(200), index=True)
     model_version: Mapped[str | None] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(String(20), default="OK")
-    detail: Mapped[dict | None] = mapped_column(JSON)
+    actor: Mapped[str | None] = mapped_column(String(100))
+    decision: Mapped[str | None] = mapped_column(String(60))
+    reason: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict | None] = mapped_column(JSON)  # the event's metadata
     error: Mapped[str | None] = mapped_column(Text)
+    correlation_id: Mapped[str | None] = mapped_column(String(128), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False, index=True
     )
+
+
+@event.listens_for(AuditLog, "before_update")
+@event.listens_for(AuditLog, "before_delete")
+def _audit_log_is_append_only(_mapper, _connection, target: AuditLog) -> None:
+    raise PermissionError(f"audit_log is append-only (row {target.id})")

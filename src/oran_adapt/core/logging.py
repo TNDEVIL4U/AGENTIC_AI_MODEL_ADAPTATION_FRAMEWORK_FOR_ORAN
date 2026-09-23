@@ -6,8 +6,10 @@ import json
 import logging
 from datetime import UTC, datetime
 
+from oran_adapt.core.correlation import CorrelationIdFilter
+
 CONTEXT_FIELDS = (
-    "adaptation_job_id", "model_id", "model_version", "strategy",
+    "correlation_id", "adaptation_job_id", "model_id", "model_version", "strategy",
     "component", "status", "error",
 )
 
@@ -35,6 +37,7 @@ def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
             root.removeHandler(h)
     handler = logging.StreamHandler()
     handler._oran_adapt = True  # type: ignore[attr-defined]
+    handler.addFilter(CorrelationIdFilter())
     handler.setFormatter(
         JsonFormatter()
         if json_output

@@ -23,7 +23,9 @@ from dataclasses import asdict, dataclass
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from oran_adapt.core.enums import ModelVersionStatus, PromotionKind
+from oran_adapt.core import metrics
+from oran_adapt.core.audit import record_audit
+from oran_adapt.core.enums import AuditAction, ModelVersionStatus, PromotionKind
 from oran_adapt.core.errors import (
     AdaptationError,
     ArtifactError,
@@ -33,7 +35,7 @@ from oran_adapt.core.errors import (
 )
 from oran_adapt.core.integrity import sha256_path, verify_checksum
 from oran_adapt.core.logging import log_event
-from oran_adapt.db.models import AuditLog, ModelMetadata, ModelPromotion
+from oran_adapt.db.models import ModelMetadata, ModelPromotion
 from oran_adapt.registry.client import MlflowRegistry
 
 logger = logging.getLogger(__name__)
@@ -213,28 +215,19 @@ def promote_version(
             registry.set_version_tags(
                 name, previous, {STATUS_TAG: ModelVersionStatus.ARCHIVED.value}
             )
-        session.add(
-            AuditLog(
-                job_id=job_id,
-                action="MODEL_ROLLED_BACK" if kind is PromotionKind.ROLLBACK else "MODEL_PROMOTED",
-                component="promotion",
-                model_id=model_id,
-                model_version=version,
-                detail={
-                    "kind": kind.value,
-                    "from_version": previous,
-                    "to_version": version,
-                    "actor": actor,
-                    "reason": reason,
-                    "artifact_sha256": digest,
-                },
-            )
+        _audit_move(
+            session, kind, model_id=model_id, version=version, previous=previous, actor=actor,
+            reason=reason, job_id=job_id, digest=digest,
         )
         session.commit()
     except Exception as exc:
         session.rollback()
         if alias_moved:
             _restore_alias(registry, name, live_alias, previous)
+        _audit_failed_move(
+            session, kind, model_id=model_id, version=version, previous=previous, actor=actor,
+            reason=str(exc), job_id=job_id, digest=digest,
+        )
         if isinstance(exc, PromotionError):
             raise
         raise PromotionError(
@@ -245,6 +238,8 @@ def promote_version(
             cause=exc.message if isinstance(exc, AdaptationError) else str(exc),
         ) from exc
 
+    if kind is PromotionKind.ROLLBACK:
+        metrics.ROLLBACK.labels("manual").inc()
     log_event(
         logger,
         "live alias moved",
@@ -254,6 +249,45 @@ def promote_version(
         to_version=version,
     )
     return _result(row)
+
+
+def _audit_move(
+    session: Session,
+    kind: PromotionKind,
+    *,
+    model_id: str,
+    version: str,
+    previous: str | None,
+    actor: str,
+    reason: str,
+    job_id: str | None,
+    digest: str,
+    status: str = "OK",
+) -> None:
+    record_audit(
+        session,
+        AuditAction.MODEL_ROLLED_BACK if kind is PromotionKind.ROLLBACK else AuditAction.MODEL_PROMOTED,
+        component="promotion",
+        actor=actor,
+        job_id=job_id,
+        model_id=model_id,
+        model_version=version,
+        decision=kind.value,
+        reason=reason,
+        status=status,
+        metadata={"from_version": previous, "to_version": version, "artifact_sha256": digest},
+    )
+
+
+def _audit_failed_move(session: Session, kind: PromotionKind, **fields) -> None:
+    """Best effort: a failed move is audited in its own commit, and a failure to write that row
+    never replaces the promotion error the caller is about to see."""
+    try:
+        _audit_move(session, kind, status="FAILED", **fields)
+        session.commit()
+    except Exception as exc:  # noqa: BLE001
+        session.rollback()
+        log_event(logger, f"could not audit failed promotion: {exc}", level=logging.WARNING)
 
 
 def last_applied_promotion(session: Session, model_id: str) -> ModelPromotion | None:

@@ -37,6 +37,7 @@ subprocess timeout (see `sandbox/runner.py`), one level up.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import threading
@@ -49,8 +50,11 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from oran_adapt.core import metrics
+from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
-from oran_adapt.core.enums import JobStatus
+from oran_adapt.core.correlation import get_correlation_id
+from oran_adapt.core.enums import AuditAction, JobStatus
 from oran_adapt.core.errors import (
     AdaptationError,
     DatabaseUnavailableError,
@@ -157,8 +161,11 @@ def _run_once(
                 workdir=workdir,
             )
 
+    # The worker runs in a copy of this context, so the request's correlation id reaches the
+    # pipeline's logs and audit rows.
+    ctx = contextvars.copy_context()
     pool = ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(_call)
+    future = pool.submit(ctx.run, _call)
     try:
         return future.result(timeout=settings.job_timeout_s)
     except FutureTimeoutError as exc:
@@ -218,6 +225,7 @@ def submit_adaptation_job(
     registry: MlflowRegistry,
     llm_client: LlmClient | None,
     workdir: str,
+    actor: str = "system",
 ) -> JobResponse:
     """Idempotent, retried, timed-out entry point for one drift event. Safe to call twice (or
     concurrently) with events that carry the same `idempotency_key()`: every call after the first
@@ -242,6 +250,7 @@ def submit_adaptation_job(
             model_id=event.model_id,
             status=JobStatus.RECEIVED,
             event=event.model_dump(mode="json"),
+            correlation_id=get_correlation_id(),
         )
         session.add(job)
         try:
@@ -275,6 +284,16 @@ def submit_adaptation_job(
                 message="job received",
             )
         )
+        record_audit(
+            session,
+            AuditAction.DRIFT_RECEIVED,
+            component="orchestrator",
+            actor=actor,
+            job_id=job_id,
+            model_id=event.model_id,
+            reason="drift event received",
+            metadata={"idempotency_key": key, "event": event.model_dump(mode="json")},
+        )
 
     abandoned = threading.Event()
 
@@ -304,6 +323,42 @@ def submit_adaptation_job(
 
 
 def _execute(
+    event: DriftEvent,
+    settings: Settings,
+    *,
+    registry: MlflowRegistry,
+    llm_client: LlmClient | None,
+    workdir: str,
+    session_factory,
+    job_id: str,
+    on_abandoned: Callable[[], None],
+) -> JobResponse:
+    started = time.perf_counter()
+    metrics.ADAPTATION_IN_PROGRESS.inc()
+    try:
+        response = _execute_inner(
+            event, settings, registry=registry, llm_client=llm_client, workdir=workdir,
+            session_factory=session_factory, job_id=job_id, on_abandoned=on_abandoned,
+        )
+    finally:
+        metrics.ADAPTATION_IN_PROGRESS.dec()
+        metrics.ADAPTATION_DURATION.observe(time.perf_counter() - started)
+    _count_outcome(response)
+    return response
+
+
+def _count_outcome(response: JobResponse) -> None:
+    outcome = (response.result or {}).get("outcome") or "NONE"
+    metrics.ADAPTATION_JOBS.labels(response.status.value, outcome).inc()
+    if response.status == JobStatus.COMPLETED:
+        metrics.ADAPTATION_SUCCESS.labels(outcome).inc()
+    elif response.status == JobStatus.ROLLED_BACK:
+        metrics.ADAPTATION_FAILURE.labels("ROLLED_BACK").inc()
+    else:
+        metrics.ADAPTATION_FAILURE.labels((response.error or {}).get("code", "UNKNOWN")).inc()
+
+
+def _execute_inner(
     event: DriftEvent,
     settings: Settings,
     *,

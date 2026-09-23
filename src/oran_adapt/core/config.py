@@ -109,12 +109,33 @@ class Settings(BaseSettings):
     torch_full_retrain_epochs: int = Field(300, ge=1)
     torch_learning_rate: float = Field(1e-2, gt=0)  # Adam step size for both torch engines
 
+    # API authentication and roles. Callers send ``X-API-Key: <key>`` (or ``Authorization:
+    # Bearer <key>``). Keys are never stored: API_KEYS maps the SHA-256 hex digest of each key to
+    # "ROLE" or "ROLE:caller-name", e.g. API_KEYS='{"9f86d0...": "OPERATOR:team1"}'
+    # (`oran-adapt auth new-key` makes a key and its entry). With auth enabled and no keys
+    # configured, every protected endpoint refuses (fail closed). /health, /readiness and, with
+    # metrics_public, /metrics need no key.
+    auth_enabled: bool = True
+    api_keys: dict[str, str] = Field(default_factory=dict)
+    metrics_public: bool = True
+
     @model_validator(mode="after")
     def _llm_key_present(self) -> Settings:
         if self.llm_provider == "anthropic" and self.anthropic_api_key is None:
             raise ValueError("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
         if self.llm_provider == "gemini" and self.gemini_api_key is None:
             raise ValueError("LLM_PROVIDER=gemini requires GEMINI_API_KEY")
+        return self
+
+    @model_validator(mode="after")
+    def _api_keys_well_formed(self) -> Settings:
+        from oran_adapt.core.enums import Role
+
+        for digest, spec in self.api_keys.items():
+            if len(digest) != 64 or any(c not in "0123456789abcdefABCDEF" for c in digest):
+                raise ValueError("API_KEYS keys must be SHA-256 hex digests of the API keys")
+            if spec.partition(":")[0] not in Role.__members__:
+                raise ValueError(f"API_KEYS role must be one of {', '.join(Role)}")
         return self
 
 

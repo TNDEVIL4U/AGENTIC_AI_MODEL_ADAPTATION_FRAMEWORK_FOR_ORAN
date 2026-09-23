@@ -24,7 +24,8 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from oran_adapt.core.enums import AssociationRole, DataKind
+from oran_adapt.core.audit import record_audit
+from oran_adapt.core.enums import AssociationRole, AuditAction, DataKind
 from oran_adapt.core.errors import (
     ArtifactError,
     DatasetNotFoundError,
@@ -215,6 +216,7 @@ def ingest_version(
     role: AssociationRole | str | None = None,
     source: str | None = None,
     dataset_name: str | None = None,
+    actor: str = "system",
 ) -> VersionInfo:
     """Store ``frame`` as data version ``version`` of ``dataset_id`` (created on first use).
 
@@ -275,6 +277,24 @@ def ingest_version(
     )
     if model_id and model_version and role:
         link_model_data(session, model_id, model_version, dv.id, role)
+    record_audit(
+        session,
+        AuditAction.DATA_VERSION_CREATED,
+        component="datastore",
+        actor=actor,
+        model_id=model_id,
+        model_version=str(model_version) if model_version else None,
+        reason=source,
+        metadata={
+            "dataset_id": dataset_id,
+            "version": version,
+            "kind": kind.value,
+            "row_count": len(features),
+            "content_hash": digest,
+            "parent_version": parent_version,
+            "role": str(role) if role else None,
+        },
+    )
     session.flush()
     return _info(dv, dataset_id, created=True, session=session)
 

@@ -328,7 +328,7 @@ def test_best_older_version_goes_live_without_training(
         assert len(promo.artifact_sha256) == 64
         rows = session.query(ModelVersionEvaluation).filter_by(job_id=job.job_id).all()
         assert {r.model_version: r.reusable for r in rows} == {"1": False, "2": True, "3": False}
-        audit = session.query(AuditLog).filter_by(model_id="cell-a").one()
+        audit = session.query(AuditLog).filter_by(model_id="cell-a", action="MODEL_PROMOTED").one()
         assert audit.action == "MODEL_PROMOTED"
     tags = registry.get_version("cell_a", "2").tags
     assert tags["oran.status"] == "LIVE"
@@ -464,6 +464,8 @@ def test_failed_promotion_restores_live_and_marks_job_rolled_back(
     assert _path(session_factory, job.job_id)[-2:] == ["PROMOTING", "ROLLED_BACK"]
     with session_scope(session_factory) as session:
         assert session.query(ModelPromotion).filter_by(model_id="cell-d").count() == 0
+        failed = session.query(AuditLog).filter_by(model_id="cell-d", action="MODEL_PROMOTED").one()
+        assert (failed.status, failed.model_version) == ("FAILED", "4")
 
 
 # ---- integrity at promotion time -------------------------------------------------------------

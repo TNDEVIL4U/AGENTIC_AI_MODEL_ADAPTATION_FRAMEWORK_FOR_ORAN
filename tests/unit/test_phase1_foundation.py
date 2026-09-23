@@ -90,6 +90,8 @@ def test_no_model_version_table_in_postgres_schema(settings) -> None:
     """MLflow is the only model-version authority."""
     upgrade_to_head(settings.database_url)
     names = set(inspect(create_db_engine(settings.database_url)).get_table_names())
+    # model_version_evaluation (Phase 14) holds per-job scores of MLflow versions, not versions.
+    names.discard("model_version_evaluation")
     assert not {n for n in names if "model_version" in n or n == "model_versions"}
 
 

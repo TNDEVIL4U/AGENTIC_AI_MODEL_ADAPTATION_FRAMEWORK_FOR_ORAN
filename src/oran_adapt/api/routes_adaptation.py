@@ -6,6 +6,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import select
 
+from oran_adapt.api.security import Submitter
 from oran_adapt.core.errors import AdaptationError
 from oran_adapt.core.schemas import DriftEvent, JobResponse
 from oran_adapt.db.base import session_scope
@@ -20,7 +21,12 @@ router = APIRouter(prefix="/adaptation", tags=["adaptation"])
 
 
 @router.post("/events", response_model=JobResponse)
-def submit_event(event: DriftEvent, request: Request, response: Response) -> JobResponse:
+def submit_event(
+    event: DriftEvent,
+    request: Request,
+    response: Response,
+    principal: Submitter,
+) -> JobResponse:
     state = request.app.state
     result = submit_adaptation_job(
         state.session_factory,
@@ -29,6 +35,7 @@ def submit_event(event: DriftEvent, request: Request, response: Response) -> Job
         registry=state.registry,
         llm_client=state.llm_client,
         workdir=state.settings.artifact_workdir,
+        actor=principal.name,
     )
     response.status_code = 200 if result.duplicate else 201
     return result

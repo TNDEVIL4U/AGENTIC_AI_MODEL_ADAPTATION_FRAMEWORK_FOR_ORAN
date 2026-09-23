@@ -11,6 +11,7 @@ the same database / MLflow registry the API uses (configured through the usual s
         --dataset kpi --training-csv train.csv
     python -m oran_adapt.cli model show --model-id m1
     python -m oran_adapt.cli event submit --model-id m1 --dataset kpi --drifted-version v2
+    python -m oran_adapt.cli auth new-key --role OPERATOR --name noc-dashboard
 
 ``--model-file`` is loaded with joblib (i.e. unpickled): only pass files you trust.
 """
@@ -200,6 +201,26 @@ def _cmd_event_submit(args, settings: Settings) -> Any:
     ).model_dump(mode="json")
 
 
+def _cmd_auth_new_key(args, settings: Settings) -> Any:
+    """A new random API key (or, with --stdin, the key read from standard input) and the
+    API_KEYS entry that grants it a role. Only the digest goes into configuration; the key itself
+    is shown once, here, and stored nowhere."""
+    import secrets
+
+    from oran_adapt.api.security import hash_api_key
+    from oran_adapt.core.enums import Role
+
+    key = sys.stdin.readline().strip() if args.stdin else secrets.token_urlsafe(32)
+    if len(key) < 16:
+        raise AdaptationError("an API key must be at least 16 characters")
+    role = Role(args.role).value
+    spec = f"{role}:{args.name}" if args.name else role
+    body = {"api_keys_entry": {hash_api_key(key): spec}}
+    if not args.stdin:
+        body["api_key"] = key
+    return body
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="oran-adapt", description=__doc__.splitlines()[0])
     top = p.add_subparsers(dest="group", required=True)
@@ -272,6 +293,15 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--drifted-version")
     c.add_argument("--event-id")
     c.set_defaults(fn=_cmd_event_submit)
+
+    auth = top.add_parser("auth").add_subparsers(dest="cmd", required=True)
+    c = auth.add_parser("new-key", help="make an API key and its API_KEYS settings entry")
+    c.add_argument(
+        "--role", required=True, choices=["ADMIN", "OPERATOR", "ML_ENGINEER", "READ_ONLY"]
+    )
+    c.add_argument("--name", help="who the key is for (shown as the audit actor)")
+    c.add_argument("--stdin", action="store_true", help="hash a key read from stdin instead")
+    c.set_defaults(fn=_cmd_auth_new_key)
     return p
 
 
