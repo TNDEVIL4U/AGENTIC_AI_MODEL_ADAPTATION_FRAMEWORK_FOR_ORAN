@@ -1,6 +1,6 @@
 # Project Status Report — Agentic AI Model Adaptation Framework for O-RAN
 
-**Date:** 2026-09-23 · **Branch:** `phase13-registry-data-versioning` (pushed to GitHub; pull request to `main` open)
+**Date:** 2026-09-23 · **Branch:** `phase13-registry-data-versioning` (pushed to GitHub, not yet merged to `main`)
 
 This report answers four questions: what is done, what is left, how much is complete, and
 whether everything is real or hardcoded. It is based on the code as it is now, a fresh run of
@@ -100,8 +100,8 @@ decide that scope first.
 7. **Done — default `GEMINI_MODEL` is now `gemini-3.6-flash`**, the model that worked for your
    account (the old `gemini-2.5-pro` returned 404). Also updated in `.env.example` and MANUAL.
 8. **Done — full test suite re-run after the fix:** 163 passed, 6 skipped (Docker-only).
-9. **Done — housekeeping:** `*.egg-info/` is in `.gitignore`, and a pull request to merge
-   the Phase 13 branch into `main` is open on GitHub (merging it is your call).
+9. **Done — housekeeping:** `*.egg-info/` is in `.gitignore`, and the Phase 13 branch is pushed
+   to GitHub, ready for a pull request into `main` (opening and merging it is your call).
 
 ### C. Scope questions (not started — confirm whether they are required)
 
@@ -174,6 +174,6 @@ the pipeline chose differently, the demo would print FAIL and exit 1.
 
 ## 6. Recommended next steps
 
-1. Review and merge the open pull request into `main`.
+1. Open a pull request from `phase13-registry-data-versioning` and merge it into `main`.
 2. When available: retry the live LLM decision call; install Docker to close Phase 11.
 3. Decide whether live O-RAN integration and real datasets are in scope (§4 C).
