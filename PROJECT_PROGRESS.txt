@@ -1,0 +1,150 @@
+AGENTIC AI MODEL ADAPTATION FRAMEWORK FOR O-RAN — PROGRESS SUMMARY
+====================================================================
+Date: 2026-09-24
+Current branch: phase14-production-hardening (local commits, not pushed)
+Sources: git history, docs/PROJECT_STATUS_REPORT.md, docs/IMPLEMENTATION_CHECKLIST.md,
+         docs/CDC.md, docs/DEPLOYMENT.md
+
+Headline
+--------
+- Phases 1-13: all code written (no stubs or fake results in src/), about 88% verified.
+- Phase 14 (production hardening): Stages A-E written. A, B and D are verified.
+  C and E are only partly verified.
+- Last full test suite (before Phase 14): 163 passed, 6 skipped (the skipped tests need Docker).
+- Phase 14 tests (4 files): 50 passed on 2026-09-24.
+- Multi-model demo: 16/16 checks passed (CPU only, about 2 min).
+
+
+====================================================================
+PART 1 — WHAT HAS BEEN DONE
+====================================================================
+
+Phase 1  Foundation ........................................ DONE
+         Settings from .env, logging, DB models, Alembic migrations,
+         MLflow client, health/ready endpoints.
+
+Phase 2  Analysis ........................................... DONE
+         Loads historical and drifted data. Runs a KS test and PSI per
+         feature (Evidently AI) and decides "reuse" or "adapt".
+
+Phase 3  Decision ........................................... PARTLY DONE
+         Hard constraints, LLM strategy choice, rule-based fallback.
+         The rules and the fallback are verified. The live LLM decision
+         call has never returned a successful response.
+
+Phase 4  Adaptation: model inspection ....................... DONE
+         Detects the framework, the estimator type, and partial_fit /
+         warm-start support.
+
+Phase 5  Adaptation: sklearn / XGBoost engines .............. DONE
+         partial_fit fine-tuning, and full retraining by clone-and-refit.
+
+Phase 6  Adaptation: PyTorch engine ......................... DONE
+         Warm-start fine-tuning or reset-and-retrain. The learning rate
+         is a setting (TORCH_LEARNING_RATE).
+
+Phase 7  Sandbox ............................................ PARTLY DONE
+         AST security scanner and subprocess runner for LLM-generated
+         code. Both are verified. The Docker backend has not been run,
+         and the memory limit is not enforced on Windows.
+
+Phase 8  Validation ......................................... DONE
+         Compares the candidate with the current model (accuracy / RMSE
+         gate, scored by Evidently AI) on a held-out slice of drifted data
+         (the newest 20%) that the candidate never trains on.
+
+Phase 9  Orchestrator ....................................... DONE
+         analyze -> decide -> adapt -> validate -> register, for one
+         drift event end to end.
+
+Phase 10 Hardening .......................................... DONE
+         Idempotent events, concurrency, selective retries, job timeout.
+
+Phase 11 Docker sandbox + compose ........................... PARTLY DONE
+         Dockerfiles, compose file and the Docker runner are written and
+         unit-tested. They have never been run (no Docker on this laptop).
+
+Phase 12 Demo and docs ...................................... DONE
+         scripts/demo.py, README, MANUAL.md, DEMO_MANUAL.md.
+
+Phase 13 Model registry + data versioning ................... DONE
+         Content-hashed immutable data versions, lineage, MLflow tags,
+         onboarding, data/model HTTP API, the oran-adapt CLI, and a script
+         for a real MLflow server. Merged into main on GitHub (PR #1).
+
+Phase 14 Production hardening (branch phase14-production-hardening)
+  Stage A  Registry safety ................................. DONE
+           Reuses existing data/model versions instead of duplicating them,
+           atomic promotion, rollback, explicit job states.
+  Stage B  API security and observability .................. DONE
+           Hashed API keys with roles (ADMIN / OPERATOR / ML_ENGINEER /
+           READ_ONLY), fail-closed auth, correlation ids, Prometheus
+           metrics, audit trail.
+  Stage C  Change data capture (CDC) ....................... PARTLY DONE
+           Trigger changelog with a polling consumer (tested for real),
+           a Debezium/Kafka consumer (tested only with a fake consumer),
+           CDC data versions, persisted CurrentData, migration 0006.
+  Stage D  Metrics and decision output ..................... DONE
+           Task-agnostic metrics (classification and regression), full
+           decision record, train/validation leakage checks.
+  Stage E  Deployment and supply chain ..................... PARTLY DONE
+           Non-root app image, MLflow image, full compose stack,
+           requirements.lock (154 pins), scripts/security_check.py.
+           The security checks run and pass. The images and the compose
+           stack have never been built or run.
+
+Other completed items
+- CLI end-to-end test, and a fix so re-ingesting the same CSV is a no-op.
+- Default GEMINI_MODEL updated to gemini-3.6-flash.
+- Drift statistics and validation scores moved to Evidently AI.
+- Local venv pip upgraded (25.2 -> 26.2.1).
+
+
+====================================================================
+PART 2 — WHAT IS YET TO BE IMPLEMENTED OR VERIFIED
+====================================================================
+
+A. Needs a different machine or an external service
+   1. Run the Docker sandbox, the Docker images and the full compose stack
+      (Phases 7, 11 and 14-E). Needs Docker Desktop.
+   2. Run Debezium -> Kafka CDC for real (Phase 14-C). Needs the compose stack.
+   3. Get one successful live LLM decision call (Phase 3). Needs a working
+      GEMINI_MODEL or an Anthropic API key.
+
+B. Known limitations in the current code
+   4. The sandbox memory limit is not enforced on Windows (RLIMIT_AS is
+      POSIX-only). Fix: use the Docker backend or a Windows Job Object.
+   5. Timed-out jobs keep running in their background thread (Python cannot
+      kill a thread). The job status in the DB is the source of truth.
+   6. mypy reports 50 existing errors. A ratchet stops new ones, but the 50
+      are not fixed.
+   7. The sandbox image still runs as root.
+   8. nltk advisory PYSEC-2026-3740 is accepted until a fix is released.
+
+C. Testing and housekeeping
+   9. Re-run the full test suite after Phase 14. Only the four Phase 14
+      test files have been run so far.
+  10. Push the phase14-production-hardening branch and open a pull request
+      into main. The Evidently AI commit (4d0e259) is also not on GitHub
+      yet.
+  11. Update the local main branch (it is 3 commits behind origin/main).
+
+D. Scope questions (not started — confirm whether they are required)
+  12. No live O-RAN interface: no Near-RT / Non-RT RIC, xApp / rApp, or A1,
+      E2 or O1 code. Drift events arrive only through the framework's own
+      HTTP API and CLI.
+  13. Only synthetic data has been used (KPI-like prb_util, cqi, rsrp made
+      with NumPy). Nothing has been run on a real O-RAN dataset.
+  14. No drift detector of its own for live streams. Something upstream has
+      to send the drift event.
+
+
+====================================================================
+RECOMMENDED NEXT STEPS
+====================================================================
+1. Re-run the full test suite once (it takes a while on this laptop).
+2. Push the Phase 14 branch and open a pull request into main.
+3. Retry the live LLM decision call with a working model or key.
+4. On a machine with Docker: build and run the compose stack, the Docker
+   sandbox, and the Debezium/Kafka CDC path.
+5. Decide whether live O-RAN integration and real datasets are in scope.

@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
+      "Bash(sudo:*)",
+      "Bash(su:*)",
+      "Bash(shutdown:*)",
+      "Bash(reboot:*)",
+      "Bash(kill:*)",
+      "Bash(pkill:*)",
+      "Bash(killall:*)",
+      "Bash(taskkill:*)",
+      "Bash(systemctl:*)",
+      "Bash(mkfs:*)",
+      "Bash(dd:*)",
+      "Bash(fdisk:*)",
+      "Bash(diskpart:*)",
+      "Bash(format:*)",
+      "Bash(chmod 777:*)",
+      "Bash(chown:*)",
+      "Bash(del /s:*)",
+      "Bash(rmdir /s:*)",
+      "Bash(reg:*)",
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(mv:*)",
+      "Bash(npm install:*)",
+      "Bash(pip install:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}
