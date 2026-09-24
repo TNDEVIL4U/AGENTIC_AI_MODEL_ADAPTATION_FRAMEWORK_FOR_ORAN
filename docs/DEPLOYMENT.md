@@ -92,8 +92,8 @@ These run one after another and write their output to `reports/` (ignored by git
 | mypy (`src/`) | error count must not rise above the baseline | 50 errors = baseline 50 (pre-existing, mostly Optional narrowing). Lower `MYPY_BASELINE` as they are fixed |
 | SBOM | must generate | CycloneDX JSON, 154 components, `reports/sbom.cdx.json` |
 
-The local development virtualenv still has pip 25.2, which pip-audit flags. Upgrading it
-(`python -m pip install --upgrade "pip>=26.2"` inside `.venv`) is recommended but was not done.
+The local development virtualenv's pip was upgraded from 25.2, which pip-audit flags, to 26.2.1
+(`python -m pip install --upgrade "pip>=26.2"` inside `.venv`).
 
 ## Not yet verified
 

@@ -72,7 +72,6 @@ Known open items from Phase 14:
 - The Docker and compose stack and the e2e test need a machine with Docker.
 - mypy has 50 pre-existing errors, held by a ratchet but not fixed.
 - The sandbox image still runs as root.
-- The local `.venv` has pip 25.2, which has advisories. Upgrading it is recommended.
 - nltk `PYSEC-2026-3740` is accepted until a fix is released.
 
 ---
