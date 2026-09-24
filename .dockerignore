@@ -1,0 +1,27 @@
+# Keep secrets, local state and heavy folders out of the build context and the image.
+.env
+.env.*
+!.env.example
+.git
+.venv
+venv
+node_modules
+headroom
+.claude
+.serena
+.dist
+dist
+build
+*.egg-info
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+mlruns
+mlartifacts
+data
+*.db
+reports
+tests
+docs

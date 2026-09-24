@@ -23,6 +23,8 @@ oran-adapt = "oran_adapt.cli:main"
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "ruff"]
 # CDC_MODE=kafka (production CDC from Debezium). Not needed for the polling fallback.
 kafka = ["confluent-kafka>=2.3"]
+# scripts/security_check.py: static security scan, dependency audit, type check, SBOM.
+security = ["bandit[toml]>=1.8", "pip-audit>=2.9", "mypy>=1.15", "cyclonedx-bom>=6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -36,3 +38,20 @@ markers = ["integration: needs external services (PostgreSQL/Docker)"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+# B101 (assert): the asserts in src/ only narrow Optional types for the type checker; each
+# invariant is already enforced elsewhere (e.g. the Settings validator), so -O changes nothing.
+skips = ["B101"]
+
+[tool.mypy]
+# The deployed target: the Docker image is Linux + Python 3.13 (numpy's stubs need >= 3.12).
+python_version = "3.13"
+platform = "linux"
+mypy_path = "src"
+files = ["src/oran_adapt"]
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true

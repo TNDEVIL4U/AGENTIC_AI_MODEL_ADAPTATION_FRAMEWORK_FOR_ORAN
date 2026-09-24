@@ -1,0 +1,21 @@
+{
+  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+  "plugin.name": "pgoutput",
+  "database.hostname": "postgres",
+  "database.port": "5432",
+  "database.user": "oran",
+  "database.password": "${env:POSTGRES_PASSWORD}",
+  "database.dbname": "oran_adapt",
+  "topic.prefix": "oran",
+  "table.include.list": "public.kpi_sample",
+  "slot.name": "oran_kpi_sample",
+  "publication.name": "oran_kpi_sample",
+  "publication.autocreate.mode": "filtered",
+  "snapshot.mode": "initial",
+  "tombstones.on.delete": "true",
+  "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+  "key.converter.schemas.enable": "false",
+  "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+  "value.converter.schemas.enable": "false",
+  "heartbeat.interval.ms": "30000"
+}

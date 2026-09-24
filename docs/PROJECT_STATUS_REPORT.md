@@ -1,6 +1,6 @@
 # Project Status Report — Agentic AI Model Adaptation Framework for O-RAN
 
-**Date:** 2026-09-23 · **Branch:** `phase13-registry-data-versioning` (pushed to GitHub, not yet merged to `main`)
+**Date:** 2026-09-23, Phase 14 section added 2026-09-24 · **Branch:** `phase13-registry-data-versioning` (pushed to GitHub, not yet merged to `main`); Phase 14 on `phase14-production-hardening` (local commits)
 
 This report answers four questions: what is done, what is left, how much is complete, and
 whether everything is real or hardcoded. It is based on the code as it is now, a fresh run of
@@ -49,6 +49,31 @@ laptop (Docker, the LLM decision call), a few small improvements, and some scope
 Also finished this session: the CLI end-to-end test (`tests/unit/test_phase13_cli.py`) and a
 CLI fix — `data ingest --start` — so re-ingesting the same CSV without a timestamp column is a
 no-op instead of a false `DATA_VERSION_CONFLICT`.
+
+---
+
+## 2a. Phase 14 — production hardening (branch `phase14-production-hardening`, 2026-09-24)
+
+Added after this report was first written. It is **not** counted in the §3 percentage, which
+covers Phases 1–13.
+
+| Stage | What it adds | Status | How it was verified |
+|---|---|---|---|
+| A — Registry safety | Reuses an existing data/model version instead of duplicating it, atomic promotion, rollback, explicit job states | ✅ Verified | `test_phase14_member1.py` |
+| B — API security and observability | API keys stored as SHA-256 digests, with roles (ADMIN / OPERATOR / ML_ENGINEER / READ_ONLY), fail-closed auth, correlation ids, Prometheus `/api/v1/metrics`, audit trail | ✅ Verified | `test_phase14_stage_b.py` |
+| C — Change data capture | Trigger changelog with a polling consumer, a Debezium/Kafka consumer (commits offsets only after storing, deduplicates by event id), CDC data versions, persisted CurrentData, migration 0006 (REPLICA IDENTITY FULL) | 🟡 Partly | Polling path and migrations tested for real; the Kafka source only against a fake consumer. **Debezium → Kafka not run.** See `docs/CDC.md` |
+| D — Metrics and decision output | Task-agnostic metrics (classification and regression), full decision record, train/validation leakage checks | ✅ Verified | `test_phase14_stage_d.py` |
+| E — Deployment and supply chain | Multi-stage non-root app image, MLflow image (PostgreSQL + MinIO), full compose stack (Postgres, MinIO, MLflow, Kafka, Debezium, API, CDC consumer, Prometheus), `.dockerignore`, `requirements.lock` (154 pins), `scripts/security_check.py` (bandit, pip-audit, mypy ratchet, CycloneDX SBOM) | 🟡 Partly | Security checks **run and pass** (bandit 0 medium/high; pip-audit 0 open, 1 accepted nltk advisory; mypy 50 = baseline; SBOM 154 components). **Docker images and compose never built or run.** See `docs/DEPLOYMENT.md` |
+
+Re-run on 2026-09-24: the four Phase 14 test files (member1, stage_b, stage_c, stage_d) →
+**50 passed** (13.5 min on this laptop). The full suite has not been re-run after Phase 14.
+
+Known open items from Phase 14:
+- The Docker and compose stack and the e2e test need a machine with Docker.
+- mypy has 50 pre-existing errors, held by a ratchet but not fixed.
+- The sandbox image still runs as root.
+- The local `.venv` has pip 25.2, which has advisories. Upgrading it is recommended.
+- nltk `PYSEC-2026-3740` is accepted until a fix is released.
 
 ---
 
