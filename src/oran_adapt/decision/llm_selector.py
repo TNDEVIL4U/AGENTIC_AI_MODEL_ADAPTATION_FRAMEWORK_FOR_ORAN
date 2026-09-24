@@ -52,11 +52,30 @@ def _build_user_prompt(package: DecisionPackage, compatible: list[Strategy]) -> 
         "model_id": package.model_id,
         "model_type": package.model_type,
         "framework": package.framework,
+        "task_type": package.task_type,
         "reuse_reason": package.reuse_reason,
+        "drift_score": package.drift_event.drift_score,
+        "severity": package.drift_event.severity,
         "max_psi": package.max_psi,
         "min_ks_pvalue": package.min_ks_pvalue,
         "feature_shifts": shifts,
         "recent_performance": package.recent_performance,
+        "historical_rows": package.historical_data.row_count if package.historical_data else 0,
+        "drifted_rows": package.drifted_data.row_count if package.drifted_data else 0,
+        # How each registered version scored on the current data, and Member 1's verdict.
+        "version_evaluations": [
+            {
+                "version": e.version,
+                "is_live": e.is_live,
+                "compatible": e.compatible,
+                "metrics": e.metrics,
+                "degradation": e.degradation,
+                "age_days": e.age_days,
+            }
+            for e in package.version_evaluations
+        ],
+        "reuse_verdict": package.reuse_decision.verdict if package.reuse_decision else None,
+        "constraints": {"device": "cpu", "one_job_per_model": True},
         "compatible_strategies": [s.value for s in compatible],
     }
     return json.dumps(evidence, indent=2, default=str)

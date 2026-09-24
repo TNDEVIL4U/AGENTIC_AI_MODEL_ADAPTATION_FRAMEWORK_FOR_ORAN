@@ -37,6 +37,16 @@ class Strategy(StrEnum):
     NO_COMPATIBLE_STRATEGY = "NO_COMPATIBLE_STRATEGY"
 
 
+class TaskType(StrEnum):
+    """What a model predicts; picks the metric set it is scored with (validation.metrics)."""
+
+    CLASSIFICATION = "CLASSIFICATION"
+    REGRESSION = "REGRESSION"
+    FORECASTING = "FORECASTING"
+    CLUSTERING = "CLUSTERING"
+    ANOMALY_DETECTION = "ANOMALY_DETECTION"
+
+
 class ReuseVerdict(StrEnum):
     """Member 1's answer after scoring every registered version on the current data."""
 

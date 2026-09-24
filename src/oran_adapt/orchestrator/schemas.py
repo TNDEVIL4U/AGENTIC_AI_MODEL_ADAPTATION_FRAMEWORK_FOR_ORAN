@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from oran_adapt.adaptation.leakage import LeakageReport
 from oran_adapt.adaptation.schemas import CandidateModel
 from oran_adapt.analysis.schemas import ReuseDecision, VersionEvaluation
 from oran_adapt.core.enums import Strategy
@@ -35,4 +36,6 @@ class JobResult(BaseModel):
     current_data_id: str | None = None
     version_evaluations: list[VersionEvaluation] = Field(default_factory=list)
     reuse_decision: ReuseDecision | None = None
+    # What the leakage checks found and removed before training (None when nothing trained).
+    leakage: LeakageReport | None = None
     promotion: dict | None = None

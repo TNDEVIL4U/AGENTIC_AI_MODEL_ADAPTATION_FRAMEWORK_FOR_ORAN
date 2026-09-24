@@ -13,13 +13,17 @@ _TORCH_LIKE = {"torch", "pytorch"}
 
 
 def _inspect_sklearn_like(model: object, framework: str) -> ModelInspection:
-    from sklearn.base import is_classifier, is_regressor
+    from sklearn.base import is_classifier, is_clusterer, is_outlier_detector, is_regressor
 
     estimator_type = "unknown"
     if is_classifier(model):
         estimator_type = "classifier"
     elif is_regressor(model):
         estimator_type = "regressor"
+    elif is_clusterer(model):
+        estimator_type = "clusterer"
+    elif is_outlier_detector(model):
+        estimator_type = "outlier_detector"
 
     feature_names = getattr(model, "feature_names_in_", None)
     params = model.get_params() if hasattr(model, "get_params") else {}

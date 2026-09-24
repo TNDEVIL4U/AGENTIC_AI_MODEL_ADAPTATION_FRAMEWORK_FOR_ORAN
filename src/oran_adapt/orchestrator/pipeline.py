@@ -33,6 +33,7 @@ from oran_adapt.adaptation.data import (
 )
 from oran_adapt.adaptation.engines import run_engine, select_engine
 from oran_adapt.adaptation.inspector import inspect_model
+from oran_adapt.adaptation.leakage import check_leakage
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
 from oran_adapt.adaptation.loaders import load_native_model
 from oran_adapt.adaptation.schemas import CandidateModel, ModelInspection
@@ -313,6 +314,7 @@ def run_adaptation_job(
             data=holdout_frame,
             settings=settings,
             workdir=workdir,
+            task_type=model_meta.task_type,
         )
         metrics.MODEL_EVALUATION_DURATION.observe(time.perf_counter() - eval_started)
         reuse = decide_reuse(
@@ -376,6 +378,9 @@ def run_adaptation_job(
             "confidence": decision.confidence,
             "source": decision.source,
             "compatible_strategies": [s.value for s in decision.compatible_strategies],
+            "expected_cost": decision.expected_cost,
+            "expected_improvement": decision.expected_improvement,
+            "fallback_strategy": decision.fallback_strategy,
         },
     )
 
@@ -419,9 +424,17 @@ def run_adaptation_job(
     current_model = load_native_model(local_path, model_meta.framework)
     inspection = inspect_model(current_model, model_meta.framework)
 
-    train_frame = records_frame([r for r in records if r.id not in holdout_ids])
-    feature_names = inspection.feature_names_in or [c for c in train_frame.columns if c != target]
-    X, y = split_features_target(train_frame, feature_names, target)
+    train_records = [r for r in records if r.id not in holdout_ids]
+    feature_names = inspection.feature_names_in or [
+        c for c in records_frame(train_records).columns if c != target
+    ]
+    # Leakage checks before any fit: held-out rows or copies of them, rows newer than the
+    # hold-out, and the target hiding among the features never reach an engine.
+    train_records, leakage = check_leakage(
+        train_records, holdout, target=target, feature_names=feature_names, settings=settings
+    )
+    excluded_ids = {r.id for r in records} - {r.id for r in train_records}
+    X, y = split_features_target(records_frame(train_records), feature_names, target)
 
     try:
         candidate = _produce_candidate(
@@ -492,6 +505,7 @@ def run_adaptation_job(
             "engine": candidate.engine.value,
             "holdout_rows": len(Xv),
             "current_data_id": current_data_id,
+            "leakage": leakage.model_dump(),
         },
     )
     report = validate_candidate(
@@ -503,6 +517,7 @@ def run_adaptation_job(
         current_framework=model_meta.framework,
         estimator_type=inspection.estimator_type,
         settings=settings,
+        task_type=model_meta.task_type,
     )
 
     _audit(
@@ -532,6 +547,7 @@ def run_adaptation_job(
             version_evaluations=evaluations,
             current_data_id=current_data_id,
             reuse_decision=reuse,
+            leakage=leakage,
             reason=report.reason,
         )
 
@@ -581,7 +597,7 @@ def run_adaptation_job(
         model_id=event.model_id,
         model_version=new_version,
         source_version_ids=train_ids,
-        exclude_record_ids=holdout_ids,
+        exclude_record_ids=excluded_ids,
         parent_version_id=package.historical_data.data_version_id
         if package.historical_data
         else None,
@@ -611,6 +627,7 @@ def run_adaptation_job(
         version_evaluations=evaluations,
         current_data_id=current_data_id,
         reuse_decision=reuse,
+        leakage=leakage,
         reason=f"candidate validated ({report.reason}) and registered as version {new_version}",
     )
     try:

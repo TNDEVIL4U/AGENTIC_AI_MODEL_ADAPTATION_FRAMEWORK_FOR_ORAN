@@ -30,6 +30,7 @@ from oran_adapt.core.logging import log_event
 from oran_adapt.registry.client import MlflowRegistry
 from oran_adapt.registry.promotion import verify_version_artifact
 from oran_adapt.validation.evaluate import evaluate_model
+from oran_adapt.validation.metrics import higher_is_better
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +46,8 @@ def _candidates(registry: MlflowRegistry, name: str, live_version: str, limit: i
 def _degradation(metric: str, now: float, baseline: dict[str, float]) -> float | None:
     if metric not in baseline:
         return None
-    # Positive means worse now: accuracy fell, or RMSE rose.
-    return baseline[metric] - now if metric == "accuracy" else now - baseline[metric]
+    # Positive means worse now: a higher-is-better metric fell, or an error metric rose.
+    return baseline[metric] - now if higher_is_better(metric) else now - baseline[metric]
 
 
 def _evaluate_one(
@@ -60,6 +61,7 @@ def _evaluate_one(
     live_version: str,
     expected_estimator: str | None,
     workdir: str,
+    task_type: str | None = None,
 ) -> VersionEvaluation:
     version = str(version_info.version)
     ev = VersionEvaluation(version=version, is_live=version == live_version, n_rows=len(data))
@@ -97,6 +99,7 @@ def _evaluate_one(
             data[target_column],
             framework=framework,
             estimator_type=inspection.estimator_type,
+            task_type=task_type,
         )
     except AdaptationError as exc:
         ev.incompatibility_reason = f"{exc.code}: {exc.message}"
@@ -106,6 +109,7 @@ def _evaluate_one(
         gc.collect()
 
     ev.metric_name, ev.metric_value = next(iter(scores.items()))
+    ev.metrics = scores
     ev.degradation = _degradation(ev.metric_name, ev.metric_value, ev.baseline_metrics)
     ev.compatible = True
     return ev
@@ -121,6 +125,7 @@ def evaluate_versions(
     data: pd.DataFrame,
     settings: Settings,
     workdir: str,
+    task_type: str | None = None,
 ) -> list[VersionEvaluation]:
     """Score the model's registered versions on ``data`` (which must hold ``target_column``).
     LIVE is scored first because its estimator type is what the others must match."""
@@ -141,6 +146,7 @@ def evaluate_versions(
             live_version=live_version,
             expected_estimator=expected,
             workdir=os.path.join(workdir, "versions"),
+            task_type=task_type,
         )
         if ev.is_live:
             expected = ev.estimator_type

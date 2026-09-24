@@ -91,6 +91,16 @@ class Settings(BaseSettings):
     validation_accuracy_tolerance: float = Field(0.02, ge=0, le=1)
     validation_rmse_tolerance_ratio: float = Field(0.05, ge=0)
 
+    # Leakage checks run on the training rows before any engine fits (adaptation.leakage).
+    # Training rows that are held-out rows, copies of them, or newer than the oldest held-out
+    # row are dropped; a feature that is the target (by name or identical values) fails the job.
+    # leakage_target_correlation_max, when set, also fails a numeric feature whose absolute
+    # correlation with the target reaches it. leakage_allow_future_rows keeps newer rows, for
+    # data that is not a time series.
+    leakage_checks_enabled: bool = True
+    leakage_allow_future_rows: bool = False
+    leakage_target_correlation_max: float | None = Field(None, gt=0, le=1)
+
     # MLflow >= 3 serializes sklearn models with skops, which refuses to save or load any type
     # not on its built-in safe list. These are the extra types the framework has reviewed and
     # trusts - the tree node stores behind DecisionTree*/RandomForest*/ExtraTrees*/

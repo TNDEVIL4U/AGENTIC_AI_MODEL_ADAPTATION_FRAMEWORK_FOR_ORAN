@@ -77,6 +77,7 @@ def analyze(
         model_id=event.model_id,
         model_type=context.model.model_type,
         framework=context.model.framework,
+        task_type=context.model.task_type,
         drift_event=event,
         reuse_reason=assessment.reason,
         historical_data=_ref(context.historical),

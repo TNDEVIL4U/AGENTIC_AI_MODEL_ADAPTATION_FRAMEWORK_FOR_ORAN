@@ -42,8 +42,10 @@ class VersionEvaluation(BaseModel):
     compatible: bool = False
     incompatibility_reason: str | None = None
     estimator_type: str | None = None
-    metric_name: str | None = None
+    metric_name: str | None = None  # the task's primary metric (validation.metrics)
     metric_value: float | None = None
+    # Every metric of the task that is defined on the current data, primary first.
+    metrics: dict[str, float] = Field(default_factory=dict)
     # Metrics logged on the version's source run when it was trained, and how far the current
     # score has fallen from that (positive = worse now), in the metric's own units.
     baseline_metrics: dict[str, float] = Field(default_factory=dict)
@@ -69,6 +71,11 @@ class ReuseDecision(BaseModel):
     # comparison rests on, not a statistical confidence level.
     confidence: float = 0.0
     reason: str
+    # What the verdict rests on: the drift and LIVE-degradation evidence, the thresholds that
+    # were applied, and every scored version's primary metric ({version: value}).
+    evidence: dict = Field(default_factory=dict)
+    thresholds: dict = Field(default_factory=dict)
+    metrics: dict[str, float] = Field(default_factory=dict)
 
 
 class DecisionPackage(BaseModel):
@@ -77,6 +84,7 @@ class DecisionPackage(BaseModel):
     model_id: str
     model_type: str | None = None
     framework: str | None = None
+    task_type: str | None = None
     drift_event: DriftEvent
     reuse_reason: str
     historical_data: DataVersionRef | None = None

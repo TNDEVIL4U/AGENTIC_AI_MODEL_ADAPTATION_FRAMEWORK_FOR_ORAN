@@ -12,11 +12,12 @@ from oran_adapt.core.config import Settings
 from oran_adapt.decision.constraints import evaluate_constraints
 from oran_adapt.decision.fallback import select_strategy_fallback
 from oran_adapt.decision.llm_selector import select_strategy_via_llm
+from oran_adapt.decision.report import explain_decision
 from oran_adapt.decision.schemas import Decision
 from oran_adapt.llm.client import LlmClient
 
 
-def decide(
+def _choose(
     package: DecisionPackage, settings: Settings, llm_client: LlmClient | None
 ) -> Decision:
     constraint_result = evaluate_constraints(package, settings)
@@ -54,3 +55,12 @@ def decide(
         compatible_strategies=compatible,
         source="FALLBACK",
     )
+
+
+def decide(
+    package: DecisionPackage, settings: Settings, llm_client: LlmClient | None
+) -> Decision:
+    """Choose a strategy and explain it: rationale and confidence come from whichever source
+    chose; evidence, thresholds, metrics, expected cost and improvement, required data,
+    resource requirement and fallback strategy are always computed deterministically."""
+    return explain_decision(_choose(package, settings, llm_client), package, settings)

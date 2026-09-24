@@ -112,6 +112,13 @@ class CdcProcessingError(AdaptationError):
     code = "CDC_PROCESSING_FAILED"
 
 
+class DataLeakageError(AdaptationError):
+    """The training data would leak the evaluation target or the held-out rows into the model
+    (e.g. the target is also a feature). Nothing was trained."""
+
+    code = "DATA_LEAKAGE"
+
+
 class JobTimeoutError(AdaptationError):
     """Raised by the Phase 10 job wrapper when a job's total wall-clock budget
     (``Settings.job_timeout_s``) is exceeded. Python cannot forcibly kill the worker thread that
