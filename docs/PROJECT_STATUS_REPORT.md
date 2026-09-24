@@ -1,6 +1,6 @@
 # Project Status Report — Agentic AI Model Adaptation Framework for O-RAN
 
-**Date:** 2026-09-23 · **Branch:** `phase13-registry-data-versioning` (commit `52f14a2`)
+**Date:** 2026-09-23, Phase 14 section added 2026-09-24 · **Branch:** `phase13-registry-data-versioning` (pushed to GitHub, not yet merged to `main`); Phase 14 on `phase14-production-hardening` (local commits)
 
 This report answers four questions: what is done, what is left, how much is complete, and
 whether everything is real or hardcoded. It is based on the code as it is now, a fresh run of
@@ -33,13 +33,13 @@ laptop (Docker, the LLM decision call), a few small improvements, and some scope
 | Phase | What it does | Status | How it was verified |
 |---|---|---|---|
 | 1 — Foundation | Settings from `.env`, logging, DB models, Alembic migrations, MLflow client, health/ready endpoints | ✅ Done | Unit tests; `/api/v1/ready` → 200 in today's demo |
-| 2 — Analysis | Loads historical + drifted data, KS test and PSI per feature, decides "reuse" vs "adapt" | ✅ Done | Unit tests; demo: `kpi-stable-sgd` reused, second cycle detects shift |
+| 2 — Analysis | Loads historical + drifted data, KS test and PSI per feature (Evidently AI), decides "reuse" vs "adapt" | ✅ Done | Unit tests; demo: `kpi-stable-sgd` reused, second cycle detects shift |
 | 3 — Decision | Hard constraints (min rows, framework support, PSI cut-off), LLM strategy choice, rule fallback | 🟡 Partly | Rules and fallback verified; live LLM **decision** call never returned a success (see §4) |
 | 4 — Adaptation: inspection | Detects framework, estimator type, `partial_fit` / warm-start support | ✅ Done | Unit tests |
 | 5 — Adaptation: sklearn/xgboost engines | `partial_fit` fine-tuning, clone-and-refit full retraining | ✅ Done | Unit tests; demo: SGD, Ridge, RandomForest, XGBoost all REGISTERED |
 | 6 — Adaptation: torch engine | Warm-start fine-tune vs reset-and-retrain | ✅ Done | Unit tests; demo: both torch models REGISTERED |
 | 7 — Sandbox | AST security scanner + subprocess runner for LLM-generated code | 🟡 Partly | Scanner and subprocess runner verified; Docker backend not run; memory limit not enforced on Windows |
-| 8 — Validation | Compares candidate vs current model (accuracy / RMSE gate) on a time-based hold-out | ✅ Done | Gate maths verified; hold-out fixed today and tested (40 unseen rows, 360-row training snapshot) |
+| 8 — Validation | Compares candidate vs current model (accuracy / RMSE gate, scored by Evidently AI) on a time-based hold-out | ✅ Done | Gate maths verified; hold-out fixed today and tested (40 unseen rows, 360-row training snapshot) |
 | 9 — Orchestrator | analyze → decide → adapt → validate → register, one drift event end to end | ✅ Done | Unit tests; demo sections 3 and 6 |
 | 10 — Hardening | Idempotent events, concurrency, selective retries, job timeout | ✅ Done | Unit tests incl. a real thread race; demo section 4 (`duplicate=True`) |
 | 11 — Docker sandbox + compose | Dockerfiles, compose file, Docker runner | 🟡 Partly | Code and command building unit-tested; never run (no Docker on this laptop) |
@@ -49,6 +49,30 @@ laptop (Docker, the LLM decision call), a few small improvements, and some scope
 Also finished this session: the CLI end-to-end test (`tests/unit/test_phase13_cli.py`) and a
 CLI fix — `data ingest --start` — so re-ingesting the same CSV without a timestamp column is a
 no-op instead of a false `DATA_VERSION_CONFLICT`.
+
+---
+
+## 2a. Phase 14 — production hardening (branch `phase14-production-hardening`, 2026-09-24)
+
+Added after this report was first written. It is **not** counted in the §3 percentage, which
+covers Phases 1–13.
+
+| Stage | What it adds | Status | How it was verified |
+|---|---|---|---|
+| A — Registry safety | Reuses an existing data/model version instead of duplicating it, atomic promotion, rollback, explicit job states | ✅ Verified | `test_phase14_member1.py` |
+| B — API security and observability | API keys stored as SHA-256 digests, with roles (ADMIN / OPERATOR / ML_ENGINEER / READ_ONLY), fail-closed auth, correlation ids, Prometheus `/api/v1/metrics`, audit trail | ✅ Verified | `test_phase14_stage_b.py` |
+| C — Change data capture | Trigger changelog with a polling consumer, a Debezium/Kafka consumer (commits offsets only after storing, deduplicates by event id), CDC data versions, persisted CurrentData, migration 0006 (REPLICA IDENTITY FULL) | 🟡 Partly | Polling path and migrations tested for real; the Kafka source only against a fake consumer. **Debezium → Kafka not run.** See `docs/CDC.md` |
+| D — Metrics and decision output | Task-agnostic metrics (classification and regression), full decision record, train/validation leakage checks | ✅ Verified | `test_phase14_stage_d.py` |
+| E — Deployment and supply chain | Multi-stage non-root app image, MLflow image (PostgreSQL + MinIO), full compose stack (Postgres, MinIO, MLflow, Kafka, Debezium, API, CDC consumer, Prometheus), `.dockerignore`, `requirements.lock` (154 pins), `scripts/security_check.py` (bandit, pip-audit, mypy ratchet, CycloneDX SBOM) | 🟡 Partly | Security checks **run and pass** (bandit 0 medium/high; pip-audit 0 open, 1 accepted nltk advisory; mypy 50 = baseline; SBOM 154 components). **Docker images and compose never built or run.** See `docs/DEPLOYMENT.md` |
+
+Re-run on 2026-09-24: the four Phase 14 test files (member1, stage_b, stage_c, stage_d) →
+**50 passed** (13.5 min on this laptop). The full suite has not been re-run after Phase 14.
+
+Known open items from Phase 14:
+- The Docker and compose stack and the e2e test need a machine with Docker.
+- mypy has 50 pre-existing errors, held by a ratchet but not fixed.
+- The sandbox image still runs as root.
+- nltk `PYSEC-2026-3740` is accepted until a fix is released.
 
 ---
 
@@ -95,14 +119,13 @@ decide that scope first.
 
 ### B. Small improvements
 
-6. **Torch learning rate is fixed at `1e-2`** (a function default in
-   `adaptation/torch_engine.py`), unlike the epochs which are settings. Should become
-   `TORCH_LEARNING_RATE`.
-7. **Default `GEMINI_MODEL` (`gemini-2.5-pro`) is out of date** — it returned 404 for your
-   account. Update the default or document "set `GEMINI_MODEL` in `.env`".
+6. **Done — torch learning rate is now a setting:** `TORCH_LEARNING_RATE` (default `0.01`),
+   passed to both torch engines; covered by a new test in `test_phase6_torch.py`.
+7. **Done — default `GEMINI_MODEL` is now `gemini-3.6-flash`**, the model that worked for your
+   account (the old `gemini-2.5-pro` returned 404). Also updated in `.env.example` and MANUAL.
 8. **Done — full test suite re-run after the fix:** 163 passed, 6 skipped (Docker-only).
-9. **Housekeeping:** `src/oran_adapt.egg-info/` is untracked build output and could be added
-   to `.gitignore`; the Phase 13 branch is not yet merged to `main`.
+9. **Done — housekeeping:** `*.egg-info/` is in `.gitignore`, and the Phase 13 branch is pushed
+   to GitHub, ready for a pull request into `main` (opening and merging it is your call).
 
 ### C. Scope questions (not started — confirm whether they are required)
 
@@ -122,11 +145,11 @@ decide that scope first.
 
 | Part | Evidence |
 |---|---|
-| Drift statistics | Real `scipy` two-sample KS test and the standard PSI formula on the actual data |
+| Drift statistics | Real two-sample KS test and PSI from Evidently AI's `ValueDrift` metric on the actual data (the KS statistic itself still comes from `scipy`, as Evidently reports only the p-value) |
 | Training | Real `partial_fit`, clone-and-refit, XGBoost fit, torch training loops — the demo's v2 models give different predictions and metrics from v1 |
 | Registration | Real MLflow model versions, `live` alias moves, tags; models are downloaded back and asked for predictions in the demo |
 | Data versioning | Real SHA-256 content hashes; identical re-ingest returns 200, changed content with the same name returns 409 |
-| Validation | Real accuracy / RMSE on the newest 20% of the drifted rows, which the candidate never trains on |
+| Validation | Real accuracy / RMSE, computed by Evidently AI, on the newest 20% of the drifted rows, which the candidate never trains on |
 | Idempotency / retries / timeout | Enforced by DB constraints and real retry/timeout code, tested with real threads |
 | LLM code generation path | Verified live against Gemini in an earlier session (real network call, generated code ran in the sandbox, model registered) |
 | Tests | Use real SQLite and real MLflow stores; the only stand-in is `FakeLlmClient` for LLM calls, which is a test double, not used in the app |
@@ -147,6 +170,7 @@ These are **defaults, not hardcoded** — each can be changed without editing co
 | `VALIDATION_ACCURACY_TOLERANCE` | 0.02 | Allowed accuracy drop for classifiers |
 | `VALIDATION_RMSE_TOLERANCE_RATIO` | 0.05 | Allowed relative RMSE rise for regressors |
 | `TORCH_FINE_TUNE_EPOCHS` / `TORCH_FULL_RETRAIN_EPOCHS` | 5 / 300 | Torch training budgets |
+| `TORCH_LEARNING_RATE` | 0.01 | Adam learning rate for both torch engines |
 | `JOB_MAX_RETRIES` / `JOB_RETRY_BACKOFF_S` / `JOB_TIMEOUT_S` | 2 / 1.0 / 600 | Job hardening |
 | `SANDBOX_TIMEOUT_S` / `SANDBOX_MEMORY_MB` | 120 / 1024 | Sandbox limits |
 | `MLFLOW_SKOPS_TRUSTED_TYPES` | two sklearn tree types | Extra types allowed when saving sklearn models |
@@ -158,8 +182,7 @@ case passes validation. It is a tuned default, not a universal value.
 
 | Value | Where | Assessment |
 |---|---|---|
-| PSI uses 10 bins, `1e-6` floor | `analysis/comparison.py` | Standard PSI practice; fine, could be a setting |
-| Torch learning rate `1e-2` | `adaptation/torch_engine.py` | Should be a setting (§4 item 6) |
+| PSI binning (Sturges equal-width bins, `0.0001` floor) | Evidently AI's PSI, used by `analysis/comparison.py` | Evidently's defaults; noisy on small samples (see README "Known limitations") |
 | Fallback decision `confidence=0.5`, hard-constraint `confidence=1.0` | `decision/engine.py` | Fixed labels only reported in the result; they do not affect any decision |
 | Fallback priority order: fine-tuning → full retraining → rollback → no action | `decision/fallback.py` | Deliberate deterministic rule ("cheapest compatible first") |
 | LLM system prompts, sandbox allowed-imports list | `decision/llm_selector.py`, `adaptation/llm_adapter.py`, `sandbox/security.py` | Deliberate, part of the design |
@@ -175,7 +198,6 @@ the pipeline chose differently, the demo would print FAIL and exit 1.
 
 ## 6. Recommended next steps
 
-1. Make the torch learning rate a setting and refresh the `GEMINI_MODEL` default (§4 items 6–7).
-2. Merge `phase13-registry-data-versioning` into `main`.
-3. When available: retry the live LLM decision call; install Docker to close Phase 11.
-4. Decide whether live O-RAN integration and real datasets are in scope (§4 C).
+1. Open a pull request from `phase13-registry-data-versioning` and merge it into `main`.
+2. When available: retry the live LLM decision call; install Docker to close Phase 11.
+3. Decide whether live O-RAN integration and real datasets are in scope (§4 C).

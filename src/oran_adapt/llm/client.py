@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from oran_adapt.core import metrics
 from oran_adapt.core.config import Settings
 from oran_adapt.core.errors import LlmUnavailableError
 
@@ -81,21 +82,44 @@ class GeminiLlmClient:
         return text
 
 
+class InstrumentedLlmClient:
+    """Counts every call (``llm_requests_total``) and every failed one (``llm_failures_total``)
+    by provider, then passes the result or the error through unchanged."""
+
+    def __init__(self, inner: LlmClient, provider: str) -> None:
+        self.inner = inner
+        self.provider = provider
+
+    def complete(self, *, system: str, prompt: str) -> str:
+        metrics.LLM_REQUESTS.labels(self.provider).inc()
+        try:
+            return self.inner.complete(system=system, prompt=prompt)
+        except Exception:
+            metrics.LLM_FAILURES.labels(self.provider).inc()
+            raise
+
+
 def build_llm_client(settings: Settings) -> LlmClient | None:
     """None means "no LLM configured" (LLM_PROVIDER=none) - callers must have a deterministic
     fallback for that case, not treat it as an error."""
     if settings.llm_provider == "anthropic":
         assert settings.anthropic_api_key is not None  # enforced by Settings validator
-        return AnthropicLlmClient(
-            settings.anthropic_api_key.get_secret_value(),
-            settings.anthropic_model,
-            settings.llm_timeout_s,
+        return InstrumentedLlmClient(
+            AnthropicLlmClient(
+                settings.anthropic_api_key.get_secret_value(),
+                settings.anthropic_model,
+                settings.llm_timeout_s,
+            ),
+            "anthropic",
         )
     if settings.llm_provider == "gemini":
         assert settings.gemini_api_key is not None  # enforced by Settings validator
-        return GeminiLlmClient(
-            settings.gemini_api_key.get_secret_value(),
-            settings.gemini_model,
-            settings.llm_timeout_s,
+        return InstrumentedLlmClient(
+            GeminiLlmClient(
+                settings.gemini_api_key.get_secret_value(),
+                settings.gemini_model,
+                settings.llm_timeout_s,
+            ),
+            "gemini",
         )
     return None

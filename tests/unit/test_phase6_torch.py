@@ -201,3 +201,24 @@ def test_run_engine_torch_full_retrain_via_select_engine(tmp_path) -> None:
     assert candidate.engine == EngineKind.TORCH_FULL_RETRAIN
 
 
+def test_run_engine_passes_torch_learning_rate(tmp_path) -> None:
+    X, y = _frame(100)
+    moved = {}
+    for lr in (1e-8, 1e-1):
+        torch.manual_seed(0)
+        model = _TinyClassifier()
+        before = model.linear.weight.detach().clone()
+        run_engine(
+            EngineKind.TORCH_FINE_TUNE,
+            model,
+            inspection=inspect_model(model, "torch"),
+            X=X,
+            y=y,
+            target_column=TARGET,
+            artifact_dir=str(tmp_path / f"lr-{lr}"),
+            torch_fine_tune_epochs=3,
+            torch_learning_rate=lr,
+        )
+        moved[lr] = (model.linear.weight - before).abs().max().item()
+    # A near-zero learning rate barely moves the weights; a large one clearly does.
+    assert moved[1e-8] < 1e-6 < moved[1e-1]

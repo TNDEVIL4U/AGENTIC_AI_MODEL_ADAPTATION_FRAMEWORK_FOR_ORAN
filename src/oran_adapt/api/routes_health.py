@@ -1,10 +1,12 @@
-"""Liveness and readiness endpoints."""
+"""Liveness, readiness and Prometheus metrics endpoints."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, Response
 
 from oran_adapt import __version__
+from oran_adapt.api.security import READ_ROLES, require_roles
+from oran_adapt.core import metrics
 from oran_adapt.core.errors import AdaptationError
 from oran_adapt.core.schemas import ComponentHealth, HealthResponse, ReadyResponse
 from oran_adapt.db.health import check_database
@@ -19,6 +21,7 @@ def health() -> HealthResponse:
 
 
 @router.get("/ready", response_model=ReadyResponse)
+@router.get("/readiness", response_model=ReadyResponse)
 def ready(request: Request, response: Response) -> ReadyResponse:
     """Readiness: PostgreSQL and MLflow must both be reachable."""
     checks = {
@@ -36,3 +39,12 @@ def ready(request: Request, response: Response) -> ReadyResponse:
     if not all_ok:
         response.status_code = 503
     return ReadyResponse(ready=all_ok, components=components)
+
+
+@router.get("/metrics", include_in_schema=False)
+def prometheus_metrics(request: Request) -> Response:
+    """Prometheus scrape endpoint. Needs a key (any role) unless ``metrics_public`` is set."""
+    if not request.app.state.settings.metrics_public:
+        require_roles(*READ_ROLES)(request)
+    body, content_type = metrics.render()
+    return Response(content=body, media_type=content_type)

@@ -8,14 +8,19 @@
 #
 # Build:  docker build -t oran-adapt-sandbox:latest -f docker/sandbox/Dockerfile docker/sandbox
 # (the tag must match Settings.sandbox_docker_image, default "oran-adapt-sandbox:latest")
-FROM python:3.11-slim
+FROM python:3.13.7-slim-bookworm
 
-RUN pip install --no-cache-dir \
-    numpy \
-    pandas \
-    scikit-learn \
-    xgboost \
-    torch \
-    joblib
+# Pinned to the same versions as requirements.lock; torch is the CPU-only wheel.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgomp1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
+    numpy==2.5.3 \
+    pandas==3.0.6 \
+    scipy==1.18.1 \
+    scikit-learn==1.9.1 \
+    xgboost==3.4.1 \
+    torch==2.14.0 \
+    joblib==1.6.0
 
 WORKDIR /sandbox

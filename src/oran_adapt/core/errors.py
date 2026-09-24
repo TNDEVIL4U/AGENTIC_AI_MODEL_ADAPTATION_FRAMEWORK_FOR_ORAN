@@ -74,6 +74,51 @@ class SandboxExecutionError(AdaptationError):
     code = "SANDBOX_EXECUTION_FAILED"
 
 
+class ArtifactIntegrityError(ArtifactError):
+    """A model artifact's SHA-256 no longer matches the checksum recorded when it was
+    registered. The artifact is refused, never loaded."""
+
+    code = "ARTIFACT_INTEGRITY_FAILED"
+
+
+class ModelBusyError(ConflictError):
+    """Another adaptation job holds this model's lock. Nothing was recorded; the caller can
+    resend the same event later."""
+
+    code = "MODEL_BUSY"
+
+
+class InvalidTransitionError(AdaptationError):
+    code = "INVALID_STATE_TRANSITION"
+
+
+class PromotionError(AdaptationError):
+    """Moving the live alias failed. LIVE was restored to the version it pointed at before."""
+
+    code = "PROMOTION_FAILED"
+
+
+class CdcUnavailableError(AdaptationError):
+    """The CDC source (Kafka, or its client library) cannot be reached. Nothing was consumed
+    and no offset moved, so the next run picks up where the last one stopped."""
+
+    code = "CDC_UNAVAILABLE"
+
+
+class CdcProcessingError(AdaptationError):
+    """A CDC batch could not be stored. The transaction was rolled back and the source offset
+    not acknowledged, so the batch is redelivered (and deduplicated) on the next run."""
+
+    code = "CDC_PROCESSING_FAILED"
+
+
+class DataLeakageError(AdaptationError):
+    """The training data would leak the evaluation target or the held-out rows into the model
+    (e.g. the target is also a feature). Nothing was trained."""
+
+    code = "DATA_LEAKAGE"
+
+
 class JobTimeoutError(AdaptationError):
     """Raised by the Phase 10 job wrapper when a job's total wall-clock budget
     (``Settings.job_timeout_s``) is exceeded. Python cannot forcibly kill the worker thread that

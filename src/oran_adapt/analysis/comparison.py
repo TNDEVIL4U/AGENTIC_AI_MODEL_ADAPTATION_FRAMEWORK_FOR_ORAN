@@ -1,10 +1,12 @@
 """Member 1 - comparison: quantify how much the drifted segment differs from the baseline.
 
-Two independent, real statistics per numeric feature: the two-sample Kolmogorov-Smirnov test
-(is the drifted distribution shape different from the historical one?) and the Population
-Stability Index (how much has the distribution moved, in the units PSI practitioners use to
-threshold on: <0.1 no significant shift, 0.1-0.25 moderate, >0.25 major). Only features present
-as numeric values in *both* segments are compared; everything else is left for a future phase.
+Two independent, real statistics per numeric feature, both computed by Evidently AI's
+ValueDrift metric: the two-sample Kolmogorov-Smirnov test (is the drifted distribution shape
+different from the historical one?) and the Population Stability Index (how much has the
+distribution moved, in the units PSI practitioners use to threshold on: <0.1 no significant
+shift, 0.1-0.25 moderate, >0.25 major). Evidently reports only the KS p-value, so the KS
+statistic itself comes from scipy. Only features present as numeric values in *both* segments
+are compared; everything else is left for a future phase.
 """
 
 from __future__ import annotations
@@ -12,12 +14,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import pandas as pd
+from evidently import DataDefinition, Dataset, Report
+from evidently.metrics import ValueDrift
 from scipy import stats
 
 from oran_adapt.analysis.merge import MergedSeries
 
 _RESERVED_KEYS = {"observed_at", "segment"}
-_PSI_BINS = 10
 
 
 @dataclass
@@ -52,17 +56,26 @@ def _numeric_feature_names(rows: list[dict]) -> set[str]:
     return names
 
 
-def _population_stability_index(
-    baseline: np.ndarray, current: np.ndarray, bins: int = _PSI_BINS
-) -> float:
-    edges = np.unique(np.quantile(baseline, np.linspace(0, 1, bins + 1)))
-    if len(edges) < 3:
-        return 0.0
-    b_counts, _ = np.histogram(baseline, bins=edges)
-    c_counts, _ = np.histogram(current, bins=edges)
-    b_frac = np.clip(b_counts / max(len(baseline), 1), 1e-6, None)
-    c_frac = np.clip(c_counts / max(len(current), 1), 1e-6, None)
-    return float(np.sum((c_frac - b_frac) * np.log(c_frac / b_frac)))
+def _evidently_drift(
+    historical: dict[str, np.ndarray], drifted: dict[str, np.ndarray]
+) -> dict[tuple[str, str], float]:
+    """Run one Evidently report (historical = reference, drifted = current) and return
+    {(feature, "ks" | "psi"): value}; for "ks" the value is the p-value."""
+    columns = sorted(historical)
+    definition = DataDefinition(numerical_columns=columns)
+
+    def dataset(values: dict[str, np.ndarray]) -> Dataset:
+        # Features can have different row counts (a key missing from some rows), so pad to
+        # equal length; Evidently drops the NaNs per column.
+        frame = pd.DataFrame({c: pd.Series(values[c]) for c in columns})
+        return Dataset.from_pandas(frame, data_definition=definition)
+
+    metrics = [ValueDrift(column=c, method=m) for c in columns for m in ("ks", "psi")]
+    snapshot = Report(metrics).run(dataset(drifted), dataset(historical))
+    return {
+        (m["config"]["column"], m["config"]["method"]): float(m["value"])
+        for m in snapshot.dict()["metrics"]
+    }
 
 
 def compare_segments(merged: MergedSeries) -> ComparisonResult:
@@ -75,13 +88,19 @@ def compare_segments(merged: MergedSeries) -> ComparisonResult:
         return result
 
     features = _numeric_feature_names(historical_rows) & _numeric_feature_names(drifted_rows)
+    historical: dict[str, np.ndarray] = {}
+    drifted: dict[str, np.ndarray] = {}
     for feature in sorted(features):
         h = np.array([r[feature] for r in historical_rows if feature in r], dtype=float)
         d = np.array([r[feature] for r in drifted_rows if feature in r], dtype=float)
-        if h.size < 2 or d.size < 2:
-            continue
-        ks_stat, ks_p = stats.ks_2samp(h, d)
-        psi = _population_stability_index(h, d)
+        if h.size >= 2 and d.size >= 2:
+            historical[feature], drifted[feature] = h, d
+    if not historical:
+        return result
+
+    drift = _evidently_drift(historical, drifted)
+    for feature, h in historical.items():
+        d = drifted[feature]
         result.features.append(
             FeatureComparison(
                 feature=feature,
@@ -89,9 +108,9 @@ def compare_segments(merged: MergedSeries) -> ComparisonResult:
                 drifted_mean=float(d.mean()),
                 historical_std=float(h.std()),
                 drifted_std=float(d.std()),
-                ks_statistic=float(ks_stat),
-                ks_pvalue=float(ks_p),
-                psi=psi,
+                ks_statistic=float(stats.ks_2samp(h, d).statistic),
+                ks_pvalue=drift[(feature, "ks")],
+                psi=drift[(feature, "psi")],
             )
         )
 

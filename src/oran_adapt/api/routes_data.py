@@ -9,9 +9,11 @@ from datetime import datetime
 from typing import Any, Literal
 
 import pandas as pd
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
+from oran_adapt.api.security import DATA_ROLES, DataEditor, require_roles
+from oran_adapt.core.errors import DatasetNotFoundError
 from oran_adapt.datastore import (
     get_or_create_dataset,
     get_version,
@@ -20,10 +22,13 @@ from oran_adapt.datastore import (
     list_datasets,
     list_versions,
 )
+from oran_adapt.datastore.current_data import get_current_data, list_current_data
 from oran_adapt.datastore.versioning import get_dataset
 from oran_adapt.db.base import session_scope
 
 router = APIRouter(prefix="/datasets", tags=["data"])
+# CurrentData: the cleaned, versioned rows each adaptation job decided on.
+current_router = APIRouter(prefix="/current-data", tags=["data"])
 
 
 class DatasetCreate(BaseModel):
@@ -45,7 +50,7 @@ class VersionCreate(BaseModel):
     source: str | None = None
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require_roles(*DATA_ROLES))])
 def create_dataset(body: DatasetCreate, request: Request) -> dict:
     with session_scope(request.app.state.session_factory) as session:
         ds = get_or_create_dataset(
@@ -62,7 +67,11 @@ def get_datasets(request: Request) -> list[dict]:
 
 @router.post("/{dataset_id}/versions")
 def create_version(
-    dataset_id: str, body: VersionCreate, request: Request, response: Response
+    dataset_id: str,
+    body: VersionCreate,
+    request: Request,
+    response: Response,
+    principal: DataEditor,
 ) -> dict:
     with session_scope(request.app.state.session_factory) as session:
         info = ingest_version(
@@ -78,6 +87,7 @@ def create_version(
             model_version=body.model_version,
             role=body.role,
             source=body.source or "api",
+            actor=principal.name,
         )
         response.status_code = 201 if info.created else 200
         return info.as_dict()
@@ -100,3 +110,36 @@ def get_one_version(dataset_id: str, version: str, request: Request) -> dict:
 def get_lineage(dataset_id: str, version: str, request: Request) -> dict:
     with session_scope(request.app.state.session_factory) as session:
         return lineage(session, dataset_id, version)
+
+
+@router.post("/{dataset_id}/cdc/materialize")
+def materialize_cdc_events(
+    dataset_id: str, request: Request, response: Response, principal: DataEditor
+) -> dict:
+    """Fold the dataset's pending CDC events into a new immutable CDC data version."""
+    from oran_adapt.cdc.materialize import materialize_cdc
+
+    with session_scope(request.app.state.session_factory) as session:
+        info = materialize_cdc(session, dataset_id, actor=principal.name)
+    if info is None:
+        response.status_code = 200
+        return {"dataset_id": dataset_id, "materialized": False, "reason": "no pending events"}
+    response.status_code = 201
+    return {"materialized": True, **info.as_dict()}
+
+
+@current_router.get("")
+def get_current_data_list(request: Request, model_id: str | None = None) -> list[dict]:
+    with session_scope(request.app.state.session_factory) as session:
+        return list_current_data(session, model_id=model_id)
+
+
+@current_router.get("/{current_data_id}")
+def get_one_current_data(current_data_id: str, request: Request) -> dict:
+    with session_scope(request.app.state.session_factory) as session:
+        found = get_current_data(session, current_data_id)
+    if found is None:
+        raise DatasetNotFoundError(
+            f"current data '{current_data_id}' not found", current_data_id=current_data_id
+        )
+    return found

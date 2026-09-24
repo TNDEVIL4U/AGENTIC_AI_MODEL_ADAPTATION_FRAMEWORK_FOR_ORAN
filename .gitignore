@@ -11,3 +11,5 @@ node_modules/
 headroom/
 data/
 .claude/
+*.egg-info/
+reports/

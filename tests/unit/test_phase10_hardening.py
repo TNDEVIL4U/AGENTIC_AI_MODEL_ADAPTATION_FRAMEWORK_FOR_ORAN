@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import mlflow
 import numpy as np
@@ -330,10 +331,24 @@ def test_full_pipeline_via_job_manager_registers_and_records_events(
             .order_by(AdaptationEvent.id)
             .all()
         )
+        # Phase 14 replaced the single ANALYZING step with the full job state machine; every
+        # stage the pipeline passes through is recorded, in order.
+        path = [None] + [e.to_status for e in events]
         transitions = [(e.from_status, e.to_status) for e in events]
-        assert (None, "RECEIVED") in transitions
-        assert ("RECEIVED", "ANALYZING") in transitions
-        assert ("ANALYZING", "COMPLETED") in transitions
+        assert transitions == list(pairwise(path))
+        assert path[1:] == [
+            "RECEIVED",
+            "VALIDATING",
+            "DATA_PREPARING",
+            "EVALUATING_VERSIONS",
+            "REUSE_DECISION",
+            "DECISION_PENDING",
+            "ADAPTING",
+            "VALIDATING_CANDIDATE",
+            "REGISTERING",
+            "PROMOTING",
+            "COMPLETED",
+        ]
 
 
 # ---- end to end through the HTTP API --------------------------------------------------------

@@ -16,7 +16,9 @@ class ModelInspection(BaseModel):
 
     framework: str
     model_class: str
-    estimator_type: Literal["classifier", "regressor", "unknown"] = "unknown"
+    estimator_type: Literal[
+        "classifier", "regressor", "clusterer", "outlier_detector", "unknown"
+    ] = "unknown"
     n_features_in: int | None = None
     feature_names_in: list[str] | None = None
     supports_partial_fit: bool = False

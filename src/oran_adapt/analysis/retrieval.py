@@ -90,8 +90,29 @@ def _latest_association(
     )
 
 
-def _historical_version(session: Session, model_id: str) -> DataVersion | None:
-    assoc = _latest_association(session, model_id, AssociationRole.TRAINING)
+def _historical_version(
+    session: Session, model_id: str, live_version: str | None = None
+) -> DataVersion | None:
+    """The baseline is what the LIVE version was trained on. After an older version is reused,
+    the newest TRAINING link belongs to a version that is no longer live, so the live version's
+    own link is preferred; the newest link is the fallback for models onboarded without one."""
+    assoc = None
+    if live_version is not None:
+        assoc = (
+            session.execute(
+                select(ModelDataAssociation)
+                .where(
+                    ModelDataAssociation.model_id == model_id,
+                    ModelDataAssociation.model_version == live_version,
+                    ModelDataAssociation.role == AssociationRole.TRAINING,
+                )
+                .order_by(ModelDataAssociation.id.desc())
+            )
+            .scalars()
+            .first()
+        )
+    if assoc is None:
+        assoc = _latest_association(session, model_id, AssociationRole.TRAINING)
     if assoc is None:
         return None
     return session.get(DataVersion, assoc.data_version_id)
@@ -126,7 +147,9 @@ def _drifted_version(session: Session, model_id: str, event: DriftEvent) -> Data
     return session.get(DataVersion, assoc.data_version_id)
 
 
-def retrieve_context(session: Session, event: DriftEvent) -> RetrievedContext:
+def retrieve_context(
+    session: Session, event: DriftEvent, *, live_version: str | None = None
+) -> RetrievedContext:
     """Assemble everything downstream analysis needs, or raise if the model is unknown."""
     model = (
         session.execute(select(ModelMetadata).where(ModelMetadata.model_id == event.model_id))
@@ -151,7 +174,9 @@ def retrieve_context(session: Session, event: DriftEvent) -> RetrievedContext:
 
     return RetrievedContext(
         model=model,
-        historical=_load_slice(session, _historical_version(session, event.model_id)),
+        historical=_load_slice(
+            session, _historical_version(session, event.model_id, live_version)
+        ),
         drifted=_load_slice(session, _drifted_version(session, event.model_id, event)),
         recent_performance=list(performance),
     )

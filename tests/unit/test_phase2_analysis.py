@@ -250,6 +250,27 @@ def test_comparison_reports_no_shift_for_identical_distributions() -> None:
     assert fc.ks_pvalue == pytest.approx(1.0)
 
 
+def test_comparison_uses_evidently_statistics_on_realistic_samples() -> None:
+    import numpy as np
+    from scipy import stats
+
+    rng = np.random.default_rng(0)
+    h, stable, shifted = rng.normal(0, 1, 200), rng.normal(0, 1, 200), rng.normal(3, 1, 200)
+
+    def compare(drifted):
+        hist = _slice([{"observed_at": T0 + timedelta(hours=i), "x": float(v)} for i, v in enumerate(h)])
+        drift = _slice(
+            [{"observed_at": T0 + timedelta(days=30, hours=i), "x": float(v)} for i, v in enumerate(drifted)]
+        )
+        return compare_segments(timestamp_merge(hist, drift)).features[0]
+
+    same, moved = compare(stable), compare(shifted)
+    # Evidently's KS p-value is the standard two-sample KS test.
+    assert same.ks_pvalue == pytest.approx(stats.ks_2samp(h, stable).pvalue)
+    assert same.ks_pvalue > 0.05 and moved.ks_pvalue < 0.05
+    assert same.psi < 0.5 < moved.psi
+
+
 def test_comparison_empty_when_one_segment_missing() -> None:
     hist = _slice([{"observed_at": T0, "prb_util": 1.0}])
     merged = timestamp_merge(hist, None)

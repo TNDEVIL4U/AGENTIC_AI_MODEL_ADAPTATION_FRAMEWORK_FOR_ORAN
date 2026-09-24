@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-sonnet-5"
     gemini_api_key: SecretStr | None = None
-    gemini_model: str = "gemini-2.5-pro"
+    gemini_model: str = "gemini-3.6-flash"
     llm_timeout_s: float = Field(60.0, gt=0)
 
     sandbox_backend: Literal["docker", "subprocess"] = "subprocess"
@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     sandbox_docker_image: str = "oran-adapt-sandbox:latest"
 
     live_alias: str = "live"
+    # Points at the newest registered, validated candidate (whether or not it went live).
+    candidate_alias: str = "candidate"
     log_level: str = "INFO"
     log_json: bool = True
 
@@ -48,6 +50,23 @@ class Settings(BaseSettings):
     analysis_psi_reuse_threshold: float = Field(0.1, ge=0)
     analysis_ks_pvalue_reuse_threshold: float = Field(0.05, gt=0, lt=1)
     analysis_drift_score_reuse_threshold: float = Field(0.3, ge=0, le=1)
+
+    # Member 1 historical version reuse. Once drift is confirmed, every registered version (the
+    # newest reuse_max_versions of them) is scored on the held-out newest drifted rows. A non-live
+    # version is reused, instead of training anything, when it beats LIVE there by at least
+    # reuse_min_accuracy_gain (classifiers, absolute) or reuse_min_rmse_reduction_ratio
+    # (regressors, a fraction of LIVE's RMSE), and is no older than reuse_max_model_age_days
+    # when that is set. reuse_confidence_rows is how many scored rows count as full confidence.
+    reuse_enabled: bool = True
+    reuse_max_versions: int = Field(10, ge=1)
+    reuse_min_accuracy_gain: float = Field(0.02, ge=0, le=1)
+    reuse_min_rmse_reduction_ratio: float = Field(0.05, ge=0, lt=1)
+    reuse_max_model_age_days: float | None = Field(None, gt=0)
+    reuse_confidence_rows: int = Field(100, ge=1)
+
+    # A job holds its model's lock while it runs so two drift events cannot both move LIVE. A
+    # lock older than this is treated as abandoned (e.g. the process died) and can be taken over.
+    model_lock_ttl_s: float = Field(3600.0, gt=0)
 
     # Member 2 (decision) hard constraints. A DecisionPackage needs at least
     # decision_min_drifted_rows drifted rows to be actionable at all; a framework outside
@@ -72,6 +91,16 @@ class Settings(BaseSettings):
     validation_accuracy_tolerance: float = Field(0.02, ge=0, le=1)
     validation_rmse_tolerance_ratio: float = Field(0.05, ge=0)
 
+    # Leakage checks run on the training rows before any engine fits (adaptation.leakage).
+    # Training rows that are held-out rows, copies of them, or newer than the oldest held-out
+    # row are dropped; a feature that is the target (by name or identical values) fails the job.
+    # leakage_target_correlation_max, when set, also fails a numeric feature whose absolute
+    # correlation with the target reaches it. leakage_allow_future_rows keeps newer rows, for
+    # data that is not a time series.
+    leakage_checks_enabled: bool = True
+    leakage_allow_future_rows: bool = False
+    leakage_target_correlation_max: float | None = Field(None, gt=0, le=1)
+
     # MLflow >= 3 serializes sklearn models with skops, which refuses to save or load any type
     # not on its built-in safe list. These are the extra types the framework has reviewed and
     # trusts - the tree node stores behind DecisionTree*/RandomForest*/ExtraTrees*/
@@ -88,6 +117,30 @@ class Settings(BaseSettings):
     # than a warm-start fine-tune to get back to the current model's quality.
     torch_fine_tune_epochs: int = Field(5, ge=1)
     torch_full_retrain_epochs: int = Field(300, ge=1)
+    torch_learning_rate: float = Field(1e-2, gt=0)  # Adam step size for both torch engines
+
+    # API authentication and roles. Callers send ``X-API-Key: <key>`` (or ``Authorization:
+    # Bearer <key>``). Keys are never stored: API_KEYS maps the SHA-256 hex digest of each key to
+    # "ROLE" or "ROLE:caller-name", e.g. API_KEYS='{"9f86d0...": "OPERATOR:team1"}'
+    # (`oran-adapt auth new-key` makes a key and its entry). With auth enabled and no keys
+    # configured, every protected endpoint refuses (fail closed). /health, /readiness and, with
+    # metrics_public, /metrics need no key.
+    auth_enabled: bool = True
+    api_keys: dict[str, str] = Field(default_factory=dict)
+    metrics_public: bool = True
+
+    # Change data capture from the kpi_sample source table (see docs/CDC.md).
+    #   kafka    - production: Debezium streams PostgreSQL's WAL to Kafka, the consumer reads
+    #              the topic (needs the optional confluent-kafka package).
+    #   polling  - local fallback: database triggers write every change to cdc_changelog and
+    #              the consumer reads it by offset. Works on SQLite and PostgreSQL.
+    #   disabled - no CDC; data arrives only through uploads.
+    cdc_mode: Literal["disabled", "polling", "kafka"] = "disabled"
+    cdc_batch_size: int = Field(500, ge=1)
+    kafka_bootstrap_servers: str = "localhost:9092"
+    cdc_kafka_topic: str = "oran.public.kpi_sample"  # Debezium: <prefix>.<schema>.<table>
+    cdc_consumer_group: str = "oran-adapt-cdc"
+    cdc_kafka_poll_timeout_s: float = Field(1.0, gt=0)
 
     @model_validator(mode="after")
     def _llm_key_present(self) -> Settings:
@@ -95,6 +148,17 @@ class Settings(BaseSettings):
             raise ValueError("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
         if self.llm_provider == "gemini" and self.gemini_api_key is None:
             raise ValueError("LLM_PROVIDER=gemini requires GEMINI_API_KEY")
+        return self
+
+    @model_validator(mode="after")
+    def _api_keys_well_formed(self) -> Settings:
+        from oran_adapt.core.enums import Role
+
+        for digest, spec in self.api_keys.items():
+            if len(digest) != 64 or any(c not in "0123456789abcdefABCDEF" for c in digest):
+                raise ValueError("API_KEYS keys must be SHA-256 hex digests of the API keys")
+            if spec.partition(":")[0] not in Role.__members__:
+                raise ValueError(f"API_KEYS role must be one of {', '.join(Role)}")
         return self
 
 
