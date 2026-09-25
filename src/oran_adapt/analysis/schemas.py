@@ -23,6 +23,32 @@ class FeatureShift(BaseModel):
     ks_statistic: float
     ks_pvalue: float
     psi: float
+    n_historical: int = 0
+    n_drifted: int = 0
+
+
+class DriftSummary(BaseModel):
+    """The measured drift, as Member 2 judges it (analysis.summary). A feature is affected when
+    its KS test is significant, or its PSI crosses the threshold on samples large enough for
+    PSI to mean something - never on PSI alone from a handful of rows."""
+
+    features_compared: int = 0
+    affected_features: list[str] = Field(default_factory=list)
+    n_affected: int = 0
+    affected_share: float = 0.0
+    max_psi: float = 0.0
+    mean_psi: float = 0.0
+    min_ks_pvalue: float = 1.0
+    bonferroni_alpha: float = 0.0  # KS threshold / features compared
+    significant_features: list[str] = Field(default_factory=list)  # KS p below that alpha
+    historical_rows: int = 0
+    drifted_rows: int = 0
+    late_rows: int = 0  # drifted rows observed at or before the last historical row
+    sample_sufficient: bool = False
+    sample_note: str = ""
+    previous_version: str | None = None  # LIVE when the drift was analysed
+    recent_performance: dict[str, float] = Field(default_factory=dict)
+    capabilities: dict[str, bool] = Field(default_factory=dict)
 
 
 class DataVersionRef(BaseModel):
@@ -94,6 +120,7 @@ class DecisionPackage(BaseModel):
     min_ks_pvalue: float = 1.0
     merge_overlap_count: int = 0
     recent_performance: dict[str, float] = Field(default_factory=dict)
+    drift_summary: DriftSummary | None = None
     # Filled in by the orchestrator after Member 1 scored the registered versions.
     version_evaluations: list[VersionEvaluation] = Field(default_factory=list)
     reuse_decision: ReuseDecision | None = None

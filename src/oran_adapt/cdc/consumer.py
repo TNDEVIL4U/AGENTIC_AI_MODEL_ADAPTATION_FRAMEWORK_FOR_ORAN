@@ -51,7 +51,8 @@ def run_cdc_once(
         "position": position,
     }
     if events:
-        log_event(logger, "cdc batch stored", component="cdc", **summary)
+        counts = ", ".join(f"{k}={v}" for k, v in summary.items())
+        log_event(logger, f"cdc batch stored ({counts})", component="cdc")
     return summary
 
 

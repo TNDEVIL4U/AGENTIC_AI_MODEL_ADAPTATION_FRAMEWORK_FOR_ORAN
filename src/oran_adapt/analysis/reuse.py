@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from oran_adapt.analysis.comparison import ComparisonResult
+from oran_adapt.analysis.comparison import ComparisonResult, FeatureComparison
+from oran_adapt.analysis.schemas import FeatureShift
 from oran_adapt.core.schemas import DriftEvent
 
 
@@ -18,6 +19,22 @@ class ReuseAssessment:
     reason: str
 
 
+def is_shifted(
+    feature: FeatureComparison | FeatureShift,
+    *,
+    psi_threshold: float,
+    ks_pvalue_threshold: float,
+    min_psi_rows: int,
+) -> bool:
+    """A feature has shifted when its KS test is significant, or when its PSI crosses the
+    threshold on at least ``min_psi_rows`` rows in both segments. PSI bins a handful of rows
+    into mostly-empty buckets and swings wildly, so on its own, on a small sample, it is noise."""
+    if feature.ks_pvalue < ks_pvalue_threshold:
+        return True
+    enough = min(feature.n_historical, feature.n_drifted) >= min_psi_rows
+    return enough and feature.psi >= psi_threshold
+
+
 def assess_reuse(
     event: DriftEvent,
     comparison: ComparisonResult,
@@ -25,6 +42,7 @@ def assess_reuse(
     psi_threshold: float,
     ks_pvalue_threshold: float,
     drift_score_threshold: float,
+    min_psi_rows: int = 30,
 ) -> ReuseAssessment:
     if not event.drift_detected:
         return ReuseAssessment(reuse=True, reason="caller reported no drift")
@@ -33,8 +51,7 @@ def assess_reuse(
         return ReuseAssessment(
             reuse=False,
             reason=(
-                f"reported drift_score {event.drift_score:.3f} "
-                f">= threshold {drift_score_threshold}"
+                f"reported drift_score {event.drift_score:.3f} >= threshold {drift_score_threshold}"
             ),
         )
 
@@ -46,7 +63,14 @@ def assess_reuse(
         )
 
     shifted = [
-        f for f in comparison.features if f.psi >= psi_threshold or f.ks_pvalue < ks_pvalue_threshold
+        f
+        for f in comparison.features
+        if is_shifted(
+            f,
+            psi_threshold=psi_threshold,
+            ks_pvalue_threshold=ks_pvalue_threshold,
+            min_psi_rows=min_psi_rows,
+        )
     ]
     if not shifted:
         return ReuseAssessment(

@@ -150,10 +150,14 @@ def _cmd_cdc_materialize(args, settings: Settings) -> Any:
 def _cmd_model_onboard(args, settings: Settings) -> Any:
     import joblib
 
+    from oran_adapt.core.integrity import check_size
     from oran_adapt.db.base import session_scope
     from oran_adapt.registry.onboarding import onboard_model
 
-    model = joblib.load(args.model_file)  # trusted, operator-supplied local file
+    # A trusted, operator-supplied local file (joblib can run code on load: never point this at
+    # a file from an untrusted source). The size check runs before anything is deserialized.
+    check_size(args.model_file, settings.artifact_max_bytes)
+    model = joblib.load(args.model_file)
     with session_scope(_session_factory(settings)) as session:
         result = onboard_model(
             session,
@@ -253,7 +257,7 @@ def _cmd_auth_new_key(args, settings: Settings) -> Any:
         raise AdaptationError("an API key must be at least 16 characters")
     role = Role(args.role).value
     spec = f"{role}:{args.name}" if args.name else role
-    body = {"api_keys_entry": {hash_api_key(key): spec}}
+    body: dict[str, object] = {"api_keys_entry": {hash_api_key(key): spec}}
     if not args.stdin:
         body["api_key"] = key
     return body

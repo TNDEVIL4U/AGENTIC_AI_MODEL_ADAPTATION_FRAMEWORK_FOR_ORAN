@@ -121,7 +121,16 @@ class DataLeakageError(AdaptationError):
 
 class JobTimeoutError(AdaptationError):
     """Raised by the Phase 10 job wrapper when a job's total wall-clock budget
-    (``Settings.job_timeout_s``) is exceeded. Python cannot forcibly kill the worker thread that
-    was running the pipeline, so it is left to finish on its own, detached from the caller."""
+    (``Settings.job_timeout_s``) is exceeded. In the default process mode the job's worker
+    process is terminated, then killed; the job is recorded TIMED_OUT. In thread mode (tests
+    only) the worker thread cannot be stopped and is left to finish, detached from the caller."""
 
     code = "JOB_TIMEOUT"
+
+
+class JobAbandonedError(AdaptationError):
+    """Recorded (never raised) on a job whose process died - a crash or a service restart -
+    before the job finished. Its model lock expired and a newer job took it over, which marks
+    the old job FAILED with this error so it does not stay in a running state forever."""
+
+    code = "JOB_ABANDONED"

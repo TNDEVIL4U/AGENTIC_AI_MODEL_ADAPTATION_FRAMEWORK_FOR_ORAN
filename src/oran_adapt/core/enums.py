@@ -19,13 +19,17 @@ class JobStatus(StrEnum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     ROLLED_BACK = "ROLLED_BACK"
+    # The job ran past Settings.job_timeout_s and its worker process was killed.
+    TIMED_OUT = "TIMED_OUT"
     # Written by releases before Phase 14; kept so older job rows still load. Never entered now.
     ANALYZING = "ANALYZING"
     MODEL_COMPARISON = "MODEL_COMPARISON"
     DECISION_MADE = "DECISION_MADE"
 
 
-TERMINAL_STATUSES = frozenset({JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ROLLED_BACK})
+TERMINAL_STATUSES = frozenset(
+    {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ROLLED_BACK, JobStatus.TIMED_OUT}
+)
 
 
 class Strategy(StrEnum):

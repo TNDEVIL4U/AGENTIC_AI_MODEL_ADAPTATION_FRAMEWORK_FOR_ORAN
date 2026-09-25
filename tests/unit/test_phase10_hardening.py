@@ -29,6 +29,7 @@ from oran_adapt.db.models import (
     DatasetMetadata,
     DataVersion,
     ModelDataAssociation,
+    ModelLock,
     ModelMetadata,
 )
 from oran_adapt.orchestrator.jobs import submit_adaptation_job
@@ -205,7 +206,7 @@ def test_transient_failure_is_retried_then_succeeds(
 
     monkeypatch.setattr(jobs_module, "run_adaptation_job", fake_run_adaptation_job)
     settings = migrated_settings.model_copy(
-        update={"job_max_retries": 3, "job_retry_backoff_s": 0.01}
+        update={"job_max_retries": 3, "job_retry_backoff_s": 0.01, "job_execution_mode": "thread"}
     )
     event = DriftEvent(model_id="flaky-model", drift_detected=False, event_id="evt-flaky")
 
@@ -227,7 +228,7 @@ def test_retries_exhausted_marks_job_failed(
 
     monkeypatch.setattr(jobs_module, "run_adaptation_job", always_fails)
     settings = migrated_settings.model_copy(
-        update={"job_max_retries": 2, "job_retry_backoff_s": 0.01}
+        update={"job_max_retries": 2, "job_retry_backoff_s": 0.01, "job_execution_mode": "thread"}
     )
     event = DriftEvent(model_id="down-model", drift_detected=False, event_id="evt-down")
 
@@ -260,7 +261,9 @@ def test_non_retryable_failure_fails_without_retry(
         raise ModelNotFoundError("no such model", model="ghost-model")
 
     monkeypatch.setattr(jobs_module, "run_adaptation_job", fails_deterministically)
-    settings = migrated_settings.model_copy(update={"job_max_retries": 3})
+    settings = migrated_settings.model_copy(
+        update={"job_max_retries": 3, "job_execution_mode": "thread"}
+    )
     event = DriftEvent(model_id="ghost-model", drift_detected=True, event_id="evt-ghost")
 
     result = submit_adaptation_job(
@@ -274,7 +277,7 @@ def test_non_retryable_failure_fails_without_retry(
 
 
 # ---- timeout -------------------------------------------------------------------------------
-def test_job_exceeding_timeout_is_recorded_failed(
+def test_thread_mode_job_exceeding_timeout_is_recorded_timed_out(
     session_factory, migrated_settings, tmp_path, monkeypatch
 ) -> None:
     import time as time_module
@@ -285,7 +288,7 @@ def test_job_exceeding_timeout_is_recorded_failed(
 
     monkeypatch.setattr(jobs_module, "run_adaptation_job", slow_run)
     settings = migrated_settings.model_copy(
-        update={"job_timeout_s": 0.2, "job_max_retries": 0}
+        update={"job_timeout_s": 0.2, "job_max_retries": 0, "job_execution_mode": "thread"}
     )
     event = DriftEvent(model_id="slow-model", drift_detected=False, event_id="evt-slow")
 
@@ -297,7 +300,7 @@ def test_job_exceeding_timeout_is_recorded_failed(
     elapsed = time_module.monotonic() - start
 
     assert elapsed < 1.5  # the call returned well before the 2s worker sleep finished
-    assert result.status == JobStatus.FAILED
+    assert result.status == JobStatus.TIMED_OUT
     assert result.error["code"] == "JOB_TIMEOUT"
 
 
@@ -379,3 +382,149 @@ def test_api_submit_event_and_idempotent_resubmit(client, migrated_settings) -> 
     j2 = r2.json()
     assert j2["duplicate"] is True
     assert j2["job_id"] == j1["job_id"]
+
+
+# ---- process mode (the default): a real worker process per attempt ----------------------------
+# The pipeline stand-ins below live at module level so the spawned worker can import them by
+# name; each patches jobs_module.run_adaptation_job, which the parent looks up per attempt.
+def _heartbeat_pipeline(session, event, settings, *, registry, llm_client, workdir):
+    """Writes a growing counter every 0.1s for up to a minute, then a 'finished' marker."""
+    import os
+    import time
+
+    os.makedirs(workdir, exist_ok=True)
+    beat = os.path.join(workdir, "heartbeat")
+    for i in range(600):
+        with open(beat, "w", encoding="utf-8") as f:
+            f.write(str(i))
+        time.sleep(0.1)
+    with open(os.path.join(workdir, "finished"), "w", encoding="utf-8") as f:
+        f.write("done")
+    return JobResult(model_id=event.model_id, outcome="NO_ACTION", reason="should never get here")
+
+
+def _flaky_pipeline(session, event, settings, *, registry, llm_client, workdir):
+    """Fails with a transient error on its first two attempts; the count lives on disk
+    because every attempt is a new process."""
+    import os
+
+    os.makedirs(workdir, exist_ok=True)
+    counter = os.path.join(workdir, "attempts")
+    n = 1
+    if os.path.exists(counter):
+        with open(counter, encoding="utf-8") as f:
+            n = int(f.read()) + 1
+    with open(counter, "w", encoding="utf-8") as f:
+        f.write(str(n))
+    if n < 3:
+        raise RegistryUnavailableError("mlflow flaked", cause="injected", attempt=n)
+    return JobResult(model_id=event.model_id, outcome="NO_ACTION", reason=f"ok on attempt {n}")
+
+
+def _ghost_pipeline(session, event, settings, *, registry, llm_client, workdir):
+    raise ModelNotFoundError("no such model", model="ghost-model")
+
+
+def test_process_mode_timeout_kills_the_worker_and_records_timed_out(
+    session_factory, migrated_settings, tmp_path, monkeypatch
+) -> None:
+    import time as time_module
+
+    monkeypatch.setattr(jobs_module, "run_adaptation_job", _heartbeat_pipeline)
+    # Long enough for the worker to start up (it imports the whole stack: ~18s on the 16 GB
+    # dev laptop) and begin beating, well short of the worker's full minute.
+    settings = migrated_settings.model_copy(update={"job_timeout_s": 40.0, "job_max_retries": 0})
+    assert settings.job_execution_mode == "process"
+    event = DriftEvent(model_id="stuck-model", drift_detected=False, event_id="evt-stuck")
+
+    start = time_module.monotonic()
+    result = submit_adaptation_job(
+        session_factory, event, settings, registry=None, llm_client=None,
+        workdir=str(tmp_path / "work"),
+    )
+    elapsed = time_module.monotonic() - start
+
+    assert result.status == JobStatus.TIMED_OUT
+    assert result.error["code"] == "JOB_TIMEOUT"
+    assert result.error["context"]["last_stage"] == "DATA_PREPARING"
+    assert "needs_reconciliation" not in result.error["context"]
+    assert elapsed < 55  # returned at the timeout, not after the worker's full minute
+
+    job_dir = tmp_path / "work" / result.job_id
+    beat = job_dir / "heartbeat"
+    assert beat.exists(), "the worker never started beating before the timeout"
+    before = beat.read_text(encoding="utf-8")
+    time_module.sleep(1.0)
+    assert beat.read_text(encoding="utf-8") == before  # the worker is dead, not detached
+    assert not (job_dir / "finished").exists()
+
+    with session_scope(session_factory) as session:
+        assert session.get(ModelLock, "stuck-model") is None  # released once the worker died
+        job = session.query(AdaptationJob).filter_by(job_id=result.job_id).one()
+        assert job.status == "TIMED_OUT"
+
+
+def test_process_mode_retries_transient_failures_across_worker_processes(
+    session_factory, migrated_settings, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(jobs_module, "run_adaptation_job", _flaky_pipeline)
+    settings = migrated_settings.model_copy(
+        update={"job_max_retries": 3, "job_retry_backoff_s": 0.01}
+    )
+    event = DriftEvent(model_id="flaky-proc", drift_detected=False, event_id="evt-flaky-proc")
+
+    result = submit_adaptation_job(
+        session_factory, event, settings, registry=None, llm_client=None,
+        workdir=str(tmp_path / "work"),
+    )
+
+    assert result.status == JobStatus.COMPLETED, result.error
+    assert result.result["reason"] == "ok on attempt 3"
+    attempts = (tmp_path / "work" / result.job_id / "attempts").read_text(encoding="utf-8")
+    assert attempts == "3"
+    with session_scope(session_factory) as session:
+        messages = [
+            e.message for e in session.query(AdaptationEvent).filter_by(job_id=result.job_id)
+        ]
+    assert sum("retry" in m and "MLFLOW_UNAVAILABLE" in m for m in messages) == 2
+
+
+def test_process_mode_keeps_the_error_class_and_context_of_a_worker_failure(
+    session_factory, migrated_settings, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(jobs_module, "run_adaptation_job", _ghost_pipeline)
+    settings = migrated_settings.model_copy(update={"job_max_retries": 3})
+    event = DriftEvent(model_id="ghost-proc", drift_detected=True, event_id="evt-ghost-proc")
+
+    result = submit_adaptation_job(
+        session_factory, event, settings, registry=None, llm_client=None,
+        workdir=str(tmp_path / "work"),
+    )
+
+    assert result.status == JobStatus.FAILED
+    assert result.error["code"] == "MODEL_NOT_FOUND"
+    assert result.error["context"] == {"model": "ghost-model"}
+    with session_scope(session_factory) as session:
+        messages = [
+            e.message for e in session.query(AdaptationEvent).filter_by(job_id=result.job_id)
+        ]
+    assert not any("retry" in m for m in messages)  # deterministic: never retried
+
+
+def test_process_mode_refuses_inputs_that_cannot_reach_a_worker(
+    session_factory, migrated_settings, tmp_path, monkeypatch
+) -> None:
+    def local_fake(session, event, settings, *, registry, llm_client, workdir):
+        raise AssertionError("must never run")
+
+    monkeypatch.setattr(jobs_module, "run_adaptation_job", local_fake)
+    event = DriftEvent(model_id="local-model", drift_detected=False, event_id="evt-local")
+
+    result = submit_adaptation_job(
+        session_factory, event, migrated_settings, registry=None, llm_client=None,
+        workdir=str(tmp_path / "work"),
+    )
+
+    assert result.status == JobStatus.FAILED
+    assert result.error["code"] == "CONFIGURATION_ERROR"
+    assert "JOB_EXECUTION_MODE=thread" in result.error["context"]["hint"]

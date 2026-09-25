@@ -73,6 +73,106 @@ HTTP_REQUESTS = Counter(
 HTTP_DURATION = Histogram(
     "http_request_duration_seconds", "HTTP request latency.", ["method", "route"]
 )
+DRIFT_EVENTS = Counter(
+    "drift_events_total",
+    "Drift events analysed, by the analysis outcome (REUSE, PACKAGED, INSUFFICIENT_DATA).",
+    ["outcome"],
+)
+STRATEGY_SELECTED = Counter(
+    "strategy_selected_total",
+    "Adaptation strategies chosen, by strategy and by what chose it (constraint, LLM, fallback).",
+    ["strategy", "source"],
+)
+REGISTRATIONS = Counter("model_registrations_total", "Candidate model versions registered.")
+PROMOTIONS = Counter(
+    "model_promotions_total", "Live-alias moves applied, by kind (promotion, reuse, rollback).", ["kind"]
+)
+JOB_TIMEOUTS = Counter(
+    "job_timeouts_total",
+    "Adaptation jobs recorded TIMED_OUT, by the stage their worker had reached when killed.",
+    ["stage"],
+)
+
+# The metrics a job's worker process can move. A worker runs in its own process with its own
+# registry, so it reports how far each of these moved (delta_since) and the parent, which
+# serves /metrics, applies that (apply_delta). A worker killed on a timeout reports nothing.
+_FORWARDED = (
+    DRIFT_EVENTS,
+    STRATEGY_SELECTED,
+    REGISTRATIONS,
+    PROMOTIONS,
+    MODEL_REUSE,
+    FINE_TUNE,
+    RETRAIN,
+    ROLLBACK,
+    VALIDATION_FAILURE,
+    MODEL_EVALUATION_DURATION,
+    CDC_EVENTS,
+    LLM_REQUESTS,
+    LLM_FAILURES,
+    SANDBOX_FAILURES,
+)
+_BY_NAME = {family.name: metric for metric in _FORWARDED for family in metric.describe()}
+
+MetricDelta = list[tuple[str, str, dict[str, str], float]]
+
+
+def _values() -> dict[tuple[str, str, tuple], float]:
+    out: dict[tuple[str, str, tuple], float] = {}
+    for metric in _FORWARDED:
+        for family in metric.collect():
+            for s in family.samples:
+                if s.name.endswith(("_total", "_bucket", "_sum")):
+                    out[(family.name, s.name, tuple(sorted(s.labels.items())))] = s.value
+    return out
+
+
+def snapshot() -> dict[tuple[str, str, tuple], float]:
+    """The forwarded metrics' sample values now, to diff against later with delta_since."""
+    return _values()
+
+
+def delta_since(before: dict[tuple[str, str, tuple], float]) -> MetricDelta:
+    """How far each forwarded sample moved since ``before``, as plain picklable tuples."""
+    return [
+        (family, sample, dict(labels), value - before.get((family, sample, labels), 0.0))
+        for (family, sample, labels), value in _values().items()
+        if value != before.get((family, sample, labels), 0.0)
+    ]
+
+
+def apply_delta(delta: MetricDelta) -> None:
+    """Add a worker's delta_since result to this process's metrics. Counters get the same
+    increments; histograms get the same per-bucket counts and sum, so nothing is estimated."""
+    histograms: dict[tuple[str, tuple], dict] = {}
+    for family, sample, labels, amount in delta:
+        metric = _BY_NAME.get(family)
+        if metric is None or amount <= 0:
+            continue
+        if sample.endswith("_total"):
+            if isinstance(metric, Counter):
+                (metric.labels(**labels) if labels else metric).inc(amount)
+            continue
+        plain = tuple(sorted((k, v) for k, v in labels.items() if k != "le"))
+        entry = histograms.setdefault((family, plain), {"buckets": {}, "sum": 0.0})
+        if sample.endswith("_bucket"):
+            entry["buckets"][float(labels["le"])] = amount
+        else:
+            entry["sum"] = amount
+    for (family, plain), entry in histograms.items():
+        metric = _BY_NAME[family]
+        if not isinstance(metric, Histogram):
+            continue
+        child = metric.labels(**dict(plain)) if plain else metric
+        # Bucket samples are cumulative; the child keeps one counter per bucket. These are
+        # prometheus_client internals (stable since 0.4) - there is no public "add counts" API.
+        cumulative = 0.0
+        for i, bound in enumerate(child._upper_bounds):
+            count = entry["buckets"].get(bound, cumulative)
+            if count > cumulative:
+                child._buckets[i].inc(count - cumulative)
+            cumulative = max(cumulative, count)
+        child._sum.inc(entry["sum"])
 
 
 def render() -> tuple[bytes, str]:

@@ -34,6 +34,9 @@ class FeatureComparison:
     ks_statistic: float
     ks_pvalue: float
     psi: float
+    # Rows behind this feature's statistics in each segment (a row may lack a feature).
+    n_historical: int = 0
+    n_drifted: int = 0
 
 
 @dataclass
@@ -111,6 +114,8 @@ def compare_segments(merged: MergedSeries) -> ComparisonResult:
                 ks_statistic=float(stats.ks_2samp(h, d).statistic),
                 ks_pvalue=drift[(feature, "ks")],
                 psi=drift[(feature, "psi")],
+                n_historical=int(h.size),
+                n_drifted=int(d.size),
             )
         )
 

@@ -38,10 +38,14 @@ class Settings(BaseSettings):
     # Phase 10 hardening: the job wrapper retries a job up to job_max_retries times (exponential
     # backoff starting at job_retry_backoff_s) when the pipeline raises a transient error
     # (MLflow or PostgreSQL unreachable), and gives the whole pipeline run at most job_timeout_s
-    # wall-clock seconds before recording the job FAILED with a JOB_TIMEOUT error.
+    # wall-clock seconds before recording the job TIMED_OUT with a JOB_TIMEOUT error.
     job_max_retries: int = Field(2, ge=0)
     job_retry_backoff_s: float = Field(1.0, ge=0)
     job_timeout_s: float = Field(600.0, gt=0)
+    # "process" (the default): each attempt runs in its own worker process, which is killed when
+    # it exceeds job_timeout_s. "thread": runs in this process and cannot be stopped on a
+    # timeout - only for tests or debugging that inject in-process fakes.
+    job_execution_mode: Literal["process", "thread"] = "process"
 
     # Member 1 (analysis) reuse thresholds. A feature is treated as "shifted" once its PSI
     # crosses analysis_psi_reuse_threshold OR its KS test p-value drops below
@@ -50,6 +54,9 @@ class Settings(BaseSettings):
     analysis_psi_reuse_threshold: float = Field(0.1, ge=0)
     analysis_ks_pvalue_reuse_threshold: float = Field(0.05, gt=0, lt=1)
     analysis_drift_score_reuse_threshold: float = Field(0.3, ge=0, le=1)
+    # PSI alone counts a feature as shifted only with at least this many rows in both segments;
+    # below it, only a significant KS test does (PSI on a few rows is noise).
+    analysis_min_psi_rows: int = Field(30, ge=2)
 
     # Member 1 historical version reuse. Once drift is confirmed, every registered version (the
     # newest reuse_max_versions of them) is scored on the held-out newest drifted rows. A non-live
@@ -113,6 +120,10 @@ class Settings(BaseSettings):
         ]
     )
 
+    # Largest model artifact (file or directory) downloaded, loaded or registered; a bigger one is
+    # refused with ARTIFACT_ERROR before it is deserialized.
+    artifact_max_bytes: int = Field(2 * 1024**3, ge=1024)
+
     # Torch engine budgets (full-batch Adam steps). A from-scratch retrain needs far more steps
     # than a warm-start fine-tune to get back to the current model's quality.
     torch_fine_tune_epochs: int = Field(5, ge=1)
@@ -125,6 +136,10 @@ class Settings(BaseSettings):
     # (`oran-adapt auth new-key` makes a key and its entry). With auth enabled and no keys
     # configured, every protected endpoint refuses (fail closed). /health, /readiness and, with
     # metrics_public, /metrics need no key.
+    # Largest request body the API accepts (dataset uploads send their records as JSON); a
+    # bigger one is refused with 413 REQUEST_TOO_LARGE before it is read in full.
+    api_max_request_bytes: int = Field(10 * 1024 * 1024, ge=1024)
+
     auth_enabled: bool = True
     api_keys: dict[str, str] = Field(default_factory=dict)
     metrics_public: bool = True

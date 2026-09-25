@@ -5,6 +5,7 @@ learned instead of discarding it, which is the whole point of fine-tuning over f
 from __future__ import annotations
 
 import os
+from typing import Protocol, cast
 
 import joblib
 import pandas as pd
@@ -13,6 +14,11 @@ from sklearn.metrics import accuracy_score, mean_squared_error
 from oran_adapt.adaptation.schemas import CandidateModel
 from oran_adapt.core.enums import EngineKind
 from oran_adapt.core.errors import ArtifactError, UnsupportedAdaptationError
+
+
+class _IncrementalModel(Protocol):
+    def partial_fit(self, X: pd.DataFrame, y: pd.Series) -> object: ...
+    def predict(self, X: pd.DataFrame) -> object: ...
 
 
 def fine_tune_sklearn(
@@ -30,8 +36,9 @@ def fine_tune_sklearn(
             f"{type(current_model).__name__} has no partial_fit - cannot fine-tune"
         )
 
+    model = cast(_IncrementalModel, current_model)  # partial_fit checked just above
     try:
-        current_model.partial_fit(X, y)
+        model.partial_fit(X, y)
     except Exception as exc:
         raise ArtifactError(
             f"fine-tuning failed during partial_fit on {type(current_model).__name__}",
@@ -39,7 +46,7 @@ def fine_tune_sklearn(
         ) from exc
 
     metrics: dict[str, float] = {}
-    predictions = current_model.predict(X)
+    predictions = model.predict(X)
     if estimator_type == "classifier":
         metrics["accuracy"] = float(accuracy_score(y, predictions))
     elif estimator_type == "regressor":

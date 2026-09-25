@@ -134,9 +134,9 @@ def persist_current_data(
     there are no rows to freeze. The caller commits."""
     if not records:
         return None
-    sources = [session.get(DataVersion, i) for i in source_version_ids]
-    sources = [s for s in sources if s is not None]
-    dataset = session.get(DatasetMetadata, sources[0].dataset_id)
+    looked_up = [session.get(DataVersion, i) for i in source_version_ids]
+    sources = [s for s in looked_up if s is not None]
+    dataset = session.get_one(DatasetMetadata, sources[0].dataset_id)
 
     frame = pd.DataFrame([r.payload for r in records])
     stamps = [_utc(r.observed_at) for r in records]
@@ -179,7 +179,7 @@ def persist_current_data(
     )
     session.add(row)
     session.flush()
-    dv = session.get(DataVersion, info.data_version_id)
+    dv = session.get_one(DataVersion, info.data_version_id)
     return _as_dict(row, dv, dataset.dataset_id)
 
 
@@ -189,8 +189,8 @@ def get_current_data(session: Session, current_data_id: str) -> dict | None:
     ).scalar_one_or_none()
     if row is None:
         return None
-    dv = session.get(DataVersion, row.data_version_id)
-    dataset = session.get(DatasetMetadata, dv.dataset_id)
+    dv = session.get_one(DataVersion, row.data_version_id)
+    dataset = session.get_one(DatasetMetadata, dv.dataset_id)
     return _as_dict(row, dv, dataset.dataset_id)
 
 
@@ -201,7 +201,7 @@ def list_current_data(session: Session, *, model_id: str | None = None, limit: i
     rows = session.execute(query).scalars().all()
     out = []
     for row in rows:
-        dv = session.get(DataVersion, row.data_version_id)
-        dataset = session.get(DatasetMetadata, dv.dataset_id)
+        dv = session.get_one(DataVersion, row.data_version_id)
+        dataset = session.get_one(DatasetMetadata, dv.dataset_id)
         out.append(_as_dict(row, dv, dataset.dataset_id))
     return out

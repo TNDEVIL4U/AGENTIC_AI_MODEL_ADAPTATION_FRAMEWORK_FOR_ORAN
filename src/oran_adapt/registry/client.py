@@ -193,6 +193,7 @@ class MlflowRegistry:
         for a model that cannot be serialized safely, RegistryUnavailableError when MLflow
         itself fails."""
         import mlflow
+        from mlflow.data.pandas_dataset import from_pandas
 
         fw = framework.lower()
         if fw not in ("sklearn", "xgboost", "torch", "pytorch"):
@@ -204,9 +205,7 @@ class MlflowRegistry:
         try:
             with self._fluent_uris(), mlflow.start_run():
                 if input_frame is not None:
-                    dataset = mlflow.data.from_pandas(
-                        input_frame, name=input_name, digest=input_digest
-                    )
+                    dataset = from_pandas(input_frame, name=input_name, digest=input_digest)
                     mlflow.log_input(dataset, context="training")
                 if fw == "sklearn":
                     info = mlflow.sklearn.log_model(

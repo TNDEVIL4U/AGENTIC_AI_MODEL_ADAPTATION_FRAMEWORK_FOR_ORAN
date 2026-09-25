@@ -8,6 +8,7 @@ F1, ROC-AUC, MAE, R2, sMAPE, silhouette, ...) by validation.metrics."""
 from __future__ import annotations
 
 import warnings
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -28,11 +29,11 @@ from oran_adapt.validation.metrics import compute_metrics, primary_metric, resol
 _TORCH_LIKE = {"torch", "pytorch"}
 
 
-def _predict_sklearn_like(model: object, X: pd.DataFrame):
+def _predict_sklearn_like(model: Any, X: pd.DataFrame):
     return model.predict(X)
 
 
-def _predict_torch(model: object, X: pd.DataFrame, estimator_type: str):
+def _predict_torch(model: Any, X: pd.DataFrame, estimator_type: str):
     import torch
 
     model.eval()

@@ -15,6 +15,9 @@ class Decision(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str
     compatible_strategies: list[Strategy] = Field(default_factory=list)
+    # Every strategy that was considered and not chosen, with the reason: ruled out by a hard
+    # constraint, or compatible but passed over by whichever source chose.
+    rejected_strategies: dict[Strategy, str] = Field(default_factory=dict)
     source: Literal["HARD_CONSTRAINT", "LLM", "FALLBACK"]
     # Filled in deterministically by decision.report for every source, so an LLM-made choice
     # is explained by the same measured evidence as a rule-made one.

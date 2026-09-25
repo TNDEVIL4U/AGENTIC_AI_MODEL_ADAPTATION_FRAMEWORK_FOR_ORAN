@@ -26,7 +26,11 @@ def _inspect_sklearn_like(model: object, framework: str) -> ModelInspection:
         estimator_type = "outlier_detector"
 
     feature_names = getattr(model, "feature_names_in_", None)
-    params = model.get_params() if hasattr(model, "get_params") else {}
+    steps = getattr(model, "steps", None)  # sklearn Pipeline: [(name, transformer), ..., final]
+    preprocessing = [type(t).__name__ for _, t in steps[:-1]] if steps else []
+    final = steps[-1][1] if steps else model
+    params = final.get_params() if hasattr(final, "get_params") else {}
+    classes = getattr(model, "classes_", None)
 
     return ModelInspection(
         framework=framework,
@@ -36,6 +40,8 @@ def _inspect_sklearn_like(model: object, framework: str) -> ModelInspection:
         feature_names_in=list(feature_names) if feature_names is not None else None,
         supports_partial_fit=hasattr(model, "partial_fit"),
         supports_warm_start=bool(params.get("warm_start", False)),
+        preprocessing_steps=preprocessing,
+        classes=[str(c) for c in classes] if classes is not None else None,
     )
 
 
