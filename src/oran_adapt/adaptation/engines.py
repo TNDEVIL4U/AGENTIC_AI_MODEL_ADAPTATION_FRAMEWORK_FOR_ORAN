@@ -6,6 +6,8 @@ fine-tune/full-retrain).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, cast
+
 import pandas as pd
 
 from oran_adapt.adaptation.finetune import fine_tune_sklearn
@@ -14,6 +16,9 @@ from oran_adapt.adaptation.schemas import CandidateModel, CapabilityAssessment, 
 from oran_adapt.adaptation.torch_engine import fine_tune_torch, full_retrain_torch
 from oran_adapt.core.enums import EngineKind, Strategy
 from oran_adapt.core.errors import UnsupportedAdaptationError
+
+if TYPE_CHECKING:
+    from torch import nn
 
 _TORCH_LIKE = {"torch", "pytorch"}
 
@@ -111,9 +116,11 @@ def run_engine(
             estimator_type=inspection.estimator_type,
             artifact_dir=artifact_dir,
         )
+    # Only the budgets the caller set; the rest keep the torch engines' own defaults.
+    lr_kw: dict[str, Any] = {"lr": torch_learning_rate} if torch_learning_rate else {}
     if engine == EngineKind.TORCH_FULL_RETRAIN:
         return full_retrain_torch(
-            current_model,
+            cast("nn.Module", current_model),
             X=X,
             y=y,
             feature_names=feature_names,
@@ -121,11 +128,11 @@ def run_engine(
             estimator_type=inspection.estimator_type,
             artifact_dir=artifact_dir,
             **({"epochs": torch_full_retrain_epochs} if torch_full_retrain_epochs else {}),
-            **({"lr": torch_learning_rate} if torch_learning_rate else {}),
+            **lr_kw,
         )
     if engine == EngineKind.TORCH_FINE_TUNE:
         return fine_tune_torch(
-            current_model,
+            cast("nn.Module", current_model),
             X=X,
             y=y,
             feature_names=feature_names,
@@ -133,6 +140,6 @@ def run_engine(
             estimator_type=inspection.estimator_type,
             artifact_dir=artifact_dir,
             **({"epochs": torch_fine_tune_epochs} if torch_fine_tune_epochs else {}),
-            **({"lr": torch_learning_rate} if torch_learning_rate else {}),
+            **lr_kw,
         )
     raise AssertionError(f"unreachable: engine {engine} passed the support check above")

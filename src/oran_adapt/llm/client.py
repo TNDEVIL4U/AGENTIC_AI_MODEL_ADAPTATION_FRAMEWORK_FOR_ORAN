@@ -42,7 +42,9 @@ class AnthropicLlmClient:
                 "Anthropic completion failed", provider="anthropic", cause=str(exc)
             ) from exc
         text = "".join(
-            block.text for block in response.content if getattr(block, "type", None) == "text"
+            getattr(block, "text", "")
+            for block in response.content
+            if getattr(block, "type", None) == "text"
         )
         if not text:
             raise LlmUnavailableError(

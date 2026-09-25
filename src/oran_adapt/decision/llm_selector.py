@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from oran_adapt.analysis.schemas import DecisionPackage
 from oran_adapt.core.enums import Strategy
@@ -32,9 +32,14 @@ _SYSTEM_PROMPT = (
 
 
 class LlmStrategyChoice(BaseModel):
+    """The only shape an LLM answer is accepted in: exactly these three fields, strictly typed.
+    Anything else - extra keys, prose, a strategy name inside a sentence - is rejected."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     strategy: Strategy
     confidence: float = Field(ge=0.0, le=1.0)
-    rationale: str
+    rationale: str = Field(min_length=1, max_length=2000)
 
 
 def _build_user_prompt(package: DecisionPackage, compatible: list[Strategy]) -> str:
@@ -75,6 +80,9 @@ def _build_user_prompt(package: DecisionPackage, compatible: list[Strategy]) -> 
             for e in package.version_evaluations
         ],
         "reuse_verdict": package.reuse_decision.verdict if package.reuse_decision else None,
+        "drift_summary": (
+            package.drift_summary.model_dump(mode="json") if package.drift_summary else None
+        ),
         "constraints": {"device": "cpu", "one_job_per_model": True},
         "compatible_strategies": [s.value for s in compatible],
     }
@@ -106,7 +114,8 @@ def select_strategy_via_llm(
         return None
 
     try:
-        choice = LlmStrategyChoice.model_validate(_extract_json(raw))
+        # strict=True would refuse the enum from its JSON string, so validate in JSON mode.
+        choice = LlmStrategyChoice.model_validate_json(json.dumps(_extract_json(raw)))
     except (json.JSONDecodeError, ValidationError) as exc:
         logger.warning(
             "LLM response failed validation, falling back to deterministic selection",

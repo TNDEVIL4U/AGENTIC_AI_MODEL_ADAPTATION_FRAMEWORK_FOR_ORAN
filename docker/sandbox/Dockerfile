@@ -21,6 +21,14 @@ RUN apt-get update \
     scikit-learn==1.9.1 \
     xgboost==3.4.1 \
     torch==2.14.0 \
-    joblib==1.6.0
+    joblib==1.6.0 \
+    skops==0.15.0 \
+    safetensors==0.8.0
+
+# Non-root by default. On Linux run_in_docker overrides this with --user <host uid:gid> so the
+# bind-mounted workdir stays writable; it also passes --read-only, --cap-drop ALL and
+# --security-opt no-new-privileges.
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin sandbox
+USER 10001
 
 WORKDIR /sandbox

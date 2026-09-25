@@ -33,6 +33,8 @@ def allowed_next(status: JobStatus) -> frozenset[JobStatus]:
     if status in TERMINAL_STATUSES:
         return frozenset()
     nxt = set(_ALLOWED.get(status, frozenset({S.FAILED})))
+    # A timeout can strike at any stage that is still running.
+    nxt.add(S.TIMED_OUT)
     if status not in (S.RECEIVED, S.VALIDATING):
         nxt.add(_RETRY_TARGET)
     return frozenset(nxt)

@@ -6,9 +6,8 @@ laptop) and write their output to reports/:
 2. pip-audit  - known vulnerabilities in the pinned runtime dependencies (requirements.lock,
                 i.e. exactly what the Docker image installs). Fails on any advisory that is not
                 listed, with a reason, in ACCEPTED_VULNS below.
-3. mypy       - type check of src/ (settings in pyproject.toml). The code predates the type
-                check, so it is a ratchet: fails only if the error count rises above
-                MYPY_BASELINE. Lower the baseline whenever errors are fixed.
+3. mypy       - type check of src/ (settings in pyproject.toml). A ratchet that is now at
+                zero: fails if the error count rises above MYPY_BASELINE.
 4. SBOM       - CycloneDX JSON bill of materials of requirements.lock (reports/sbom.cdx.json).
 
 Needs the security extra:  pip install -e ".[security]"
@@ -36,7 +35,7 @@ ACCEPTED_VULNS = {
         "file APIs. oran-adapt never imports nltk or calls those APIs; no fixed release yet."
     ),
 }
-MYPY_BASELINE = 50  # errors in pre-existing code on 2026-09-24; must not grow
+MYPY_BASELINE = 0  # was 50 on 2026-09-24; all fixed the same day - keep it at 0
 
 
 def _run(name: str, cmd: list[str]) -> subprocess.CompletedProcess[str]:

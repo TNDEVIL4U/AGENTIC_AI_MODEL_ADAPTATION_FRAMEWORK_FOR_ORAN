@@ -10,6 +10,20 @@ from oran_adapt.adaptation.schemas import CapabilityAssessment, ModelInspection,
 def assess_schema_compatibility(
     inspection: ModelInspection, feature_names: list[str]
 ) -> SchemaCompatibility:
+    expected_width = inspection.input_dim
+    if not inspection.feature_names_in and expected_width is not None:
+        if expected_width != len(feature_names):
+            return SchemaCompatibility(
+                compatible=False,
+                reason=(
+                    f"model expects {expected_width} input features, the data has "
+                    f"{len(feature_names)}"
+                ),
+            )
+        return SchemaCompatibility(
+            compatible=True,
+            reason=f"input width {expected_width} matches the {len(feature_names)} features",
+        )
     if not inspection.feature_names_in:
         return SchemaCompatibility(
             compatible=True,

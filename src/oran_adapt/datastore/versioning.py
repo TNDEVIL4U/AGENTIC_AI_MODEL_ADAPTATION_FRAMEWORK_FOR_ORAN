@@ -465,12 +465,15 @@ def snapshot_training_data(
     from the previous baseline, and link it to the new model version as TRAINING data. The next
     drift event for this model is then compared against the data the *live* model actually
     learned from, instead of the stale pre-adaptation baseline."""
-    sources = [session.get(DataVersion, i) for i in source_version_ids]
-    if not sources or any(s is None for s in sources):
+    looked_up = [session.get(DataVersion, i) for i in source_version_ids]
+    sources = [s for s in looked_up if s is not None]
+    if not sources or len(sources) != len(looked_up):
         raise ArtifactError("cannot snapshot training data: unknown source data version",
                             source_version_ids=source_version_ids)
-    anchor = session.get(DataVersion, parent_version_id) if parent_version_id else sources[0]
-    dataset = session.get(DatasetMetadata, anchor.dataset_id)
+    anchor = (
+        session.get_one(DataVersion, parent_version_id) if parent_version_id else sources[0]
+    )
+    dataset = session.get_one(DatasetMetadata, anchor.dataset_id)
 
     rows = session.execute(
         select(DataRecord)

@@ -87,9 +87,9 @@ These run one after another and write their output to `reports/` (ignored by git
 
 | Check | Gate | Result on 2026-09-24 |
 |-------|------|----------------------|
-| bandit (`src/`) | no MEDIUM/HIGH | 0 high, 0 medium, 3 low (subprocess use in the sandbox runner: list arguments, no shell). B101 `assert` is skipped with a reason in `pyproject.toml` |
+| bandit (`src/`) | no MEDIUM/HIGH | 0 high, 0 medium, 5 low, all in `sandbox/runner.py` (B404/B603/B607: it starts the sandbox subprocess and `docker`, always with a fixed argument list and no shell; reviewed and accepted). B101 `assert` is skipped with a reason in `pyproject.toml` |
 | pip-audit (`requirements.lock`) | no advisory unless accepted | 0 open advisories. 1 accepted: `PYSEC-2026-3740` in nltk (a dependency of evidently; oran-adapt never uses nltk; no fixed version exists) |
-| mypy (`src/`) | error count must not rise above the baseline | 50 errors = baseline 50 (pre-existing, mostly Optional narrowing). Lower `MYPY_BASELINE` as they are fixed |
+| mypy (`src/`) | error count must not rise above the baseline | **0 errors, baseline 0** (84 files). The 50 earlier errors were fixed by narrowing and explicit checks, with no global disables and no new `type: ignore` |
 | SBOM | must generate | CycloneDX JSON, 154 components, `reports/sbom.cdx.json` |
 
 The local development virtualenv's pip was upgraded from 25.2, which pip-audit flags, to 26.2.1

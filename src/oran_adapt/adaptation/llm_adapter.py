@@ -29,7 +29,8 @@ _SYSTEM_PROMPT = (
     "when that is reasonable for its framework; otherwise fit a fresh model of the same kind. "
     "You may only import from: numpy, pandas, sklearn, xgboost, torch, math, json. "
     "Never use eval, exec, compile, __import__, open, input, os, sys, subprocess, socket, or any "
-    "dunder attribute such as __globals__ or __subclasses__ - the code runs in a restricted "
+    "dunder attribute such as __globals__ or __subclasses__, no str.format (use f-strings), no "
+    "file reads or writes, and no dataset downloads - the code runs in a restricted "
     "sandbox that rejects all of these before execution. "
     "Respond with ONLY the Python code defining `adapt`, no markdown fences, no prose."
 )
@@ -71,6 +72,7 @@ def adapt_via_llm(
     workdir: str,
     sandbox_backend: str = "subprocess",
     sandbox_docker_image: str = "",
+    skops_trusted_types: tuple[str, ...] | list[str] | None = None,
 ) -> CandidateModel:
     """Raises LlmUnavailableError if the LLM can't be reached, UnsafeCodeError if its code fails
     the security scan, or SandboxExecutionError if the (safe) code fails to run. Never catches
@@ -99,6 +101,7 @@ def adapt_via_llm(
             workdir=workdir,
             backend=sandbox_backend,
             docker_image=sandbox_docker_image,
+            skops_trusted_types=skops_trusted_types,
         )
     except SandboxExecutionError:
         metrics.SANDBOX_FAILURES.labels("execution").inc()

@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from oran_adapt.core.enums import EngineKind
+from oran_adapt.core.enums import EngineKind, Strategy
 
 
 class ModelInspection(BaseModel):
@@ -26,6 +26,10 @@ class ModelInspection(BaseModel):
     n_parameters: int | None = None
     input_dim: int | None = None
     output_dim: int | None = None
+    # Transforms applied before the final estimator (an sklearn Pipeline's earlier steps): the
+    # model expects raw features and does its own preprocessing.
+    preprocessing_steps: list[str] = Field(default_factory=list)
+    classes: list[str] | None = None  # a classifier's labels, as strings
 
 
 class SchemaCompatibility(BaseModel):
@@ -54,3 +58,7 @@ class CandidateModel(BaseModel):
     n_train_rows: int
     feature_names: list[str]
     target_column: str
+    # What was actually carried out, when it differs from the decision (a FINE_TUNING decision
+    # the artifact cannot support natively runs as FULL_RETRAINING), and why.
+    applied_strategy: Strategy | None = None
+    adaptation_note: str = ""

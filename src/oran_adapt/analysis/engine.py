@@ -21,6 +21,7 @@ from oran_adapt.analysis.schemas import (
     DecisionPackage,
     FeatureShift,
 )
+from oran_adapt.analysis.summary import summarize_drift
 from oran_adapt.core.config import Settings
 from oran_adapt.core.schemas import DriftEvent
 
@@ -63,6 +64,7 @@ def analyze(
         psi_threshold=settings.analysis_psi_reuse_threshold,
         ks_pvalue_threshold=settings.analysis_ks_pvalue_reuse_threshold,
         drift_score_threshold=settings.analysis_drift_score_reuse_threshold,
+        min_psi_rows=settings.analysis_min_psi_rows,
     )
 
     if assessment.reuse:
@@ -73,6 +75,7 @@ def analyze(
             reason=assessment.reason,
         )
 
+    recent_performance = {p.metric_name: p.value for p in context.recent_performance}
     package = DecisionPackage(
         model_id=event.model_id,
         model_type=context.model.model_type,
@@ -86,7 +89,15 @@ def analyze(
         max_psi=comparison.max_psi,
         min_ks_pvalue=comparison.min_ks_pvalue,
         merge_overlap_count=merged.overlap_count,
-        recent_performance={p.metric_name: p.value for p in context.recent_performance},
+        recent_performance=recent_performance,
+        drift_summary=summarize_drift(
+            comparison,
+            merged,
+            settings=settings,
+            framework=context.model.framework,
+            recent_performance=recent_performance,
+            previous_version=live_version,
+        ),
     )
     return AnalysisResult(
         status="PACKAGED",

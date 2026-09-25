@@ -11,6 +11,7 @@ None otherwise.
 
 from __future__ import annotations
 
+from oran_adapt.analysis.reuse import is_shifted
 from oran_adapt.analysis.schemas import DecisionPackage, VersionEvaluation
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy
@@ -40,6 +41,21 @@ def _rows(package: DecisionPackage) -> tuple[int, int]:
     hist = package.historical_data.row_count if package.historical_data else 0
     drift = package.drifted_data.row_count if package.drifted_data else 0
     return hist, drift
+
+
+def _affected(package: DecisionPackage, settings: Settings) -> list[str]:
+    if package.drift_summary is not None:
+        return list(package.drift_summary.affected_features)
+    return [
+        f.feature
+        for f in package.feature_shifts
+        if is_shifted(
+            f,
+            psi_threshold=settings.analysis_psi_reuse_threshold,
+            ks_pvalue_threshold=settings.analysis_ks_pvalue_reuse_threshold,
+            min_psi_rows=settings.analysis_min_psi_rows,
+        )
+    ]
 
 
 def _fallback(strategy: Strategy, compatible: list[Strategy]) -> Strategy | None:
@@ -88,7 +104,10 @@ def explain_decision(decision: Decision, package: DecisionPackage, settings: Set
     level, how = _COST_LEVEL.get(decision.strategy, ("NONE", "nothing is trained or promoted"))
     train_rows = hist_rows + drift_rows if trains else 0
 
+    summary = package.drift_summary
+    # Entries the selection step recorded (e.g. the LLM's own confidence) are kept.
     evidence = {
+        **decision.evidence,
         "task_type": package.task_type,
         "framework": package.framework,
         "model_type": package.model_type,
@@ -96,11 +115,11 @@ def explain_decision(decision: Decision, package: DecisionPackage, settings: Set
         "severity": str(event.severity) if event.severity else None,
         "max_psi": package.max_psi,
         "min_ks_pvalue": package.min_ks_pvalue,
-        "drifted_features": [
-            f.feature
-            for f in package.feature_shifts
-            if f.psi >= settings.analysis_psi_reuse_threshold
-        ],
+        # The features Member 1 found statistically shifted (KS, or PSI on enough rows).
+        "drifted_features": _affected(package, settings),
+        "drift_summary": (
+            package.drift_summary.model_dump(mode="json") if package.drift_summary else None
+        ),
         "historical_rows": hist_rows,
         "drifted_rows": drift_rows,
         "reuse_verdict": package.reuse_decision.verdict if package.reuse_decision else None,
@@ -108,6 +127,30 @@ def explain_decision(decision: Decision, package: DecisionPackage, settings: Set
         "live_degradation": live.degradation if live else None,
         "versions_scored": len(package.version_evaluations),
         "recent_performance": package.recent_performance,
+        "model_capability": dict(summary.capabilities) if summary else None,
+        "drift_magnitude": (
+            {
+                "max_psi": summary.max_psi,
+                "mean_psi": summary.mean_psi,
+                "min_ks_pvalue": summary.min_ks_pvalue,
+                "n_affected": summary.n_affected,
+                "affected_share": summary.affected_share,
+                "significant_features": list(summary.significant_features),
+            }
+            if summary
+            else None
+        ),
+        "data_availability": (
+            {
+                "historical_rows": summary.historical_rows,
+                "drifted_rows": summary.drifted_rows,
+                "late_rows": summary.late_rows,
+                "sample_sufficient": summary.sample_sufficient,
+                "note": summary.sample_note,
+            }
+            if summary
+            else None
+        ),
     }
     thresholds = {
         "min_drifted_rows": settings.decision_min_drifted_rows,

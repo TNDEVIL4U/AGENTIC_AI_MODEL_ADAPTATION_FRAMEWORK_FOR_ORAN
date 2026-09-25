@@ -12,9 +12,11 @@ backend which cannot run on this machine.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import uuid
 from collections.abc import Callable
 
 import joblib
@@ -22,6 +24,11 @@ import pandas as pd
 
 from oran_adapt.core.errors import SandboxExecutionError
 
+# The inputs are pickled by this (trusted) process, so unpickling them inside the sandbox is
+# safe. The output travels the other way: it is written by untrusted code, so it is saved in a
+# format that cannot execute code when loaded (skops, xgboost's UBJSON, safetensors) plus a small
+# JSON manifest, and _load_output reads it back with the matching safe loader. The parent never
+# unpickles anything the sandbox wrote.
 _SCRIPT_TEMPLATE = """\
 import joblib
 
@@ -32,9 +39,39 @@ y = inputs["y"]
 
 {code}
 
-result = adapt(current_model, X, y)
-joblib.dump(result, {output_path!r})
+def _oran_write_output(result, out_dir):
+    import json
+    import os
+    import sys
+
+    torch = sys.modules.get("torch")
+    if torch is not None and isinstance(result, torch.nn.Module):
+        from safetensors.torch import save_file
+
+        tensors = {{k: v.detach().cpu().contiguous() for k, v in result.state_dict().items()}}
+        save_file(tensors, os.path.join(out_dir, "output.safetensors"))
+        fmt = "torch_state_dict"
+    elif type(result).__module__.split(".")[0] == "xgboost":
+        result.save_model(os.path.join(out_dir, "output.ubj"))
+        fmt = "xgboost"
+    else:
+        import skops.io as sio
+
+        sio.dump(result, os.path.join(out_dir, "output.skops"))
+        fmt = "skops"
+    with open(os.path.join(out_dir, "output.json"), "w", encoding="utf-8") as f:
+        json.dump({{"format": fmt, "class": type(result).__name__}}, f)
+
+_oran_write_output(adapt(current_model, X, y), {output_dir!r})
 """
+
+_OUTPUT_FILES = {
+    "skops": "output.skops",
+    "xgboost": "output.ubj",
+    "torch_state_dict": "output.safetensors",
+}
+_XGBOOST_CLASSES = ("XGBClassifier", "XGBRegressor", "XGBRanker", "Booster")
+_MANIFEST_MAX_BYTES = 4096
 
 # Only what the interpreter and its installed packages actually need to start correctly - never
 # the parent's full environment, which may hold API keys, DB credentials, etc. VIRTUAL_ENV and
@@ -73,6 +110,77 @@ def _memory_limit_preexec(memory_mb: int) -> Callable[[], None] | None:
     return _apply
 
 
+def _trusted(types: tuple[str, ...] | list[str] | None) -> tuple[str, ...] | list[str]:
+    if types is not None:
+        return types
+    from oran_adapt.registry.client import DEFAULT_SKOPS_TRUSTED_TYPES
+
+    return DEFAULT_SKOPS_TRUSTED_TYPES
+
+
+def _load_output(
+    workdir: str, current_model: object, skops_trusted_types: tuple[str, ...] | list[str]
+) -> object:
+    """Read back the model the sandbox produced, using only loaders that cannot execute code.
+    Raises SandboxExecutionError when the output is missing, malformed, or needs a type that is
+    not trusted."""
+    manifest_path = os.path.join(workdir, "output.json")
+    if not os.path.exists(manifest_path):
+        raise SandboxExecutionError("sandbox script produced no output artifact")
+    if os.path.getsize(manifest_path) > _MANIFEST_MAX_BYTES:
+        raise SandboxExecutionError("sandbox output manifest is too large")
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+        fmt, cls = manifest["format"], manifest["class"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise SandboxExecutionError("sandbox output manifest is malformed", cause=str(exc)) from exc
+    if fmt not in _OUTPUT_FILES:
+        raise SandboxExecutionError("sandbox output has an unknown format", format=str(fmt))
+    path = os.path.join(workdir, _OUTPUT_FILES[fmt])
+    if not os.path.exists(path):
+        raise SandboxExecutionError("sandbox output artifact is missing", format=fmt)
+
+    try:
+        if fmt == "skops":
+            import skops.io as sio
+
+            untrusted = sio.get_untrusted_types(file=path)
+            refused = sorted(set(untrusted) - set(skops_trusted_types))
+            if refused:
+                raise SandboxExecutionError(
+                    "sandbox output needs types that are not trusted", types=refused
+                )
+            return sio.load(path, trusted=untrusted)
+        if fmt == "xgboost":
+            import xgboost
+
+            if cls not in _XGBOOST_CLASSES:
+                raise SandboxExecutionError("sandbox output is not an xgboost model", cls=cls)
+            model = getattr(xgboost, cls)()
+            model.load_model(path)
+            return model
+        # torch_state_dict: weights only, loaded into a copy of the current architecture.
+        import copy
+
+        import torch
+        from safetensors.torch import load_file
+
+        if not isinstance(current_model, torch.nn.Module):
+            raise SandboxExecutionError(
+                "sandbox returned torch weights but the current model is not a torch module"
+            )
+        model = copy.deepcopy(current_model)
+        model.load_state_dict(load_file(path), strict=True)
+        return model
+    except SandboxExecutionError:
+        raise
+    except Exception as exc:
+        raise SandboxExecutionError(
+            "sandbox output artifact could not be loaded", format=fmt, cause=str(exc)
+        ) from exc
+
+
 def run_in_sandbox(
     code: str,
     *,
@@ -82,24 +190,27 @@ def run_in_sandbox(
     timeout_s: int,
     memory_mb: int,
     workdir: str,
+    skops_trusted_types: tuple[str, ...] | list[str] | None = None,
 ) -> object:
     """Runs ``code`` (which must define ``adapt(current_model, X, y) -> model``) in a fresh
     subprocess and returns the model it produced. Raises SandboxExecutionError on timeout,
-    resource-limit violation, non-zero exit, or a missing/unreadable result - never lets a
-    subprocess failure surface as a raw OSError/TimeoutExpired to the caller."""
+    resource-limit violation, non-zero exit, or a missing/unreadable/untrusted result - never
+    lets a subprocess failure surface as a raw OSError/TimeoutExpired to the caller."""
     os.makedirs(workdir, exist_ok=True)
     inputs_path = os.path.join(workdir, "inputs.joblib")
-    output_path = os.path.join(workdir, "output.joblib")
     script_path = os.path.join(workdir, "script.py")
 
     joblib.dump({"current_model": current_model, "X": X, "y": y}, inputs_path)
-    script = _SCRIPT_TEMPLATE.format(code=code, inputs_path=inputs_path, output_path=output_path)
+    script = _SCRIPT_TEMPLATE.format(
+        code=code, inputs_path=inputs_path, output_dir=os.path.abspath(workdir)
+    )
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(script)
 
     try:
         proc = subprocess.run(
-            [sys.executable, script_path],
+            # -P: the workdir is not put on sys.path, so a planted module cannot shadow imports.
+            [sys.executable, "-P", script_path],
             cwd=workdir,
             capture_output=True,
             text=True,
@@ -120,15 +231,16 @@ def run_in_sandbox(
             stderr=proc.stderr[-4000:],
         )
 
-    if not os.path.exists(output_path):
-        raise SandboxExecutionError("sandbox script produced no output artifact")
+    return _load_output(workdir, current_model, _trusted(skops_trusted_types))
 
-    try:
-        return joblib.load(output_path)
-    except Exception as exc:
-        raise SandboxExecutionError(
-            "sandbox output artifact could not be loaded", cause=str(exc)
-        ) from exc
+
+def _docker_user() -> list[str]:
+    """Run the container as the host user that owns the bind-mounted workdir, so the sandbox
+    can write its output without being root. Docker Desktop (Windows/macOS) maps bind-mount
+    ownership itself; there the image's own non-root USER applies."""
+    if hasattr(os, "getuid"):
+        return ["--user", f"{os.getuid()}:{os.getgid()}"]
+    return []
 
 
 def run_in_docker(
@@ -141,6 +253,7 @@ def run_in_docker(
     memory_mb: int,
     workdir: str,
     image: str,
+    skops_trusted_types: tuple[str, ...] | list[str] | None = None,
 ) -> object:
     """The Phase 0 audit's "stronger isolation" backend: a real container boundary (its own
     filesystem and network namespace, an enforced memory cgroup on every OS - not just POSIX -
@@ -156,20 +269,22 @@ def run_in_docker(
     itself when `docker` is absent, exercises it, and only when Docker is installed."""
     os.makedirs(workdir, exist_ok=True)
     inputs_path = os.path.join(workdir, "inputs.joblib")
-    output_path = os.path.join(workdir, "output.joblib")
     script_path = os.path.join(workdir, "script.py")
 
     joblib.dump({"current_model": current_model, "X": X, "y": y}, inputs_path)
     script = _SCRIPT_TEMPLATE.format(
-        code=code, inputs_path="/sandbox/inputs.joblib", output_path="/sandbox/output.joblib"
+        code=code, inputs_path="/sandbox/inputs.joblib", output_dir="/sandbox"
     )
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(script)
 
+    container = f"oran-sandbox-{uuid.uuid4().hex[:12]}"
     cmd = [
         "docker",
         "run",
         "--rm",
+        "--name",
+        container,
         "--network",
         "none",
         "--memory",
@@ -178,17 +293,33 @@ def run_in_docker(
         f"{memory_mb}m",
         "--pids-limit",
         "128",
+        "--cpus",
+        "1",
+        "--read-only",
+        "--tmpfs",
+        # The container's own private in-memory /tmp, not a host temp path.
+        "/tmp:rw,noexec,nosuid,size=64m",  # nosec B108
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        *_docker_user(),
         "-v",
         f"{os.path.abspath(workdir)}:/sandbox",
         "-w",
         "/sandbox",
         image,
         "python",
+        "-P",
         "script.py",
     ]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, check=False)
     except subprocess.TimeoutExpired as exc:
+        # Killing the docker CLI does not stop the container: remove it explicitly.
+        subprocess.run(
+            ["docker", "rm", "-f", container], capture_output=True, timeout=60, check=False
+        )
         raise SandboxExecutionError(
             "docker sandbox execution exceeded the timeout", timeout_s=timeout_s
         ) from exc
@@ -204,15 +335,7 @@ def run_in_docker(
             stderr=proc.stderr[-4000:],
         )
 
-    if not os.path.exists(output_path):
-        raise SandboxExecutionError("docker sandbox script produced no output artifact")
-
-    try:
-        return joblib.load(output_path)
-    except Exception as exc:
-        raise SandboxExecutionError(
-            "docker sandbox output artifact could not be loaded", cause=str(exc)
-        ) from exc
+    return _load_output(workdir, current_model, _trusted(skops_trusted_types))
 
 
 def run_sandboxed(
@@ -226,6 +349,7 @@ def run_sandboxed(
     workdir: str,
     backend: str,
     docker_image: str = "",
+    skops_trusted_types: tuple[str, ...] | list[str] | None = None,
 ) -> object:
     """Dispatches to `run_in_docker` or `run_in_sandbox` by `backend` ("docker" or
     "subprocess") - the one entry point `adaptation.llm_adapter` calls, so it never chooses
@@ -240,6 +364,7 @@ def run_sandboxed(
             memory_mb=memory_mb,
             workdir=workdir,
             image=docker_image,
+            skops_trusted_types=skops_trusted_types,
         )
     return run_in_sandbox(
         code,
@@ -249,4 +374,5 @@ def run_sandboxed(
         timeout_s=timeout_s,
         memory_mb=memory_mb,
         workdir=workdir,
+        skops_trusted_types=skops_trusted_types,
     )

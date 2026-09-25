@@ -66,6 +66,7 @@ def authenticate(request: Request) -> Principal:
     if cached is not None:
         return cached
     settings = request.app.state.settings
+    principal: Principal | None
     if not settings.auth_enabled:
         principal = Principal(name="anonymous", role=Role.ADMIN)
     else:

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import time
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -23,6 +26,61 @@ from oran_adapt.core.logging import configure_logging
 from oran_adapt.db.base import create_db_engine, make_session_factory
 from oran_adapt.llm.client import build_llm_client
 from oran_adapt.registry.client import MlflowRegistry
+
+logger = logging.getLogger(__name__)
+
+
+class BodySizeLimitMiddleware:
+    """Refuses a request body larger than ``max_bytes`` with a structured 413, whether the
+    client declares its size (Content-Length) or streams it chunked, so an oversized upload is
+    never buffered in full."""
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        declared = dict(scope.get("headers") or []).get(b"content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > self.max_bytes):
+            await self._refuse(scope, receive, send)
+            return
+        seen = {"bytes": 0, "too_large": False, "refused": False}
+
+        async def _receive() -> Message:
+            if seen["too_large"]:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            message = await receive()
+            if message["type"] == "http.request":
+                seen["bytes"] += len(message.get("body", b""))
+                if seen["bytes"] > self.max_bytes:
+                    # Stop reading here. Raising would be turned into a 400 by the framework's
+                    # body parser, so the app is handed an empty end of body instead and
+                    # whatever it answers is replaced by the 413 below.
+                    seen["too_large"] = True
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        async def _send(message: Message) -> None:
+            if not seen["too_large"]:
+                await send(message)
+            elif not seen["refused"]:
+                seen["refused"] = True
+                await self._refuse(scope, receive, send)
+
+        await self.app(scope, _receive, _send)
+        if seen["too_large"] and not seen["refused"]:
+            await self._refuse(scope, receive, send)
+
+    async def _refuse(self, scope: Scope, receive: Receive, send: Send) -> None:
+        body = {
+            "code": "REQUEST_TOO_LARGE",
+            "message": f"request body exceeds {self.max_bytes} bytes",
+            "context": {"max_bytes": self.max_bytes},
+        }
+        await JSONResponse(status_code=413, content=body)(scope, receive, send)
 
 
 class RequestContextMiddleware:
@@ -44,14 +102,29 @@ class RequestContextMiddleware:
         status = {"code": 500}
         started = time.perf_counter()
 
+        started_response = {"sent": False}
+
         async def _send(message: Message) -> None:
             if message["type"] == "http.response.start":
+                started_response["sent"] = True
                 status["code"] = message["status"]
                 MutableHeaders(scope=message).append(correlation.HEADER, cid)
             await send(message)
 
         try:
             await self.app(scope, receive, _send)
+        except Exception:
+            # The traceback goes to the server log under the correlation id; the caller only
+            # gets the id to quote, never the exception text or stack (paths, secrets).
+            logger.exception("unhandled error serving request")
+            if started_response["sent"]:
+                raise
+            body = {
+                "code": "INTERNAL_ERROR",
+                "message": "internal server error",
+                "context": {"correlation_id": cid},
+            }
+            await JSONResponse(status_code=500, content=body)(scope, receive, _send)
         finally:
             route = getattr(scope.get("route"), "path", "unmatched")
             method = scope.get("method", "")
@@ -74,11 +147,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         skops_trusted_types=settings.mlflow_skops_trusted_types,
     )
     app.state.llm_client = build_llm_client(settings)
+    # Added first so it runs innermost: an oversized request still gets a correlation id and
+    # is counted in the HTTP metrics by RequestContextMiddleware.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.api_max_request_bytes)
     app.add_middleware(RequestContextMiddleware)
 
     @app.exception_handler(AdaptationError)
     async def _adaptation_error(_: Request, exc: AdaptationError) -> JSONResponse:
         return JSONResponse(status_code=_status_for(exc), content=exc.to_dict())
+
+    @app.exception_handler(RequestValidationError)
+    async def _invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
+        # Only where and why - never the offending input, which may carry data or secrets.
+        errors = [
+            {"loc": [str(p) for p in e.get("loc", ())], "msg": e.get("msg"), "type": e.get("type")}
+            for e in exc.errors()
+        ]
+        body = {
+            "code": "INVALID_REQUEST",
+            "message": "request failed validation",
+            "context": {"errors": errors},
+        }
+        return JSONResponse(status_code=422, content=json.loads(json.dumps(body, default=str)))
 
     # Any role may read; write endpoints add their own stricter role check.
     authenticated = [Depends(require_roles(*READ_ROLES))]

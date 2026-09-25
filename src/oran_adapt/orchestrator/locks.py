@@ -11,8 +11,9 @@ conditional UPDATE, which again only one caller can win.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
-from sqlalchemy import delete, update
+from sqlalchemy import CursorResult, delete, update
 from sqlalchemy.orm import Session
 
 from oran_adapt.db.models import ModelLock
@@ -25,10 +26,13 @@ def _now() -> datetime:
 def take_over_expired_lock(session: Session, model_id: str, job_id: str, ttl_s: float) -> bool:
     """Hand an expired lock to ``job_id``. True if it was expired and is now ours."""
     now = _now()
-    result = session.execute(
-        update(ModelLock)
-        .where(ModelLock.model_id == model_id, ModelLock.expires_at < now)
-        .values(job_id=job_id, acquired_at=now, expires_at=now + timedelta(seconds=ttl_s))
+    result = cast(
+        CursorResult,
+        session.execute(
+            update(ModelLock)
+            .where(ModelLock.model_id == model_id, ModelLock.expires_at < now)
+            .values(job_id=job_id, acquired_at=now, expires_at=now + timedelta(seconds=ttl_s))
+        ),
     )
     return result.rowcount == 1
 

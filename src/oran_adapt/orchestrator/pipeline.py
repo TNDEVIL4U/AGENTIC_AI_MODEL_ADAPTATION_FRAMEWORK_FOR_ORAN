@@ -17,6 +17,7 @@ orchestrator.context.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
@@ -44,6 +45,7 @@ from oran_adapt.analysis.version_eval import evaluate_versions
 from oran_adapt.core import metrics
 from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
+from oran_adapt.core.correlation import get_correlation_id
 from oran_adapt.core.enums import (
     AuditAction,
     EngineKind,
@@ -60,7 +62,7 @@ from oran_adapt.core.errors import (
     UnsafeCodeError,
     UnsupportedAdaptationError,
 )
-from oran_adapt.core.integrity import sha256_file, verify_checksum
+from oran_adapt.core.integrity import check_size, sha256_file, verify_checksum
 from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.datastore.current_data import clean_records, persist_current_data
 from oran_adapt.datastore.versioning import snapshot_training_data
@@ -72,6 +74,8 @@ from oran_adapt.orchestrator.schemas import JobResult
 from oran_adapt.registry.client import MlflowRegistry
 from oran_adapt.registry.promotion import current_live, promote_version, verify_version_artifact
 from oran_adapt.validation.engine import validate_candidate
+
+logger = logging.getLogger(__name__)
 
 _ADAPTING_STRATEGIES = (Strategy.FINE_TUNING, Strategy.FULL_RETRAINING)
 
@@ -90,12 +94,24 @@ def _produce_candidate(
     workdir: str,
 ) -> CandidateModel:
     """Try the built-in engine registry first; only fall back to the LLM sandbox adapter when
-    the registry genuinely has nothing for this (strategy, framework, capability) combination."""
+    the registry genuinely has nothing for this (strategy, framework, capability) combination.
+
+    Fine-tuning happens only when the artifact technically supports it: an artifact with no
+    incremental-update mechanism, or one whose mechanism no native engine uses while no LLM is
+    configured, is fully retrained instead, and the candidate records why."""
     capability = assess_capability(inspection, list(X.columns))
-    try:
-        engine = select_engine(decision_strategy, framework, capability)
+    strategy, note = decision_strategy, ""
+    if (
+        strategy == Strategy.FINE_TUNING
+        and not capability.supports_fine_tuning
+        and capability.supports_full_retraining
+    ):
+        strategy = Strategy.FULL_RETRAINING
+        note = f"fine-tuning is not supported ({capability.reason}); fully retrained instead"
+
+    def _native(chosen: Strategy) -> CandidateModel:
         return run_engine(
-            engine,
+            select_engine(chosen, framework, capability),
             current_model,
             inspection=inspection,
             X=X,
@@ -106,10 +122,24 @@ def _produce_candidate(
             torch_full_retrain_epochs=settings.torch_full_retrain_epochs,
             torch_learning_rate=settings.torch_learning_rate,
         )
+
+    def _applied(candidate: CandidateModel, chosen: Strategy, why: str) -> CandidateModel:
+        if why:
+            logger.warning("%s", why)
+        return candidate.model_copy(update={"applied_strategy": chosen, "adaptation_note": why})
+
+    try:
+        return _applied(_native(strategy), strategy, note)
     except UnsupportedAdaptationError:
         if llm_client is None:
+            if strategy == Strategy.FINE_TUNING and capability.supports_full_retraining:
+                note = (
+                    f"{inspection.model_class} can only be fine-tuned through the LLM adapter "
+                    "(no native fine-tuning engine) and no LLM is configured; fully retrained"
+                )
+                return _applied(_native(Strategy.FULL_RETRAINING), Strategy.FULL_RETRAINING, note)
             raise
-        return adapt_via_llm(
+        candidate = adapt_via_llm(
             llm_client,
             current_model,
             framework=framework,
@@ -122,7 +152,9 @@ def _produce_candidate(
             workdir=os.path.join(workdir, "llm"),
             sandbox_backend=settings.sandbox_backend,
             sandbox_docker_image=settings.sandbox_docker_image,
+            skops_trusted_types=settings.mlflow_skops_trusted_types,
         )
+        return _applied(candidate, strategy, note)
 
 
 def _stage(session: Session, status: JobStatus, message: str = "") -> None:
@@ -229,6 +261,7 @@ def run_adaptation_job(
 
     analysis = analyze(session, event, settings, live_version=live_version)
     assert model_meta is not None  # analyze() raised ModelNotFoundError otherwise
+    metrics.DRIFT_EVENTS.labels(outcome=analysis.status).inc()
 
     if analysis.status in ("REUSE", "INSUFFICIENT_DATA"):
         return JobResult(
@@ -241,6 +274,7 @@ def run_adaptation_job(
     package = analysis.decision_package
     assert package is not None  # PACKAGED always carries one
     target = model_meta.target_column
+    framework = model_meta.framework
 
     # CurrentData: clean the source rows (conflicts, deletions, duplicates, missing targets,
     # timestamp order), then hold out the newest drifted rows (all sources when there is no
@@ -295,20 +329,20 @@ def run_adaptation_job(
 
     evaluations: list[VersionEvaluation] = []
     reuse: ReuseDecision | None = None
-    can_evaluate = (
+    if (
         settings.reuse_enabled
         and target is not None
         and live_version is not None
+        and framework is not None
         and len(holdout_frame) >= settings.validation_min_rows
         and target in holdout_frame.columns
-    )
-    if can_evaluate:
+    ):
         _stage(session, JobStatus.EVALUATING_VERSIONS, "scoring registered versions")
         eval_started = time.perf_counter()
         evaluations = evaluate_versions(
             registry,
             mlflow_name=model_meta.mlflow_model_name,
-            framework=model_meta.framework,
+            framework=framework,
             target_column=target,
             live_version=live_version,
             data=holdout_frame,
@@ -367,6 +401,9 @@ def run_adaptation_job(
         update={"version_evaluations": evaluations, "reuse_decision": reuse}
     )
     decision = decide(package, settings, llm_client)
+    metrics.STRATEGY_SELECTED.labels(
+        strategy=decision.strategy.value, source=decision.source
+    ).inc()
     _audit(
         session,
         AuditAction.ADAPTATION_DECISION_CREATED,
@@ -419,10 +456,19 @@ def run_adaptation_job(
     (metrics.FINE_TUNE if fine_tune else metrics.RETRAIN).inc()
     _stage(session, JobStatus.ADAPTING, f"{decision.strategy.value} from version {live_version}")
     local_path, _ = verify_version_artifact(
-        registry, model_meta.mlflow_model_name, live_version, os.path.join(workdir, "current")
+        registry,
+        model_meta.mlflow_model_name,
+        live_version,
+        os.path.join(workdir, "current"),
+        max_bytes=settings.artifact_max_bytes,
     )
-    current_model = load_native_model(local_path, model_meta.framework)
-    inspection = inspect_model(current_model, model_meta.framework)
+    if framework is None:
+        raise ArtifactError(
+            f"model '{event.model_id}' has no framework on record; cannot load it to adapt",
+            model_id=event.model_id,
+        )
+    current_model = load_native_model(local_path, framework)
+    inspection = inspect_model(current_model, framework)
 
     train_records = [r for r in records if r.id not in holdout_ids]
     feature_names = inspection.feature_names_in or [
@@ -441,7 +487,7 @@ def run_adaptation_job(
             decision.strategy,
             current_model,
             inspection=inspection,
-            framework=model_meta.framework,
+            framework=framework,
             X=X,
             y=y,
             target_column=target,
@@ -472,6 +518,7 @@ def run_adaptation_job(
             )
         session.commit()
         raise
+    check_size(candidate.artifact_path, settings.artifact_max_bytes, stage="candidate")
     candidate_sha = sha256_file(candidate.artifact_path)
     if candidate.engine == EngineKind.LLM_GENERATED:
         _audit(
@@ -503,6 +550,9 @@ def run_adaptation_job(
         model_version=live_version,
         metadata={
             "engine": candidate.engine.value,
+            "applied_strategy": str(candidate.applied_strategy or decision.strategy),
+            "adaptation_note": candidate.adaptation_note,
+            "inspection": inspection.model_dump(mode="json"),
             "holdout_rows": len(Xv),
             "current_data_id": current_data_id,
             "leakage": leakage.model_dump(),
@@ -514,7 +564,7 @@ def run_adaptation_job(
         model_id=event.model_id,
         X=Xv,
         y=yv,
-        current_framework=model_meta.framework,
+        current_framework=framework,
         estimator_type=inspection.estimator_type,
         settings=settings,
         task_type=model_meta.task_type,
@@ -568,7 +618,10 @@ def run_adaptation_job(
             "oran.event_id": event.event_id or "",
             "oran.job_id": current_job_id() or "",
             "oran.status": ModelVersionStatus.VALIDATED.value,
+            "oran.correlation_id": get_correlation_id() or "",
             "adaptation.strategy": decision.strategy.value,
+            "adaptation.applied_strategy": str(candidate.applied_strategy or decision.strategy),
+            "adaptation.note": candidate.adaptation_note[:500],
             "adaptation.engine": candidate.engine.value,
             "candidate.sha256": candidate_sha,
             "validation.metric": report.metric_name,
@@ -579,6 +632,7 @@ def run_adaptation_job(
             "data.source_versions": ",".join(ref.version for ref in source_versions),
         },
     )
+    metrics.REGISTRATIONS.inc()
     registry.record_artifact_checksum(name, new_version, os.path.join(workdir, "registered"))
     _audit(
         session,

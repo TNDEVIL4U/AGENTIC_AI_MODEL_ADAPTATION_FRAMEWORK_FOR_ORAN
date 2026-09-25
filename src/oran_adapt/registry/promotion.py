@@ -33,7 +33,12 @@ from oran_adapt.core.errors import (
     ModelNotFoundError,
     PromotionError,
 )
-from oran_adapt.core.integrity import sha256_path, verify_checksum
+from oran_adapt.core.integrity import (
+    DEFAULT_ARTIFACT_MAX_BYTES,
+    check_size,
+    sha256_path,
+    verify_checksum,
+)
 from oran_adapt.core.logging import log_event
 from oran_adapt.db.models import ModelMetadata, ModelPromotion
 from oran_adapt.registry.client import MlflowRegistry
@@ -89,12 +94,18 @@ def current_live(registry: MlflowRegistry, name: str, alias: str) -> str | None:
 
 
 def verify_version_artifact(
-    registry: MlflowRegistry, name: str, version: str, workdir: str
+    registry: MlflowRegistry,
+    name: str,
+    version: str,
+    workdir: str,
+    *,
+    max_bytes: int = DEFAULT_ARTIFACT_MAX_BYTES,
 ) -> tuple[str, str]:
-    """Download ``version``, check its checksum against the registration-time tag, and return
-    ``(local_path, sha256)``. Records the checksum when the version has none yet."""
+    """Download ``version``, check its size and its checksum against the registration-time
+    tag, and return ``(local_path, sha256)``. Records the checksum when the version has none."""
     info = registry.get_version(name, version)
     local = registry.download_artifacts(name, version, os.path.join(workdir, f"verify-{version}"))
+    check_size(local, max_bytes, model=name, version=version)
     expected = (info.tags or {}).get(CHECKSUM_TAG)
     if expected:
         verify_checksum(local, expected, model=name, version=version)
@@ -238,6 +249,7 @@ def promote_version(
             cause=exc.message if isinstance(exc, AdaptationError) else str(exc),
         ) from exc
 
+    metrics.PROMOTIONS.labels(kind=kind.value).inc()
     if kind is PromotionKind.ROLLBACK:
         metrics.ROLLBACK.labels("manual").inc()
     log_event(
@@ -328,6 +340,12 @@ def rollback_model(
     local, _ = verify_version_artifact(
         registry, meta.mlflow_model_name, target_version, os.path.join(workdir, "rollback")
     )
+    if meta.framework is None:
+        raise ArtifactError(
+            f"model '{model_id}' has no framework on record; cannot check the rollback target",
+            model_id=model_id,
+            version=target_version,
+        )
     try:
         load_native_model(local, meta.framework)
     except Exception as exc:

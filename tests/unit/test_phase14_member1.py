@@ -15,6 +15,7 @@ import mlflow
 import numpy as np
 import pandas as pd
 import pytest
+from prometheus_client import REGISTRY
 from sklearn.linear_model import LogisticRegression
 from sqlalchemy import inspect as sa_inspect
 
@@ -354,6 +355,26 @@ def test_best_older_version_goes_live_without_training(
     assert "stale" in stale.result["reason"]
 
 
+_JOB_METRICS = (
+    "drift_events_total",
+    "strategy_selected_total",
+    "model_registrations_total",
+    "model_promotions_total",
+)
+
+
+def _metric_total(name: str, **labels: str) -> float:
+    """Sum of a counter's samples across all label values (or only those matching labels)."""
+    family = name.removesuffix("_total")
+    return sum(
+        s.value
+        for metric in REGISTRY.collect()
+        if metric.name == family
+        for s in metric.samples
+        if s.name == name and all(s.labels.get(k) == v for k, v in labels.items())
+    )
+
+
 # ---- demo scenario 2: nothing suitable, retrain to v4, then roll back ------------------------
 def test_no_suitable_version_retrains_to_v4_then_rollback_restores_v3(
     session_factory, registry, migrated_settings, client, tmp_path
@@ -361,6 +382,7 @@ def test_no_suitable_version_retrains_to_v4_then_rollback_restores_v3(
     _seed_three_similar(
         session_factory, registry, migrated_settings, model_id="cell-b", name="cell_b"
     )
+    before = {name: _metric_total(name) for name in _JOB_METRICS}
     job = _submit(
         session_factory, migrated_settings, registry,
         DriftEvent(model_id="cell-b", event_id="evt-retrain"), tmp_path,
@@ -376,7 +398,17 @@ def test_no_suitable_version_retrains_to_v4_then_rollback_restores_v3(
     v4 = registry.get_version("cell_b", "4").tags
     assert len(v4["artifact.sha256"]) == 64
     assert v4["oran.status"] == "LIVE"
+    # Rule 13 lineage: event, parent, strategy (decided and applied), engine, data, correlation.
+    assert v4["oran.event_id"] == "evt-retrain"
+    assert v4["oran.parent_version"] == "3"
+    assert v4["adaptation.applied_strategy"] in ("FINE_TUNING", "FULL_RETRAINING")
+    assert v4["adaptation.engine"]
+    assert len(v4["data.training_hash"]) == 64
+    assert "oran.correlation_id" in v4
     assert "ADAPTING" in _path(session_factory, job.job_id)
+    # Rule 17: the worker's drift, strategy, registration and promotion counts reach /metrics.
+    for name in _JOB_METRICS:
+        assert _metric_total(name) == before[name] + 1, name
 
     # Roll back through the API: LIVE returns to v3, the version LIVE held before v4.
     r = client.post(
@@ -388,6 +420,7 @@ def test_no_suitable_version_retrains_to_v4_then_rollback_restores_v3(
         "ROLLBACK", "4", "3", "APPLIED",
     )
     assert registry.get_version_by_alias("cell_b", migrated_settings.live_alias) == "3"
+    assert _metric_total("model_promotions_total", kind="ROLLBACK") >= 1
 
     # Resending the same rollback request changes nothing.
     again = client.post(
@@ -423,8 +456,10 @@ def test_failed_validation_leaves_live_untouched(
         return report.model_copy(update={"passed": False, "reason": "forced FAIL for test"})
 
     monkeypatch.setattr(pipeline_module, "validate_candidate", failing_validate)
+    # The patch lives in this process only, so the job must run here too.
     job = _submit(
-        session_factory, migrated_settings, registry,
+        session_factory, migrated_settings.model_copy(update={"job_execution_mode": "thread"}),
+        registry,
         DriftEvent(model_id="cell-c", event_id="evt-reject"), tmp_path,
     )
 
@@ -452,8 +487,10 @@ def test_failed_promotion_restores_live_and_marks_job_rolled_back(
         return real_tags(name, version, tags)
 
     monkeypatch.setattr(registry, "set_version_tags", flaky_tags)
+    # The patch lives in this process only, so the job must run here too.
     job = _submit(
-        session_factory, migrated_settings, registry,
+        session_factory, migrated_settings.model_copy(update={"job_execution_mode": "thread"}),
+        registry,
         DriftEvent(model_id="cell-d", event_id="evt-promo-fail"), tmp_path,
     )
 

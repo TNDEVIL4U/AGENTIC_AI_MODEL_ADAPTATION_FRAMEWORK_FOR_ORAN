@@ -13,6 +13,51 @@ that real run.
   Nothing is deleted.
 - Exit code `0` = every check passed, `1` = at least one check failed.
 
+A shorter, single-model demo, `scripts/demo.py`, is described first (section 0).
+
+---
+
+## 0. The 15-stage single-model demo (`scripts/demo.py`)
+
+```powershell
+python scripts/demo.py          # or: .\scripts\run_local.ps1 demo
+```
+
+About 1 minute, no `.env`, Docker, PostgreSQL or LLM key. It drives the real FastAPI app
+against a real SQLite database and a real SQLite-backed MLflow registry in a new folder
+`data/demo/run-<UTC time>/`. It onboards a Ridge throughput model trained on synthetic cell
+KPIs (seed 1). Then it sends one drift event whose drifted data (seed 2) shifts `prb_util` by
++3. Every stage checks what the system actually returned. A wrong result prints
+`DEMO FAILED: <reason>` and exits with code 1. Nothing is hardcoded as a result.
+
+Output of the run on 2026-09-24 (abridged; MLflow and HTTP log lines removed):
+
+```
+[ 1/15] Model onboarding        demo-cell-throughput registered in MLflow as version 1 and set LIVE
+[ 2/15] Historical data         training data version v1: 200 rows, hash 8f531f1f7054...
+[ 3/15] Drifted data            drifted data version drift-1: 200 rows, prb_util mean -0.07 -> 2.99
+[ 4/15] Drift detection         affected features: ['prb_util', 'throughput'], max PSI 11.02, min KS p-value 1.4e-88
+[ 5/15] Analysis                reuse analysis verdict: RETRAIN_MODEL (1 version(s) scored)
+[ 6/15] Strategy decision       strategy FULL_RETRAINING chosen by FALLBACK (confidence 1.00)
+[ 7/15] Adaptation              engine SKLEARN_FULL_RETRAIN, applied strategy FULL_RETRAINING
+[ 8/15] Validation              rmse: current 0.1331 -> candidate 0.1102 on 40 held-out rows
+[ 9/15] MLflow registration     version 2 registered, sha256 1820afbf0abc...
+[10/15] Promotion               LIVE moved 1 -> 2 (PROMOTE_CANDIDATE)
+[11/15] Prediction              predicted 5 drifted rows, mean absolute error 0.092
+[12/15] Lineage                 version 2 <- event demo-drift-1, parent version 1, training data train-demo-cell-throughput-v2 (from ['v1'])
+[13/15] Audit events            DRIFT_RECEIVED -> CURRENT_DATA_CREATED -> MODEL_VERSION_EVALUATED -> ADAPTATION_DECISION_CREATED -> RETRAIN_STARTED -> VALIDATION_STARTED -> VALIDATION_PASSED -> MODEL_REGISTERED -> MODEL_PROMOTED
+[14/15] Metrics                 drift_events_total +1, strategy_selected_total +1, model_registrations_total +1, model_promotions_total +1
+[15/15] Duplicate event         same event_id returned the original job; still 2 versions
+
+Demo passed: all 15 stages checked.
+```
+
+`throughput` shows up as an affected feature because the target depends on `prb_util`, so its
+distribution moves too. The hashes, job id and folder name differ between runs. The decisions
+and the metric values are the same on every run because the seeds are fixed. The
+last line of a real run prints the `mlflow ui --backend-store-uri ...` command for that run's
+registry.
+
 ---
 
 ## 1. One-time setup
