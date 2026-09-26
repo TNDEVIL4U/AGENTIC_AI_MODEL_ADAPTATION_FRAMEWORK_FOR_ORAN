@@ -54,6 +54,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from demo_torch_models import BeamMLP, EnergyMLP
+
 from oran_adapt.adaptation.data import holdout_size
 from oran_adapt.analysis.engine import analyze
 from oran_adapt.api.app import create_app
@@ -76,28 +78,6 @@ HIST, DRIFT = "hist-1", "drift-1"
 
 
 # --------------------------------------------------------------------------- demo torch models
-class BeamMLP(nn.Module):
-    """Two-class beam-selection classifier (logits out)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.net = nn.Sequential(nn.Linear(3, 16), nn.ReLU(), nn.Linear(16, 2))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
-class EnergyMLP(nn.Module):
-    """Scalar cell-energy regressor."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.net = nn.Sequential(nn.Linear(3, 16), nn.ReLU(), nn.Linear(16, 1))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
 def _train_torch(model: nn.Module, frame: pd.DataFrame, target: str, *, classifier: bool) -> nn.Module:
     X = torch.tensor(frame[FEATURES].to_numpy(), dtype=torch.float32)
     if classifier:
@@ -447,6 +427,7 @@ def run(tracking_uri: str | None) -> int:
         artifact_workdir=str(run_dir / "work"),
         log_json=False,
         log_level="WARNING",
+        auth_enabled=False,  # a local demo; see RUN.md section 3 for API keys
     )
 
     _banner("1. Migrating the database and starting the API")
