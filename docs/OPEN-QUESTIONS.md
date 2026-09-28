@@ -33,6 +33,18 @@ The Unknown-Stack Protocol asks for at least two adapters per port. These ports 
 
 Each one is still open until a second adapter lands or the question is answered.
 
+## Ports declared without an adapter
+
+`oran_adapt.ports` declares these contracts, but no adapter is registered and nothing resolves
+them yet: the code they describe still calls the datastore and the registry directly.
+`GET /api/v1/capabilities` lists them with an empty adapter list.
+
+| Port | Today | Scheduled |
+|---|---|---|
+| `dataset` | `adaptation.data.load_data_version_frame` reads the local datastore | Hardening Phase 2 |
+| `artifact_store` | artifacts go through MLflow `--serve-artifacts` via the registry adapter | Hardening Phase 3 |
+| `deployment` | "deployed" means the registry's LIVE alias (`LIVE_ALIAS`) | Hardening Phase 3 |
+
 ## Not yet behind a port
 
 - **Sandbox backend** (`SANDBOX_BACKEND`, `subprocess` or `docker`): this is a fixed choice in
