@@ -25,9 +25,9 @@ fi
 ERR_LOG="$(mktemp)"
 exec 2> >(tee -a "$ERR_LOG" >&2)
 
-annotate() {  # annotate TITLE TEXT: one ::error annotation, newlines encoded
+annotate() {  # annotate TITLE TEXT: one ::error annotation (last 30 lines), newlines encoded
   local text
-  text="$(printf '%s' "$2" | tail -n 60 | sed -e 's/%/%25/g' -e 's/\r/%0D/g' \
+  text="$(printf '%s' "$2" | tail -n 30 | sed -e 's/%/%25/g' -e 's/\r/%0D/g' \
     | sed -e ':a;N;$!ba;s/\n/%0A/g')"
   echo "::error title=$1::${text}"
 }
@@ -38,10 +38,14 @@ teardown() {
     echo "::group::compose ps (failure)"; docker compose ps -a || true; echo "::endgroup::"
     echo "::group::compose logs (failure)"; docker compose logs --no-color --tail=200 || true
     echo "::endgroup::"
-    annotate "compose_smoke exit ${rc}" "$(cat "$ERR_LOG")"
+    # Drop docker compose / buildkit progress lines so the real error fits in the annotation.
+    annotate "compose_smoke exit ${rc}" "$(grep -vE \
+      '^[[:space:]]*(Container|Volume|Network|Image|Service)[[:space:]]|^#[0-9]+ |^\[\+\]' \
+      "$ERR_LOG")"
     annotate "compose ps" "$(docker compose ps -a --format '{{.Service}} {{.State}} {{.Health}} {{.ExitCode}}' 2>&1)"
-    for svc in $(docker compose ps -a --format '{{.Service}} {{.State}} {{.Health}} {{.ExitCode}}' 2>/dev/null \
-        | awk '($2!="running" && $NF!="0") || $3=="unhealthy" || $3=="starting" {print $1}'); do
+    # The api log always (endpoint failures show there), plus any service that did not converge.
+    for svc in $( { echo api; docker compose ps -a --format '{{.Service}} {{.State}} {{.Health}} {{.ExitCode}}' 2>/dev/null \
+        | awk '($2!="running" && $NF!="0") || $3=="unhealthy" || $3=="starting" {print $1}'; } | sort -u); do
       annotate "logs: ${svc}" "$(docker compose logs --no-color --tail=40 "$svc" 2>&1)"
     done
   fi
@@ -53,6 +57,8 @@ teardown() {
   exit $rc
 }
 trap teardown EXIT
+# Name the command that failed (shown in the annotation even when its own output is quiet).
+trap 'echo "compose_smoke: failed at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 # ---- throwaway configuration ----------------------------------------------------------------
 API_KEY="$(openssl rand -hex 24)"

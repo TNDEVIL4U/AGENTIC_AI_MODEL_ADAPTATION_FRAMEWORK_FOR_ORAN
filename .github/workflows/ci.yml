@@ -14,9 +14,8 @@ on:
   pull_request:
   workflow_dispatch:
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+# No concurrency group: a new push must not cancel a still-running test job (the suite is slow),
+# so runs for successive commits overlap and each reports its own result.
 
 permissions:
   contents: read
