@@ -25,6 +25,8 @@ from oran_adapt.db.models import (
     PerformanceRecord,
 )
 
+pytestmark = pytest.mark.smoke
+
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 

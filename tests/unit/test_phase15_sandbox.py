@@ -15,6 +15,8 @@ from oran_adapt.core.errors import SandboxExecutionError, UnsafeCodeError
 from oran_adapt.sandbox import runner
 from oran_adapt.sandbox.security import check_code_safety
 
+pytestmark = pytest.mark.smoke
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # One probe per Rule 9 category.

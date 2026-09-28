@@ -4,6 +4,7 @@ big batch."""
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import func, select
 from test_phase14_stage_c import (  # shared fixtures and seeding (same test directory)
     _kpi_changes,
@@ -14,6 +15,8 @@ from test_phase14_stage_c import (  # shared fixtures and seeding (same test dir
 from oran_adapt.cdc import materialize_cdc, run_cdc_once
 from oran_adapt.db.base import session_scope
 from oran_adapt.db.models import CdcEventRecord, CdcOffset
+
+pytestmark = pytest.mark.smoke
 
 __all__ = ["polling", "session_factory"]  # fixtures re-used from test_phase14_stage_c
 

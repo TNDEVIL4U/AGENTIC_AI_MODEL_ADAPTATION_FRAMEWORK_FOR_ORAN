@@ -7,6 +7,8 @@ import pytest
 
 import oran_adapt
 
+pytestmark = pytest.mark.smoke
+
 SUBPACKAGES = [
     "core", "db", "registry", "analysis", "decision", "adaptation",
     "validation", "orchestrator", "llm", "sandbox", "api",

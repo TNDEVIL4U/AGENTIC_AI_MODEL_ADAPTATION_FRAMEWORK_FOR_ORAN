@@ -20,7 +20,7 @@ dependencies = [
 oran-adapt = "oran_adapt.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "ruff"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "pytest-xdist>=3.8", "ruff"]
 # CDC_MODE=kafka (production CDC from Debezium). Not needed for the polling fallback.
 kafka = ["confluent-kafka>=2.3"]
 # scripts/security_check.py: static security scan, dependency audit, type check, SBOM.
@@ -33,7 +33,15 @@ where = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
-markers = ["integration: needs external services (PostgreSQL/Docker)"]
+# Tiers: smoke (whole tier < 60 s), unmarked gate tests (scoped run < 5 min, scripts/verify.sh)
+# and heavy (end-to-end pipelines, worker processes; excluded by default, run in CI with
+# -m "heavy or not heavy").
+addopts = '-m "not heavy"'
+markers = [
+    "integration: needs external services (PostgreSQL/Docker)",
+    "smoke: fast unit tests, the whole tier runs in under 60 s",
+    "heavy: slow end-to-end tests; never part of a phase gate, always run in CI",
+]
 
 [tool.ruff]
 line-length = 100

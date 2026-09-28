@@ -4,6 +4,7 @@ worker metric forwarding (Rule 17)."""
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from oran_adapt.analysis.schemas import DataVersionRef, DecisionPackage, FeatureShift
@@ -13,6 +14,8 @@ from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy
 from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.decision.engine import decide
+
+pytestmark = pytest.mark.smoke
 
 
 # ---- API errors and body size -----------------------------------------------------------------

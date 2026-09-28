@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from oran_adapt.analysis.comparison import ComparisonResult, FeatureComparison, compare_segments
 from oran_adapt.analysis.merge import MergedSeries, timestamp_merge
 from oran_adapt.analysis.retrieval import DataSlice
@@ -16,6 +18,8 @@ from oran_adapt.analysis.summary import framework_capabilities, summarize_drift
 from oran_adapt.core.config import Settings
 from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.decision.engine import decide
+
+pytestmark = pytest.mark.smoke
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 THRESHOLDS = {"psi_threshold": 0.1, "ks_pvalue_threshold": 0.05, "min_psi_rows": 30}

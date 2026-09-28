@@ -174,6 +174,7 @@ def test_metrics_endpoint_exposes_the_spec_metrics(client, migrated_settings) ->
 
 
 # ---- audit trail: reuse path ------------------------------------------------------------------
+@pytest.mark.heavy
 def test_reuse_job_writes_the_spec_audit_sequence(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -222,6 +223,7 @@ def test_reuse_job_writes_the_spec_audit_sequence(
 
 
 # ---- audit trail + auth + correlation: retrain through the API, then rollback -----------------
+@pytest.mark.heavy
 def test_retrain_via_api_is_audited_with_actor_and_correlation_id(
     session_factory, registry, secured_settings, secured
 ) -> None:

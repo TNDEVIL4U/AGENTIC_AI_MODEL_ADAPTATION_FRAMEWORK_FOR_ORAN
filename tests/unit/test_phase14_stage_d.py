@@ -340,6 +340,7 @@ def test_no_training_rows_left_is_a_leakage_error(plain_settings) -> None:
 
 
 # ---- through the pipeline --------------------------------------------------------------------
+@pytest.mark.heavy
 def test_retrain_job_reports_metrics_decision_output_and_leakage(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -379,6 +380,7 @@ def test_retrain_job_reports_metrics_decision_output_and_leakage(
         assert made.detail["expected_cost"]["level"] in ("LOW", "HIGH")
 
 
+@pytest.mark.heavy
 def test_model_that_reads_its_own_target_is_never_retrained(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:

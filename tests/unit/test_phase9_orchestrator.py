@@ -194,6 +194,7 @@ def test_orchestrator_reuse_results_in_no_action(session_factory, registry, migr
 
 
 # ---- scenario 2: large drift in a non-predictive feature -> FULL_RETRAINING -> REGISTERED ----
+@pytest.mark.heavy
 def test_orchestrator_full_retrain_registers_new_version(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -232,6 +233,7 @@ def test_orchestrator_full_retrain_registers_new_version(
 
 # ---- scenario 3: smaller drift -> FINE_TUNING selected, but the artifact only has warm_start
 # (no partial_fit) -> the built-in engine can't do it -> falls back to the LLM/sandbox adapter ---
+@pytest.mark.heavy
 def test_orchestrator_llm_sandbox_fallback_registers_new_version(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:

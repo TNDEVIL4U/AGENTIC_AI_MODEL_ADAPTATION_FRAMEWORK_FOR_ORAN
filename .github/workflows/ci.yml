@@ -1,6 +1,6 @@
 # CI for every commit and pull request (Hardening Phase 0).
 #
-#   quality            ruff, mypy (ratchet at 0 errors), full pytest suite with coverage
+#   quality            ruff, mypy (ratchet at 0 errors), full pytest suite (heavy tier included)
 #   build-images       builds the api, mlflow and sandbox images
 #   phase-0-baseline   compose stack from a clean checkout -> health, readiness, metrics,
 #                      one drift event + duplicate, job read-back -> teardown
@@ -25,7 +25,7 @@ env:
   TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
   # Dev tools are pinned to the versions the suite was last run with locally.
   DEV_TOOLS: >-
-    pytest==9.1.1 pytest-asyncio==1.4.0 pytest-cov==7.1.0 coverage==7.16.1
+    pytest==9.1.1 pytest-asyncio==1.4.0 pytest-cov==7.1.0 coverage==7.16.1 pytest-xdist==3.8.0
     ruff==0.16.8 mypy==2.3.1
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
@@ -46,7 +46,7 @@ jobs:
           pip install --extra-index-url "$TORCH_INDEX_URL" -c requirements.lock -e .
           pip install $DEV_TOOLS
       - name: Lint (ruff)
-        run: ruff check src tests
+        run: ruff check src tests scripts
       - name: Type check (mypy)
         run: mypy
       - name: Tests with coverage
@@ -58,7 +58,7 @@ jobs:
         # annotation, which (unlike job logs) is readable without signing in.
         run: |
           set +e
-          python -m pytest -p no:cacheprovider -rfEs \
+          python -m pytest -p no:cacheprovider -rfEs -m "heavy or not heavy" \
             --cov=oran_adapt --cov-report=term --cov-report=xml:coverage.xml \
             --junitxml=junit.xml 2>&1 | tee pytest.log
           rc=${PIPESTATUS[0]}

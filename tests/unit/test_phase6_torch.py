@@ -19,6 +19,8 @@ from oran_adapt.adaptation.torch_engine import fine_tune_torch, full_retrain_tor
 from oran_adapt.core.enums import EngineKind, Strategy
 from oran_adapt.core.errors import ArtifactError
 
+pytestmark = pytest.mark.smoke
+
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
 

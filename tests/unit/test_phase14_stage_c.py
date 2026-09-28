@@ -379,6 +379,7 @@ def test_consumer_failure_rolls_back_and_the_batch_is_redelivered(
 
 
 # ---- CurrentData persisted and traceable ------------------------------------------------------
+@pytest.mark.heavy
 def test_job_persists_current_data_and_every_score_refers_to_it(
     session_factory, registry, migrated_settings, client, tmp_path
 ) -> None:

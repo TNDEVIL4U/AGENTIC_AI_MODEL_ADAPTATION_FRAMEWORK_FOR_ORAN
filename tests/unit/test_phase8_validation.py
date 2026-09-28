@@ -19,6 +19,8 @@ from oran_adapt.core.enums import EngineKind
 from oran_adapt.core.errors import ValidationFailedError
 from oran_adapt.validation.engine import validate_candidate
 
+pytestmark = pytest.mark.smoke
+
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
 

@@ -43,6 +43,7 @@ def _orphan(session_factory, *, model_id: str, job_id: str, status: JobStatus) -
         )
 
 
+@pytest.mark.heavy
 def test_after_a_restart_the_orphaned_job_is_failed_and_the_model_runs_again(
     session_factory, registry, migrated_settings, client
 ) -> None:

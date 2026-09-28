@@ -110,6 +110,7 @@ def test_timestamp_column_and_lineage_chain(session_factory):
 
 
 # --------------------------------------------------------------------------- registry
+@pytest.mark.heavy
 def test_tree_models_register_with_trusted_types(registry):
     rf = RandomForestRegressor(n_estimators=5, max_depth=3, random_state=0)
     df = _frame(50)
@@ -120,6 +121,7 @@ def test_tree_models_register_with_trusted_types(registry):
     assert registry.describe_versions("rf_model")[0]["tags"]["k"] == "v"
 
 
+@pytest.mark.heavy
 def test_registry_calls_leave_no_global_mlflow_state(registry, monkeypatch):
     import os
 
@@ -139,6 +141,7 @@ def test_untrusted_type_is_a_deterministic_artifact_error(migrated_settings):
 
 
 # --------------------------------------------------------------------------- onboarding
+@pytest.mark.heavy
 def test_onboard_links_mlflow_version_and_data(session_factory, registry):
     hist = _frame(100)
     model = Ridge().fit(hist[FEATURES], hist["target"])
@@ -179,6 +182,7 @@ def test_holdout_size():
 
 
 
+@pytest.mark.heavy
 def test_pipeline_snapshots_training_data_and_tags_lineage(client, migrated_settings):
     app = client.app
     hist = _frame(200, seed=1)

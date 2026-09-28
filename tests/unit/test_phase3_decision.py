@@ -16,6 +16,8 @@ from oran_adapt.decision.engine import decide
 from oran_adapt.decision.fallback import select_strategy_fallback
 from oran_adapt.decision.llm_selector import select_strategy_via_llm
 
+pytestmark = pytest.mark.smoke
+
 
 def _shift(psi: float = 0.2, ks_pvalue: float = 0.01) -> FeatureShift:
     return FeatureShift(

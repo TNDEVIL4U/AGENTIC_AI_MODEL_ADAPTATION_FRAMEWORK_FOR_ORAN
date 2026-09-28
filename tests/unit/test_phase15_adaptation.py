@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LogisticRegression, SGDRegressor
@@ -20,6 +21,8 @@ from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import EngineKind, Strategy
 from oran_adapt.orchestrator.pipeline import _produce_candidate
+
+pytestmark = pytest.mark.smoke
 
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "throughput"

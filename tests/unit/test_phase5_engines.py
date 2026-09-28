@@ -26,6 +26,8 @@ from oran_adapt.core.errors import ArtifactError, UnsupportedAdaptationError
 from oran_adapt.db.base import create_db_engine, make_session_factory, session_scope
 from oran_adapt.db.models import DataRecord, DatasetMetadata, DataVersion
 
+pytestmark = pytest.mark.smoke
+
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 FEATURES = ["prb_util", "rsrp"]

@@ -122,6 +122,7 @@ def _seed_model(
 
 
 # ---- idempotency -----------------------------------------------------------------------------
+@pytest.mark.heavy
 def test_duplicate_event_is_deduplicated_without_rerunning(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -154,6 +155,7 @@ def test_duplicate_event_is_deduplicated_without_rerunning(
 
 
 # ---- concurrency -------------------------------------------------------------------------------
+@pytest.mark.heavy
 def test_concurrent_submissions_only_run_once(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -305,6 +307,7 @@ def test_thread_mode_job_exceeding_timeout_is_recorded_timed_out(
 
 
 # ---- end to end through the wrapper --------------------------------------------------------
+@pytest.mark.heavy
 def test_full_pipeline_via_job_manager_registers_and_records_events(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -355,6 +358,7 @@ def test_full_pipeline_via_job_manager_registers_and_records_events(
 
 
 # ---- end to end through the HTTP API --------------------------------------------------------
+@pytest.mark.heavy
 def test_api_submit_event_and_idempotent_resubmit(client, migrated_settings) -> None:
     engine = create_db_engine(migrated_settings.database_url)
     api_session_factory = make_session_factory(engine)
@@ -425,6 +429,7 @@ def _ghost_pipeline(session, event, settings, *, registry, llm_client, workdir):
     raise ModelNotFoundError("no such model", model="ghost-model")
 
 
+@pytest.mark.heavy
 def test_process_mode_timeout_kills_the_worker_and_records_timed_out(
     session_factory, migrated_settings, tmp_path, monkeypatch
 ) -> None:
@@ -464,6 +469,7 @@ def test_process_mode_timeout_kills_the_worker_and_records_timed_out(
         assert job.status == "TIMED_OUT"
 
 
+@pytest.mark.heavy
 def test_process_mode_retries_transient_failures_across_worker_processes(
     session_factory, migrated_settings, tmp_path, monkeypatch
 ) -> None:
@@ -489,6 +495,7 @@ def test_process_mode_retries_transient_failures_across_worker_processes(
     assert sum("retry" in m and "MLFLOW_UNAVAILABLE" in m for m in messages) == 2
 
 
+@pytest.mark.heavy
 def test_process_mode_keeps_the_error_class_and_context_of_a_worker_failure(
     session_factory, migrated_settings, tmp_path, monkeypatch
 ) -> None:

@@ -286,6 +286,7 @@ def test_reuse_rule_for_regressors_and_age_limit(settings) -> None:
 
 
 # ---- demo scenario 1: v2 is best, goes live without training ---------------------------------
+@pytest.mark.heavy
 def test_best_older_version_goes_live_without_training(
     session_factory, registry, migrated_settings, client, tmp_path
 ) -> None:
@@ -376,6 +377,7 @@ def _metric_total(name: str, **labels: str) -> float:
 
 
 # ---- demo scenario 2: nothing suitable, retrain to v4, then roll back ------------------------
+@pytest.mark.heavy
 def test_no_suitable_version_retrains_to_v4_then_rollback_restores_v3(
     session_factory, registry, migrated_settings, client, tmp_path
 ) -> None:
@@ -442,6 +444,7 @@ def test_no_suitable_version_retrains_to_v4_then_rollback_restores_v3(
 
 
 # ---- demo scenario 3: validation fails, LIVE unchanged ---------------------------------------
+@pytest.mark.heavy
 def test_failed_validation_leaves_live_untouched(
     session_factory, registry, migrated_settings, tmp_path, monkeypatch
 ) -> None:
@@ -473,6 +476,7 @@ def test_failed_validation_leaves_live_untouched(
 
 
 # ---- promotion failure: alias restored, job ROLLED_BACK --------------------------------------
+@pytest.mark.heavy
 def test_failed_promotion_restores_live_and_marks_job_rolled_back(
     session_factory, registry, migrated_settings, tmp_path, monkeypatch
 ) -> None:
@@ -506,6 +510,7 @@ def test_failed_promotion_restores_live_and_marks_job_rolled_back(
 
 
 # ---- integrity at promotion time -------------------------------------------------------------
+@pytest.mark.heavy
 def test_promotion_refuses_a_version_whose_artifact_changed(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -530,6 +535,7 @@ def test_promotion_refuses_a_version_whose_artifact_changed(
 
 
 # ---- per-model lock --------------------------------------------------------------------------
+@pytest.mark.heavy
 def test_second_event_for_a_busy_model_is_refused_until_the_lock_expires(
     session_factory, registry, migrated_settings, client, tmp_path
 ) -> None:
