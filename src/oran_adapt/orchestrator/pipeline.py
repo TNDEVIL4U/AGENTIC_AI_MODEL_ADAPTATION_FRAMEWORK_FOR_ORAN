@@ -32,7 +32,7 @@ from oran_adapt.adaptation.data import (
     records_frame,
     split_features_target,
 )
-from oran_adapt.adaptation.engines import run_engine, select_engine
+from oran_adapt.adaptation.engines import TorchBudget, run_engine, select_engine
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.leakage import check_leakage
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
@@ -72,6 +72,7 @@ from oran_adapt.orchestrator.context import current_job_id, report_stage
 from oran_adapt.orchestrator.schemas import JobResult
 from oran_adapt.ports import ModelRegistryPort
 from oran_adapt.registry.promotion import current_live, promote_version, verify_version_artifact
+from oran_adapt.sandbox.runner import SandboxLimits
 from oran_adapt.validation.engine import validate_candidate
 
 logger = logging.getLogger(__name__)
@@ -117,9 +118,7 @@ def _produce_candidate(
             y=y,
             target_column=target_column,
             artifact_dir=os.path.join(workdir, "engine"),
-            torch_fine_tune_epochs=settings.torch_fine_tune_epochs,
-            torch_full_retrain_epochs=settings.torch_full_retrain_epochs,
-            torch_learning_rate=settings.torch_learning_rate,
+            torch_budget=TorchBudget.from_settings(settings),
         )
 
     def _applied(candidate: CandidateModel, chosen: Strategy, why: str) -> CandidateModel:
@@ -152,6 +151,7 @@ def _produce_candidate(
             sandbox_backend=settings.sandbox_backend,
             sandbox_docker_image=settings.sandbox_docker_image,
             skops_trusted_types=settings.mlflow_skops_trusted_types,
+            sandbox_limits=SandboxLimits.from_settings(settings),
         )
         return _applied(candidate, strategy, note)
 
@@ -459,7 +459,6 @@ def run_adaptation_job(
         model_meta.mlflow_model_name,
         live_version,
         os.path.join(workdir, "current"),
-        max_bytes=settings.artifact_max_bytes,
     )
     if framework is None:
         raise ArtifactError(
@@ -518,7 +517,8 @@ def run_adaptation_job(
         session.commit()
         raise
     check_size(candidate.artifact_path, settings.artifact_max_bytes, stage="candidate")
-    candidate_sha = sha256_file(candidate.artifact_path)
+    chunk = settings.artifact_hash_chunk_bytes
+    candidate_sha = sha256_file(candidate.artifact_path, chunk)
     if candidate.engine == EngineKind.LLM_GENERATED:
         _audit(
             session,
@@ -537,7 +537,7 @@ def run_adaptation_job(
         )
 
     _stage(session, JobStatus.VALIDATING_CANDIDATE, "scoring the candidate on held-out data")
-    verify_checksum(candidate.artifact_path, candidate_sha, stage="validation")
+    verify_checksum(candidate.artifact_path, candidate_sha, chunk_bytes=chunk, stage="validation")
     validation_frame = holdout_frame
     if validation_frame.empty:  # validate_candidate then reports "not enough validation rows"
         validation_frame = pd.DataFrame(columns=[*feature_names, target])
@@ -601,7 +601,9 @@ def run_adaptation_job(
         )
 
     _stage(session, JobStatus.REGISTERING, "registering the validated candidate")
-    verify_checksum(candidate.artifact_path, candidate_sha, stage="registration")
+    verify_checksum(
+        candidate.artifact_path, candidate_sha, chunk_bytes=chunk, stage="registration"
+    )
     source_versions = [
         ref for ref in (package.historical_data, package.drifted_data) if ref is not None
     ]
@@ -616,7 +618,7 @@ def run_adaptation_job(
             "oran.parent_version": live_version,
             "oran.event_id": event.event_id or "",
             "oran.job_id": current_job_id() or "",
-            "oran.status": ModelVersionStatus.VALIDATED.value,
+            registry.artifact_policy.status_tag: ModelVersionStatus.VALIDATED.value,
             "oran.correlation_id": get_correlation_id() or "",
             "adaptation.strategy": decision.strategy.value,
             "adaptation.applied_strategy": str(candidate.applied_strategy or decision.strategy),

@@ -7,7 +7,7 @@ from oran_adapt.adaptation.data import (
     load_data_version_frame,
     split_features_target,
 )
-from oran_adapt.adaptation.engines import EngineKind, run_engine, select_engine
+from oran_adapt.adaptation.engines import EngineKind, TorchBudget, run_engine, select_engine
 from oran_adapt.adaptation.finetune import fine_tune_sklearn
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
@@ -26,6 +26,7 @@ __all__ = [
     "EngineKind",
     "ModelInspection",
     "SchemaCompatibility",
+    "TorchBudget",
     "adapt_via_llm",
     "assess_capability",
     "assess_schema_compatibility",

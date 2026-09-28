@@ -13,7 +13,7 @@ import torch
 from torch import nn
 
 from oran_adapt.adaptation.capability import assess_capability
-from oran_adapt.adaptation.engines import run_engine, select_engine
+from oran_adapt.adaptation.engines import TorchBudget, run_engine, select_engine
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.torch_engine import fine_tune_torch, full_retrain_torch
 from oran_adapt.core.enums import EngineKind, Strategy
@@ -23,6 +23,7 @@ pytestmark = pytest.mark.smoke
 
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
+BUDGET = TorchBudget(fine_tune_epochs=5, full_retrain_epochs=300, learning_rate=1e-2)
 
 
 class _TinyClassifier(nn.Module):
@@ -79,6 +80,7 @@ def test_fine_tune_torch_continues_from_existing_weights(tmp_path) -> None:
         estimator_type="classifier",
         artifact_dir=str(tmp_path / "artifact"),
         epochs=20,
+        lr=1e-2,
     )
 
     # partial training mutates the same module in place - never a fresh clone.
@@ -107,6 +109,7 @@ def test_fine_tune_torch_regressor_uses_rmse_metric(tmp_path) -> None:
         estimator_type="regressor",
         artifact_dir=str(tmp_path / "artifact"),
         epochs=20,
+        lr=1e-2,
     )
 
     assert "rmse" in candidate.metrics
@@ -128,6 +131,8 @@ def test_fine_tune_torch_fit_failure_raises_artifact_error(tmp_path) -> None:
             target_column=TARGET,
             estimator_type="classifier",
             artifact_dir=str(tmp_path / "artifact"),
+            epochs=1,
+            lr=1e-2,
         )
 
 
@@ -147,6 +152,7 @@ def test_full_retrain_torch_reinitializes_and_does_not_mutate_original(tmp_path)
         estimator_type="classifier",
         artifact_dir=str(tmp_path / "artifact"),
         epochs=20,
+        lr=1e-2,
     )
 
     # The original model object must be untouched.
@@ -179,6 +185,7 @@ def test_run_engine_torch_fine_tune_via_select_engine(tmp_path) -> None:
         y=y,
         target_column=TARGET,
         artifact_dir=str(tmp_path / "artifact"),
+        torch_budget=BUDGET,
     )
     assert candidate.engine == EngineKind.TORCH_FINE_TUNE
 
@@ -199,6 +206,7 @@ def test_run_engine_torch_full_retrain_via_select_engine(tmp_path) -> None:
         y=y,
         target_column=TARGET,
         artifact_dir=str(tmp_path / "artifact"),
+        torch_budget=BUDGET,
     )
     assert candidate.engine == EngineKind.TORCH_FULL_RETRAIN
 
@@ -218,8 +226,7 @@ def test_run_engine_passes_torch_learning_rate(tmp_path) -> None:
             y=y,
             target_column=TARGET,
             artifact_dir=str(tmp_path / f"lr-{lr}"),
-            torch_fine_tune_epochs=3,
-            torch_learning_rate=lr,
+            torch_budget=TorchBudget(fine_tune_epochs=3, full_retrain_epochs=3, learning_rate=lr),
         )
         moved[lr] = (model.linear.weight - before).abs().max().item()
     # A near-zero learning rate barely moves the weights; a large one clearly does.

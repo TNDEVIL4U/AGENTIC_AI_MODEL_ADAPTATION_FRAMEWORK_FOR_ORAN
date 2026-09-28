@@ -84,18 +84,19 @@ class BodySizeLimitMiddleware:
 
 
 class RequestContextMiddleware:
-    """Gives every request a correlation id (the caller's ``X-Correlation-ID`` when it is a safe
-    token, otherwise a new one), echoes it in the response, and records HTTP metrics labelled by
+    """Gives every request a correlation id (the caller's ``header`` - API_CORRELATION_HEADER -
+    when it is a safe token, otherwise a new one), echoes it in the response, and records HTTP metrics labelled by
     route template (never the raw path, so ids do not multiply series)."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, header: str) -> None:
         self.app = app
+        self.header = header
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        sent = dict(scope.get("headers") or []).get(correlation.HEADER.lower().encode())
+        sent = dict(scope.get("headers") or []).get(self.header.lower().encode())
         cid = correlation.sanitize(sent.decode("latin-1") if sent else None)
         cid = cid or correlation.new_correlation_id()
         token = correlation.set_correlation_id(cid)
@@ -108,7 +109,7 @@ class RequestContextMiddleware:
             if message["type"] == "http.response.start":
                 started_response["sent"] = True
                 status["code"] = message["status"]
-                MutableHeaders(scope=message).append(correlation.HEADER, cid)
+                MutableHeaders(scope=message).append(self.header, cid)
             await send(message)
 
         try:
@@ -148,7 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Added first so it runs innermost: an oversized request still gets a correlation id and
     # is counted in the HTTP metrics by RequestContextMiddleware.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.api_max_request_bytes)
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestContextMiddleware, header=settings.api_correlation_header)
 
     @app.exception_handler(AdaptationError)
     async def _adaptation_error(_: Request, exc: AdaptationError) -> JSONResponse:

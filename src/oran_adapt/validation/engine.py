@@ -17,7 +17,7 @@ from oran_adapt.adaptation.schemas import CandidateModel
 from oran_adapt.core.config import Settings
 from oran_adapt.core.errors import ArtifactError, ValidationFailedError
 from oran_adapt.validation.evaluate import evaluate_model
-from oran_adapt.validation.metrics import higher_is_better
+from oran_adapt.validation.metrics import higher_is_better, primary_metric, resolve_task
 from oran_adapt.validation.schemas import ValidationReport
 
 
@@ -66,7 +66,8 @@ def validate_candidate(
         task_type=task_type,
     )
 
-    metric_name = next(iter(current_metrics))
+    # evaluate_model already refused a model whose task has no scorable primary metric.
+    metric_name = primary_metric(resolve_task(task_type, estimator_type))
     current_value = current_metrics[metric_name]
     candidate_value = candidate_metrics[metric_name]
 

@@ -18,7 +18,7 @@ from oran_adapt.core import metrics
 from oran_adapt.core.enums import EngineKind
 from oran_adapt.core.errors import SandboxExecutionError, UnsafeCodeError
 from oran_adapt.llm.client import LlmClient
-from oran_adapt.sandbox.runner import run_sandboxed
+from oran_adapt.sandbox.runner import SandboxLimits, run_sandboxed
 from oran_adapt.sandbox.security import check_code_safety
 
 _SYSTEM_PROMPT = (
@@ -70,9 +70,10 @@ def adapt_via_llm(
     sandbox_timeout_s: int,
     sandbox_memory_mb: int,
     workdir: str,
-    sandbox_backend: str = "subprocess",
-    sandbox_docker_image: str = "",
+    sandbox_backend: str,
+    sandbox_docker_image: str,
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
+    sandbox_limits: SandboxLimits | None = None,
 ) -> CandidateModel:
     """Raises LlmUnavailableError if the LLM can't be reached, UnsafeCodeError if its code fails
     the security scan, or SandboxExecutionError if the (safe) code fails to run. Never catches
@@ -102,6 +103,7 @@ def adapt_via_llm(
             backend=sandbox_backend,
             docker_image=sandbox_docker_image,
             skops_trusted_types=skops_trusted_types,
+            limits=sandbox_limits,
         )
     except SandboxExecutionError:
         metrics.SANDBOX_FAILURES.labels("execution").inc()

@@ -34,7 +34,7 @@ def _evidence_confidence(package: DecisionPackage, settings: Settings) -> float 
     """How far the evidence supports acting on the drift, in (0, 1]: the drifted sample size
     against the rows that count as full confidence, scaled down when no feature is significant
     after the multiple-testing correction (more so when none is even affected). None for a
-    package without a drift summary, which keeps the older fixed confidences."""
+    package without a drift summary (the fallback then uses DECISION_DEFAULT_CONFIDENCE)."""
     summary = package.drift_summary
     if summary is None:
         return None
@@ -51,7 +51,13 @@ def _evidence_confidence(package: DecisionPackage, settings: Settings) -> float 
 def _choose(package: DecisionPackage, settings: Settings, llm_client: LlmClient | None) -> Decision:
     constraint_result = evaluate_constraints(package, settings)
     return _with_rejections(
-        _select(package, constraint_result, llm_client, _evidence_confidence(package, settings)),
+        _select(
+            package,
+            constraint_result,
+            llm_client,
+            _evidence_confidence(package, settings),
+            settings.decision_default_confidence,
+        ),
         constraint_result.rejected,
     )
 
@@ -61,6 +67,7 @@ def _select(
     constraint_result: ConstraintResult,
     llm_client: LlmClient | None,
     evidence_confidence: float | None,
+    default_confidence: float,
 ) -> Decision:
 
     if constraint_result.forced_strategy is not None:
@@ -96,7 +103,7 @@ def _select(
     return Decision(
         model_id=package.model_id,
         strategy=strategy,
-        confidence=0.5 if evidence_confidence is None else evidence_confidence,
+        confidence=default_confidence if evidence_confidence is None else evidence_confidence,
         rationale=reason,
         compatible_strategies=compatible,
         source="FALLBACK",

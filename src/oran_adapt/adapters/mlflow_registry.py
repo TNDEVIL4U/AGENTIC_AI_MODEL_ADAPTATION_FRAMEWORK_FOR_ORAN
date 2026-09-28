@@ -25,6 +25,7 @@ from oran_adapt.core.errors import (
     RegistryUnavailableError,
     UnsupportedAdaptationError,
 )
+from oran_adapt.core.integrity import ArtifactPolicy, sha256_path
 from oran_adapt.ports import AdapterSpec, Capability
 
 if TYPE_CHECKING:
@@ -42,7 +43,7 @@ class MlflowRegistry:
         registry_uri: str | None = None,
         *,
         skops_trusted_types: list[str] | tuple[str, ...],
-        checksum_tag: str,
+        artifact_policy: ArtifactPolicy,
         http_max_retries: int,
         http_backoff_factor: float,
         http_timeout_s: float,
@@ -55,7 +56,7 @@ class MlflowRegistry:
         self.tracking_uri = tracking_uri
         self.registry_uri = registry_uri or tracking_uri
         self.skops_trusted_types = tuple(skops_trusted_types)
-        self.checksum_tag = checksum_tag
+        self.artifact_policy = artifact_policy
         self._http = (http_max_retries, http_backoff_factor, http_timeout_s)
         self.handler = MlflowFlavorHandler()
         self.client = MlflowClient(tracking_uri=tracking_uri, registry_uri=self.registry_uri)
@@ -66,7 +67,7 @@ class MlflowRegistry:
             settings.mlflow_tracking_uri,
             settings.mlflow_registry_uri,
             skops_trusted_types=settings.mlflow_skops_trusted_types,
-            checksum_tag=settings.registry_tags_checksum,
+            artifact_policy=ArtifactPolicy.from_settings(settings),
             http_max_retries=settings.mlflow_http_max_retries,
             http_backoff_factor=settings.mlflow_http_backoff_factor,
             http_timeout_s=settings.mlflow_http_timeout_s,
@@ -78,7 +79,7 @@ class MlflowRegistry:
             "tracking_uri": self.tracking_uri,
             "registry_uri": self.registry_uri,
             "skops_trusted_types": self.skops_trusted_types,
-            "checksum_tag": self.checksum_tag,
+            "artifact_policy": self.artifact_policy,
             "http": self._http,
         }
 
@@ -88,7 +89,7 @@ class MlflowRegistry:
             state["tracking_uri"],
             state["registry_uri"],
             skops_trusted_types=state["skops_trusted_types"],
-            checksum_tag=state["checksum_tag"],
+            artifact_policy=state["artifact_policy"],
             http_max_retries=retries,
             http_backoff_factor=backoff,
             http_timeout_s=timeout,
@@ -317,11 +318,10 @@ class MlflowRegistry:
         """Download ``version``'s artifacts, hash them and store the hash as the checksum
         version tag; returns the hash. Called right after registration so every later load can
         be checked against it."""
-        from oran_adapt.core.integrity import sha256_path
-
+        policy = self.artifact_policy
         local = self.download_artifacts(name, version, os.path.join(workdir, f"sha-{version}"))
-        digest = sha256_path(local)
-        self.set_version_tags(name, version, {self.checksum_tag: digest})
+        digest = sha256_path(local, policy.hash_chunk_bytes)
+        self.set_version_tags(name, version, {policy.checksum_tag: digest})
         return digest
 
     def describe_versions(self, name: str) -> list[dict[str, Any]]:
@@ -360,6 +360,9 @@ SPEC = AdapterSpec(
             "mlflow_registry_uri",
             "mlflow_skops_trusted_types",
             "registry_tags_checksum",
+            "registry_tags_status",
+            "artifact_max_bytes",
+            "artifact_hash_chunk_bytes",
             "mlflow_http_max_retries",
             "mlflow_http_backoff_factor",
             "mlflow_http_timeout_s",

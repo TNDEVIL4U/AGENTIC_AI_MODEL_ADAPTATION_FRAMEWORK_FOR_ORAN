@@ -120,7 +120,12 @@ def materialize_cdc_events(
     from oran_adapt.cdc.materialize import materialize_cdc
 
     with session_scope(request.app.state.session_factory) as session:
-        info = materialize_cdc(session, dataset_id, actor=principal.name)
+        info = materialize_cdc(
+            session,
+            dataset_id,
+            max_tx_ids=request.app.state.settings.cdc_max_tx_ids_per_version,
+            actor=principal.name,
+        )
     if info is None:
         response.status_code = 200
         return {"dataset_id": dataset_id, "materialized": False, "reason": "no pending events"}
@@ -131,7 +136,11 @@ def materialize_cdc_events(
 @current_router.get("")
 def get_current_data_list(request: Request, model_id: str | None = None) -> list[dict]:
     with session_scope(request.app.state.session_factory) as session:
-        return list_current_data(session, model_id=model_id)
+        return list_current_data(
+            session,
+            limit=request.app.state.settings.api_pagination_default_limit,
+            model_id=model_id,
+        )
 
 
 @current_router.get("/{current_data_id}")

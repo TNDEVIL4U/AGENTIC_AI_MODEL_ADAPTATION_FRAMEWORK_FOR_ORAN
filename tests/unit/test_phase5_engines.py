@@ -17,7 +17,7 @@ from oran_adapt.adaptation.data import (
     load_data_version_frame,
     split_features_target,
 )
-from oran_adapt.adaptation.engines import run_engine, select_engine
+from oran_adapt.adaptation.engines import TorchBudget, run_engine, select_engine
 from oran_adapt.adaptation.finetune import fine_tune_sklearn
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.retrain import full_retrain
@@ -32,6 +32,7 @@ T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
+BUDGET = TorchBudget(fine_tune_epochs=5, full_retrain_epochs=300, learning_rate=1e-2)
 
 
 def _rows(n: int, offset: int = 0) -> list[dict]:
@@ -305,6 +306,7 @@ def test_run_engine_sklearn_full_retrain_via_select_engine(session_factory, tmp_
         y=y,
         target_column=TARGET,
         artifact_dir=str(tmp_path / "artifact"),
+        torch_budget=BUDGET,
     )
     assert candidate.engine == EngineKind.SKLEARN_FULL_RETRAIN
     assert joblib.load(candidate.artifact_path) is not None
@@ -323,4 +325,5 @@ def test_run_engine_unimplemented_engine_raises_unsupported(tmp_path) -> None:
             y=None,
             target_column=TARGET,
             artifact_dir=str(tmp_path / "artifact"),
+            torch_budget=BUDGET,
         )

@@ -98,11 +98,56 @@ A grep for key, token, password and secret patterns in `src/` found no credentia
 secrets, but Hardening Phase 9 replaces them with secret references. The real `.env` was
 deliberately not opened.
 
+## Hardening Phase 1 status
+
+Flat env names below are the keys as they exist today (TOML sections join onto them with `_`,
+so `[sandbox.docker] pids_limit` is `SANDBOX_DOCKER_PIDS_LIMIT`). Line numbers in the tables
+above are from the baseline and no longer match.
+
+**Closed (the value now comes from a `Settings` key, or from one table):**
+
+| # | Now |
+|---|---|
+| A1, A2 | `LLM_MAX_OUTPUT_TOKENS`, `LLM_MAX_RETRIES` |
+| A3 | `JOB_KILL_GRACE_S` |
+| A4-A7 | `SANDBOX_DOCKER_PIDS_LIMIT`, `SANDBOX_DOCKER_CPUS`, `SANDBOX_DOCKER_TMPFS_MB`, `SANDBOX_DOCKER_CLEANUP_TIMEOUT_S` (`sandbox.runner.SandboxLimits`) |
+| A8 | `SANDBOX_MANIFEST_MAX_BYTES` |
+| A9 | `CDC_MAX_TX_IDS_PER_VERSION` |
+| A10, A11 | `CDC_POLLING_TABLE`, `CDC_SCHEMA_REF` (read by both CDC adapters) |
+| A12 | `CDC_IDLE_POLL_S` |
+| A13, A14 | `DECISION_MEMORY_COPIES`, `DECISION_DEFAULT_CONFIDENCE` |
+| A15, A16 | `ANALYSIS_PERFORMANCE_HISTORY_LIMIT`, `API_PAGINATION_DEFAULT_LIMIT` |
+| A18, A19 | `REGISTRY_TAGS_CHECKSUM`, `REGISTRY_TAGS_STATUS` (`core.integrity.ArtifactPolicy`, held by the registry adapter) |
+| A20, A21 | `API_CORRELATION_HEADER`, `AUTH_API_KEY_HEADER` |
+| A22 | explicit: the gate compares `validation.metrics.PRIMARY_METRIC` for the resolved task. A configurable gate metric is Hardening Phase 7 |
+| A23 | one table, `core/frameworks.py` (framework -> engine per strategy). Engine selection, the inspector, validation scoring, the drift summary, the CLI and the C8 default read it. `loaders.py` and `registry/client.py` were deleted with the port work |
+| B1, B2 | `ARTIFACT_MAX_BYTES`, `ARTIFACT_HASH_CHUNK_BYTES`; the module constants are gone |
+| B3, B4 | torch `epochs`/`lr` are required; `run_engine` takes `adaptation.engines.TorchBudget.from_settings(settings)` |
+| B5, B6, B7 | `min_psi_rows`, `live_alias`, `sandbox_backend`, `sandbox_docker_image` are required arguments |
+| C1, C3 | required when `ENVIRONMENT=production` (with `MLFLOW_TRACKING_URI`) |
+| C8 | default derived from `core.frameworks.ADAPTABLE_FRAMEWORKS` |
+| C9 | no default; required when `CDC_MODE=kafka` (startup names the key) |
+
+**Kept on purpose:**
+
+- **A17** (histogram buckets): metrics are registered at import, before settings exist, and
+  fixed buckets keep histograms from different replicas aggregatable.
+- **A24** (`"observed_at"`): the name of the internal KPI table's time column (ORM and schema),
+  changed by a migration, not by config. A dataset's own time column is already a parameter
+  (`timestamp_column` at onboarding).
+
+**Still open (scheduled later):** C2, C4-C7 and C10-C12 (adapter config and deployment
+targets); C13, C14 and the decision engine's significance factors (0.7 / 0.4, floor 0.01) move
+to policy files in Hardening Phase 7. The other `oran.*` run tags in `orchestrator/pipeline.py`
+are still literals. The framework names in `sandbox/runner.py` and `sandbox/security.py` are the
+sandbox's serialization formats and import allow-list, not dispatch. Section D is Hardening
+Phase 9.
+
 ## Burn-down counters
 
-| Category | Count at baseline |
-|---|---|
-| A (use-site literals) | 24 |
-| B (duplicated defaults) | 7 |
-| C (settings needing a decision) | 14 |
-| D (infrastructure) | 8 |
+| Category | Count at baseline | Open after Phase 1 |
+|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) |
+| B (duplicated defaults) | 7 | 0 |
+| C (settings needing a decision) | 14 | 10 |
+| D (infrastructure) | 8 | 8 |

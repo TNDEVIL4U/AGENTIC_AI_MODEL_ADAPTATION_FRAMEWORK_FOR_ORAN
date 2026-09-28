@@ -194,7 +194,7 @@ def get_current_data(session: Session, current_data_id: str) -> dict | None:
     return _as_dict(row, dv, dataset.dataset_id)
 
 
-def list_current_data(session: Session, *, model_id: str | None = None, limit: int = 50) -> list:
+def list_current_data(session: Session, *, limit: int, model_id: str | None = None) -> list:
     query = select(CurrentData).order_by(CurrentData.id.desc()).limit(limit)
     if model_id:
         query = query.where(CurrentData.model_id == model_id)

@@ -18,8 +18,6 @@ from oran_adapt.core.enums import CdcOperation, DataKind
 from oran_adapt.datastore.versioning import VersionInfo, get_or_create_dataset, ingest_version
 from oran_adapt.db.models import CdcEventRecord, DataVersion
 
-_MAX_TX_IDS = 1000
-
 
 def _previous_cdc_version(session: Session, dataset_pk: int) -> DataVersion | None:
     return session.execute(
@@ -30,9 +28,12 @@ def _previous_cdc_version(session: Session, dataset_pk: int) -> DataVersion | No
     ).scalar_one_or_none()
 
 
-def materialize_cdc(session: Session, dataset_id: str, *, actor: str = "cdc") -> VersionInfo | None:
-    """Fold ``dataset_id``'s pending CDC events into a new CDC data version. Returns None when
-    there is nothing pending (so running it twice is harmless). The caller commits."""
+def materialize_cdc(
+    session: Session, dataset_id: str, *, max_tx_ids: int, actor: str = "cdc"
+) -> VersionInfo | None:
+    """Fold ``dataset_id``'s pending CDC events into a new CDC data version, recording at most
+    ``max_tx_ids`` (CDC_MAX_TX_IDS_PER_VERSION) source transaction ids. Returns None when there
+    is nothing pending (so running it twice is harmless). The caller commits."""
     events = session.execute(
         select(CdcEventRecord)
         .where(CdcEventRecord.dataset_id == dataset_id, CdcEventRecord.data_version_id.is_(None))
@@ -80,7 +81,7 @@ def materialize_cdc(session: Session, dataset_id: str, *, actor: str = "cdc") ->
             "changed_from": min(e.event_ts for e in events).isoformat(),
             "changed_to": max(e.event_ts for e in events).isoformat(),
         },
-        source_tx=sorted({e.transaction_id for e in events if e.transaction_id})[:_MAX_TX_IDS],
+        source_tx=sorted({e.transaction_id for e in events if e.transaction_id})[:max_tx_ids],
     )
     for ev in events:
         ev.data_version_id = info.data_version_id

@@ -115,7 +115,9 @@ def get_model_versions(model_id: str, request: Request) -> dict:
     live = next((v["version"] for v in versions if alias in v["aliases"]), None)
     for v in versions:
         v["is_live"] = v["version"] == live
-        v["lifecycle_status"] = v["tags"].get("oran.status", "LIVE" if v["is_live"] else None)
+        v["lifecycle_status"] = v["tags"].get(
+            state.registry.artifact_policy.status_tag, "LIVE" if v["is_live"] else None
+        )
     return {"model_id": model_id, "live_version": live, "versions": versions}
 
 

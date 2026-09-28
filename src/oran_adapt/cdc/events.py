@@ -19,8 +19,6 @@ from pydantic import BaseModel
 from oran_adapt.core.enums import CdcOperation
 from oran_adapt.core.errors import CdcProcessingError
 
-# Version of the row image the parsers produce ({id, dataset_id, observed_at, payload}).
-KPI_SAMPLE_SCHEMA_VERSION = "kpi_sample/1"
 _DEBEZIUM_OPS = {
     "c": CdcOperation.INSERT,
     "r": CdcOperation.INSERT,  # snapshot read: the row exists at snapshot time
@@ -80,9 +78,11 @@ def _normalize_row(row: dict | None) -> dict | None:
 
 def from_changelog_row(
     seq: int, table: str, operation: str, pk: str, old_row: str | None, new_row: str | None,
-    tx_id: str | None, changed_at: str,
+    tx_id: str | None, changed_at: str, *, schema_ref: str,
 ) -> CdcEvent:
-    """A cdc_changelog row (written by the migration 0005 triggers) as a CdcEvent."""
+    """A cdc_changelog row (written by the migration 0005 triggers) as a CdcEvent.
+    ``schema_ref`` (CDC_SCHEMA_REF) versions the row image: {id, dataset_id, observed_at,
+    payload}."""
     op = CdcOperation(operation)
     return CdcEvent(
         event_id=make_event_id("polling", table, pk, op, str(seq)),
@@ -95,13 +95,13 @@ def from_changelog_row(
         timestamp=_utc(changed_at),
         transaction_id=tx_id,
         source_offset=str(seq),
-        schema_version=KPI_SAMPLE_SCHEMA_VERSION,
+        schema_version=schema_ref,
     )
 
 
 def from_debezium(
     value: bytes | str | dict | None, *, topic: str, partition: int, offset: int,
-    key_field: str = "id",
+    schema_ref: str, key_field: str = "id",
 ) -> CdcEvent | None:
     """A Debezium change message (JSON converter, with or without the schema wrapper) as a
     CdcEvent. Returns None for tombstones (the null-value message Kafka compaction uses after a
@@ -154,5 +154,5 @@ def from_debezium(
         timestamp=datetime.fromtimestamp(ts_ms / 1000, UTC) if ts_ms else datetime.now(UTC),
         transaction_id=str(tx) if tx is not None else None,
         source_offset=f"{topic}:{partition}:{offset}",
-        schema_version=f"{KPI_SAMPLE_SCHEMA_VERSION};debezium/{source.get('version', '?')}",
+        schema_version=f"{schema_ref};debezium/{source.get('version', '?')}",
     )

@@ -142,7 +142,7 @@ def test_cdc_events_materialize_into_immutable_versions(session_factory, polling
     run_cdc_once(session_factory, polling)
 
     with session_scope(session_factory) as s:
-        first = materialize_cdc(s, "kpi")
+        first = materialize_cdc(s, "kpi", max_tx_ids=1000)
     assert first is not None and first.kind == DataKind.CDC
     assert first.row_count == 2  # rows 1 and 2 remain; row 3 was deleted
     assert first.cdc_range["event_count"] == 5
@@ -158,7 +158,7 @@ def test_cdc_events_materialize_into_immutable_versions(session_factory, polling
         assert s.get(DataVersion, first.data_version_id).extra["deleted_keys"] == ["3"]
         assert all(e.data_version_id == first.data_version_id
                    for e in s.query(CdcEventRecord).all())
-        assert materialize_cdc(s, "kpi") is None  # nothing pending: harmless to repeat
+        assert materialize_cdc(s, "kpi", max_tx_ids=1000) is None  # nothing pending: harmless to repeat
 
     # Row 1 is deleted later: the next version chains to the first and records the deletion.
     with session_scope(session_factory) as s:
@@ -167,7 +167,7 @@ def test_cdc_events_materialize_into_immutable_versions(session_factory, polling
                         payload={"prb_util": 0.4, "rsrp": -95.0, "label": 0}))
     run_cdc_once(session_factory, polling)
     with session_scope(session_factory) as s:
-        second = materialize_cdc(s, "kpi")
+        second = materialize_cdc(s, "kpi", max_tx_ids=1000)
     assert second.parent_version == first.version and second.row_count == 1
 
     # CurrentData cleaning over both versions: row 1 is gone, row 2 kept once.
@@ -222,7 +222,7 @@ def _row(i, util, *, as_string=True):
 
 
 def test_debezium_envelopes_parse_into_cdc_events() -> None:
-    coords = {"topic": "oran.public.kpi_sample", "partition": 0}
+    coords = {"topic": "oran.public.kpi_sample", "partition": 0, "schema_ref": "kpi_sample/1"}
     ins = from_debezium(_debezium("c", None, _row(1, 0.5)), offset=10, **coords)
     assert ins.operation == CdcOperation.INSERT and ins.primary_key == "1"
     assert ins.new_value["payload"] == {"prb_util": 0.5, "rsrp": -90.0, "label": 1}

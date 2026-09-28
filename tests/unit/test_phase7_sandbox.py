@@ -229,6 +229,8 @@ def test_adapt_via_llm_happy_path_produces_candidate_model(tmp_path) -> None:
         sandbox_timeout_s=30,
         sandbox_memory_mb=512,
         workdir=str(tmp_path / "sandbox"),
+        sandbox_backend="subprocess",
+        sandbox_docker_image="",
     )
 
     assert candidate.engine == EngineKind.LLM_GENERATED
@@ -265,6 +267,8 @@ def test_adapt_via_llm_rejects_malicious_code_before_sandbox_execution(tmp_path)
             sandbox_timeout_s=30,
             sandbox_memory_mb=512,
             workdir=str(workdir),
+            sandbox_backend="subprocess",
+            sandbox_docker_image="",
         )
     # The security check must reject the code before any subprocess/artifact work happens.
     assert not workdir.exists()
@@ -287,6 +291,8 @@ def test_adapt_via_llm_propagates_provider_failure(tmp_path) -> None:
             sandbox_timeout_s=30,
             sandbox_memory_mb=512,
             workdir=str(tmp_path / "sandbox"),
+            sandbox_backend="subprocess",
+            sandbox_docker_image="",
         )
 
 

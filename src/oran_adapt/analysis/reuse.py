@@ -42,7 +42,7 @@ def assess_reuse(
     psi_threshold: float,
     ks_pvalue_threshold: float,
     drift_score_threshold: float,
-    min_psi_rows: int = 30,
+    min_psi_rows: int,
 ) -> ReuseAssessment:
     if not event.drift_detected:
         return ReuseAssessment(reuse=True, reason="caller reported no drift")

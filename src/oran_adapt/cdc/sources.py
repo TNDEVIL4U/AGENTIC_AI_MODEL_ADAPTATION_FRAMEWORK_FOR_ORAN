@@ -26,8 +26,9 @@ CdcSource = CdcSourcePort
 
 
 class PollingCdcSource:
-    def __init__(self, table: str) -> None:
+    def __init__(self, table: str, schema_ref: str) -> None:
         self.table = table
+        self.schema_ref = schema_ref
         self.name = f"polling:{table}"
 
     def fetch(self, session: Session, limit: int) -> tuple[list[CdcEvent], str | None]:
@@ -41,7 +42,7 @@ class PollingCdcSource:
         events = [
             from_changelog_row(
                 r.seq, r.table_name, r.operation, r.pk, r.old_row, r.new_row, r.tx_id,
-                r.changed_at,
+                r.changed_at, schema_ref=self.schema_ref,
             )
             for r in rows
         ]

@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     import pandas as pd
 
+    from oran_adapt.core.integrity import ArtifactPolicy
+
 
 @runtime_checkable
 class ModelRegistryPort(Protocol):
@@ -16,7 +18,10 @@ class ModelRegistryPort(Protocol):
     RegistryUnavailableError when the backend fails, ArtifactError for an artifact that cannot
     be stored or loaded safely, UnsupportedAdaptationError for a framework it cannot log.
     Adapters are picklable, so a job worker process can receive the resolved instance.
+    ``artifact_policy`` holds the size limit, hash chunk and tag names every caller applies.
     """
+
+    artifact_policy: ArtifactPolicy
 
     def ping(self) -> None: ...
 

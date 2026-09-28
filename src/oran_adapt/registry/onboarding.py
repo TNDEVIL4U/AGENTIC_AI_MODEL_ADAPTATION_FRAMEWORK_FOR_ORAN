@@ -80,7 +80,7 @@ def onboard_model(
     training_version: str = "v1",
     timestamp_column: str | None = None,
     mlflow_model_name: str | None = None,
-    live_alias: str = "live",
+    live_alias: str,
     drifted_frame: pd.DataFrame | None = None,
     drifted_version: str | None = None,
 ) -> OnboardResult:
@@ -173,7 +173,7 @@ def attach_existing_model(
     framework: str,
     task_type: str,
     target_column: str,
-    live_alias: str = "live",
+    live_alias: str,
     version: str | None = None,
     dataset_id: str | None = None,
     training_version: str | None = None,

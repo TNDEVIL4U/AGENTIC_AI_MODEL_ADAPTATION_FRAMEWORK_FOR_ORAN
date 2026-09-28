@@ -116,6 +116,7 @@ def run() -> None:
                 training_frame=historical,
                 drifted_frame=drifted,
                 drifted_version="drift-1",
+                live_alias=settings.live_alias,
             )
         view = client.get(f"/api/v1/models/{MODEL_ID}").json()
         check(view.get("live_version") == onboarded.model_version == "1", f"onboarding: {view}")

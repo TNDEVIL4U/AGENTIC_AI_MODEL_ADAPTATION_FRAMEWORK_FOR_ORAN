@@ -7,9 +7,7 @@ from __future__ import annotations
 
 from oran_adapt.adaptation.schemas import ModelInspection
 from oran_adapt.core.errors import UnsupportedAdaptationError
-
-_SKLEARN_LIKE = {"sklearn", "xgboost"}
-_TORCH_LIKE = {"torch", "pytorch"}
+from oran_adapt.core.frameworks import SKLEARN_API_FRAMEWORKS, TORCH_FRAMEWORKS
 
 
 def _inspect_sklearn_like(model: object, framework: str) -> ModelInspection:
@@ -82,8 +80,8 @@ def _inspect_torch(model: object) -> ModelInspection:
 
 def inspect_model(model: object, framework: str) -> ModelInspection:
     fw = framework.lower()
-    if fw in _SKLEARN_LIKE:
+    if fw in SKLEARN_API_FRAMEWORKS:
         return _inspect_sklearn_like(model, fw)
-    if fw in _TORCH_LIKE:
+    if fw in TORCH_FRAMEWORKS:
         return _inspect_torch(model)
     raise UnsupportedAdaptationError(f"no inspector for framework {framework!r}")

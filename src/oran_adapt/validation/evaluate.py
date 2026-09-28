@@ -24,9 +24,8 @@ from evidently.metrics import RMSE, Accuracy
 
 from oran_adapt.core.enums import TaskType
 from oran_adapt.core.errors import ValidationFailedError
+from oran_adapt.core.frameworks import TORCH_FRAMEWORKS
 from oran_adapt.validation.metrics import compute_metrics, primary_metric, resolve_task
-
-_TORCH_LIKE = {"torch", "pytorch"}
 
 
 def _predict_sklearn_like(model: Any, X: pd.DataFrame):
@@ -104,7 +103,7 @@ def evaluate_model(
     except ValueError as exc:
         raise ValidationFailedError(str(exc)) from exc
     try:
-        if framework.lower() in _TORCH_LIKE:
+        if framework.lower() in TORCH_FRAMEWORKS:
             predictions = _predict_torch(model, X, estimator_type)
             score = None
         else:

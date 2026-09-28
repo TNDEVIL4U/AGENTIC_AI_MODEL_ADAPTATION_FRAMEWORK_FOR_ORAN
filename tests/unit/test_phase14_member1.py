@@ -219,13 +219,13 @@ def test_checksum_of_an_artifact_directory_detects_tampering(tmp_path) -> None:
     (art / "sub").mkdir(parents=True)
     (art / "MLmodel").write_text("flavor: sklearn\n")
     (art / "sub" / "weights.bin").write_bytes(b"\x00\x01\x02")
-    digest = sha256_path(str(art))
-    assert digest == sha256_path(str(art))  # stable
-    verify_checksum(str(art), digest)
+    digest = sha256_path(str(art), 4096)
+    assert digest == sha256_path(str(art), 1 << 20)  # stable, whatever the read chunk
+    verify_checksum(str(art), digest, chunk_bytes=4096)
 
     (art / "sub" / "weights.bin").write_bytes(b"\x00\x01\x03")
     with pytest.raises(ArtifactIntegrityError):
-        verify_checksum(str(art), digest)
+        verify_checksum(str(art), digest, chunk_bytes=4096)
 
 
 # ---- reuse decision rule ---------------------------------------------------------------------

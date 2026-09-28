@@ -41,6 +41,7 @@ class KafkaCdcSource:
 
     def __init__(self, settings: Settings, consumer: Any) -> None:
         self.topic = settings.cdc_kafka_topic
+        self.schema_ref = settings.cdc_schema_ref
         self.timeout = settings.cdc_kafka_poll_timeout_s
         self.name = f"kafka:{settings.cdc_consumer_group}:{self.topic}"
         self._consumer = consumer
@@ -61,7 +62,11 @@ class KafkaCdcSource:
                 # the batch is read again once Kafka is back.
                 raise CdcUnavailableError(f"Kafka error: {err}", topic=self.topic)
             event = from_debezium(
-                msg.value(), topic=msg.topic(), partition=msg.partition(), offset=msg.offset()
+                msg.value(),
+                topic=msg.topic(),
+                partition=msg.partition(),
+                offset=msg.offset(),
+                schema_ref=self.schema_ref,
             )
             if event is not None:
                 events.append(event)
@@ -94,6 +99,7 @@ SPEC = AdapterSpec(
             "cdc_consumer_group",
             "cdc_kafka_poll_timeout_s",
             "cdc_kafka_auto_offset_reset",
+            "cdc_schema_ref",
         ),
         required_keys=("kafka_bootstrap_servers", "cdc_kafka_topic"),
         distributions=("confluent-kafka",),

@@ -146,7 +146,7 @@ def test_onboard_links_mlflow_version_and_data(session_factory, registry):
     hist = _frame(100)
     model = Ridge().fit(hist[FEATURES], hist["target"])
     with session_scope(session_factory) as s:
-        res = onboard_model(s, registry, model_id="thr", model=model, framework="sklearn",
+        res = onboard_model(s, registry, model_id="thr", model=model, framework="sklearn", live_alias="live",
                             task_type="regressor", target_column="target", dataset_id="thr-kpis",
                             training_frame=hist, drifted_frame=_frame(50, shift=3, seed=2))
     assert res.model_version == "1" and res.drifted_data.version == "v1-drift"
@@ -159,7 +159,7 @@ def test_onboard_links_mlflow_version_and_data(session_factory, registry):
     assert roles == {("1", "TRAINING"), ("1", "DRIFT_OBSERVED")}
 
     with pytest.raises(ConflictError), session_scope(session_factory) as s:
-        onboard_model(s, registry, model_id="thr", model=model, framework="sklearn",
+        onboard_model(s, registry, model_id="thr", model=model, framework="sklearn", live_alias="live",
                       task_type="regressor", target_column="target", dataset_id="x",
                       training_frame=hist)
 
@@ -167,7 +167,7 @@ def test_onboard_links_mlflow_version_and_data(session_factory, registry):
 def test_onboard_rejects_missing_target_before_touching_mlflow(session_factory, registry):
     hist = _frame(20)
     with pytest.raises(ArtifactError), session_scope(session_factory) as s:
-        onboard_model(s, registry, model_id="bad", model=Ridge(), framework="sklearn",
+        onboard_model(s, registry, model_id="bad", model=Ridge(), framework="sklearn", live_alias="live",
                       task_type="regressor", target_column="nope", dataset_id="d",
                       training_frame=hist)
     assert registry.client.search_registered_models() == []
@@ -188,7 +188,7 @@ def test_pipeline_snapshots_training_data_and_tags_lineage(client, migrated_sett
     hist = _frame(200, seed=1)
     model = Ridge().fit(hist[FEATURES], hist["target"])
     with session_scope(app.state.session_factory) as s:
-        onboard_model(s, app.state.registry, model_id="thr", model=model, framework="sklearn",
+        onboard_model(s, app.state.registry, model_id="thr", model=model, framework="sklearn", live_alias="live",
                       task_type="regressor", target_column="target", dataset_id="thr-kpis",
                       training_frame=hist, drifted_frame=_frame(200, shift=3, seed=2),
                       drifted_version="drift-1")

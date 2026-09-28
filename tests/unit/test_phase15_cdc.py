@@ -42,7 +42,7 @@ def test_small_batches_split_a_transaction_without_loss_or_duplication(
     assert offsets == sorted(offsets) == [2, 4, 5]
     with session_scope(session_factory) as s:
         assert s.scalar(select(func.count()).select_from(CdcEventRecord)) == 5
-        version = materialize_cdc(s, "kpi")
+        version = materialize_cdc(s, "kpi", max_tx_ids=1000)
     # Same result as the single-batch materialization in test_phase14_stage_c.
     assert version is not None and version.row_count == 2
     assert version.cdc_range["event_count"] == 5

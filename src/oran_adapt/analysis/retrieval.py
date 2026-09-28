@@ -148,9 +148,14 @@ def _drifted_version(session: Session, model_id: str, event: DriftEvent) -> Data
 
 
 def retrieve_context(
-    session: Session, event: DriftEvent, *, live_version: str | None = None
+    session: Session,
+    event: DriftEvent,
+    *,
+    performance_limit: int,
+    live_version: str | None = None,
 ) -> RetrievedContext:
-    """Assemble everything downstream analysis needs, or raise if the model is unknown."""
+    """Assemble everything downstream analysis needs, or raise if the model is unknown.
+    ``performance_limit`` (ANALYSIS_PERFORMANCE_HISTORY_LIMIT) caps the performance records."""
     model = (
         session.execute(select(ModelMetadata).where(ModelMetadata.model_id == event.model_id))
         .scalars()
@@ -166,7 +171,7 @@ def retrieve_context(
             select(PerformanceRecord)
             .where(PerformanceRecord.model_id == event.model_id)
             .order_by(PerformanceRecord.recorded_at.desc())
-            .limit(10)
+            .limit(performance_limit)
         )
         .scalars()
         .all()

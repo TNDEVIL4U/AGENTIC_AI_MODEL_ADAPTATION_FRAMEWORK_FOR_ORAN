@@ -12,6 +12,7 @@ from sklearn.linear_model import LogisticRegression
 from tests.unit.test_phase7_sandbox import _SAFE_CODE, TARGET, _frame
 
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
+from oran_adapt.core.config import Settings
 from oran_adapt.sandbox import runner as runner_module
 from oran_adapt.sandbox.runner import run_sandboxed
 
@@ -103,8 +104,11 @@ def test_adapt_via_llm_forwards_sandbox_backend_choice(tmp_path, monkeypatch) ->
     assert captured["docker_image"] == "oran-adapt-sandbox:latest"
 
 
-def test_adapt_via_llm_sandbox_backend_defaults_to_subprocess() -> None:
-    # Guards Settings.sandbox_backend's "subprocess" default: call sites written before Phase 11
-    # that don't pass sandbox_backend at all (there are none left, but future ones might) must
-    # keep behaving exactly as they did before Phase 11 introduced the parameter.
-    assert inspect.signature(adapt_via_llm).parameters["sandbox_backend"].default == "subprocess"
+def test_adapt_via_llm_sandbox_backend_is_required_and_the_schema_default_is_subprocess() -> None:
+    # The backend comes from Settings.sandbox_backend alone: adapt_via_llm has no default of its
+    # own that could drift from the schema's, and the schema default stays the soft-limit
+    # subprocess backend (Docker is opt-in).
+    params = inspect.signature(adapt_via_llm).parameters
+    assert params["sandbox_backend"].default is inspect.Parameter.empty
+    assert params["sandbox_docker_image"].default is inspect.Parameter.empty
+    assert Settings.model_fields["sandbox_backend"].default == "subprocess"

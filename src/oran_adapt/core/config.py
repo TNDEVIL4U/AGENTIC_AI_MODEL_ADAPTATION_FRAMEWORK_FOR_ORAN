@@ -30,6 +30,7 @@ from oran_adapt.core.config_sources import (
     read_config_file,
 )
 from oran_adapt.core.errors import ConfigurationError
+from oran_adapt.core.frameworks import ADAPTABLE_FRAMEWORKS
 
 # Adapter selector key -> port. Each selected adapter's Capability.required_keys must be set.
 ADAPTER_SELECTORS: dict[str, str] = {
@@ -171,7 +172,7 @@ class Settings(BaseSettings):
     decision_min_drifted_rows: int = Field(10, ge=1)
     decision_full_retrain_psi_threshold: float = Field(0.5, ge=0)
     decision_supported_frameworks: list[str] = Field(
-        default_factory=lambda: ["sklearn", "xgboost", "torch", "pytorch"]
+        default_factory=lambda: sorted(ADAPTABLE_FRAMEWORKS)
     )
     # How many copies of a past decision the decision memory keeps per model and strategy.
     decision_memory_copies: int = Field(3, ge=1)

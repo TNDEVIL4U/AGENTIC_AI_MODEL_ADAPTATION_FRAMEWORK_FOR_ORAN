@@ -29,8 +29,9 @@ from typing import Any
 
 import pandas as pd
 
-from oran_adapt.core.config import Settings, get_settings
+from oran_adapt.core.config import Settings, get_settings, load_settings
 from oran_adapt.core.errors import AdaptationError, ConfigurationError
+from oran_adapt.core.frameworks import ADAPTABLE_FRAMEWORKS
 
 
 def _print(obj: Any) -> None:
@@ -118,14 +119,17 @@ def _cmd_data_current(args, settings: Settings) -> Any:
             if found is None:
                 raise AdaptationError(f"current data '{args.id}' not found")
             return found
-        return list_current_data(session, model_id=args.model_id)
+        return list_current_data(
+            session, limit=settings.api_pagination_default_limit, model_id=args.model_id
+        )
 
 
 def _cmd_cdc_run(args, settings: Settings) -> Any:
     from oran_adapt.cdc import run_cdc, run_cdc_once
 
     if args.mode:
-        settings = settings.model_copy(update={"cdc_mode": args.mode})
+        # Re-validated, so the adapter's required keys are checked for the new mode too.
+        settings = load_settings(**{**settings.model_dump(), "cdc_mode": args.mode})
     factory = _session_factory(settings)
     if args.once:
         return run_cdc_once(factory, settings)
@@ -137,7 +141,9 @@ def _cmd_cdc_materialize(args, settings: Settings) -> Any:
     from oran_adapt.db.base import session_scope
 
     with session_scope(_session_factory(settings)) as session:
-        info = materialize_cdc(session, args.dataset)
+        info = materialize_cdc(
+            session, args.dataset, max_tx_ids=settings.cdc_max_tx_ids_per_version
+        )
         if info is None:
             return {"dataset_id": args.dataset, "materialized": False, "reason": "no pending events"}
         return {"materialized": True, **info.as_dict()}
@@ -320,7 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cdc = top.add_parser("cdc").add_subparsers(dest="cmd", required=True)
     c = cdc.add_parser("run", help="consume CDC events from the configured source (CDC_MODE)")
-    c.add_argument("--mode", choices=["polling", "kafka"], help="override CDC_MODE")
+    c.add_argument("--mode", help="override CDC_MODE (an installed cdc_source adapter)")
     c.add_argument("--once", action="store_true", help="process one batch and exit")
     c.add_argument("--max-batches", type=int, help="stop after this many batches")
     c.set_defaults(fn=_cmd_cdc_run)
@@ -332,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     c = model.add_parser("onboard", help="register a trusted local joblib model + training data")
     c.add_argument("--model-id", required=True)
     c.add_argument("--model-file", required=True)
-    c.add_argument("--framework", required=True, choices=["sklearn", "xgboost", "torch"])
+    c.add_argument("--framework", required=True, choices=sorted(ADAPTABLE_FRAMEWORKS))
     c.add_argument("--task-type", required=True, choices=["classifier", "regressor"])
     c.add_argument("--target", required=True)
     c.add_argument("--dataset", required=True)

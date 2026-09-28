@@ -20,11 +20,16 @@ import subprocess
 import sys
 import threading
 import uuid
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import joblib
 import pandas as pd
 
 from oran_adapt.core.errors import SandboxExecutionError
+
+if TYPE_CHECKING:
+    from oran_adapt.core.config import Settings
 
 # The inputs are pickled by this (trusted) process, so unpickling them inside the sandbox is
 # safe. The output travels the other way: it is written by untrusted code, so it is saved in a
@@ -73,7 +78,36 @@ _OUTPUT_FILES = {
     "torch_state_dict": "output.safetensors",
 }
 _XGBOOST_CLASSES = ("XGBClassifier", "XGBRegressor", "XGBRanker", "Booster")
-_MANIFEST_MAX_BYTES = 4096
+
+
+@dataclass(frozen=True)
+class SandboxLimits:
+    """The output cap and the container limits (SANDBOX_* keys) a sandboxed run is held to."""
+
+    manifest_max_bytes: int
+    docker_pids_limit: int
+    docker_cpus: float
+    docker_tmpfs_mb: int
+    docker_cleanup_timeout_s: float
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> SandboxLimits:
+        return cls(
+            manifest_max_bytes=settings.sandbox_manifest_max_bytes,
+            docker_pids_limit=settings.sandbox_docker_pids_limit,
+            docker_cpus=settings.sandbox_docker_cpus,
+            docker_tmpfs_mb=settings.sandbox_docker_tmpfs_mb,
+            docker_cleanup_timeout_s=settings.sandbox_docker_cleanup_timeout_s,
+        )
+
+
+def _limits(limits: SandboxLimits | None) -> SandboxLimits:
+    """``limits``, or else the schema defaults of the SANDBOX_* keys (their one definition)."""
+    if limits is not None:
+        return limits
+    from oran_adapt.core.config import Settings
+
+    return SandboxLimits.from_settings(Settings.model_construct())
 
 # Only what the interpreter and its installed packages actually need to start correctly - never
 # the parent's full environment, which may hold API keys, DB credentials, etc. VIRTUAL_ENV and
@@ -297,7 +331,10 @@ def _trusted(types: tuple[str, ...] | list[str] | None) -> tuple[str, ...] | lis
 
 
 def _load_output(
-    workdir: str, current_model: object, skops_trusted_types: tuple[str, ...] | list[str]
+    workdir: str,
+    current_model: object,
+    skops_trusted_types: tuple[str, ...] | list[str],
+    limits: SandboxLimits | None = None,
 ) -> object:
     """Read back the model the sandbox produced, using only loaders that cannot execute code.
     Raises SandboxExecutionError when the output is missing, malformed, or needs a type that is
@@ -305,7 +342,7 @@ def _load_output(
     manifest_path = os.path.join(workdir, "output.json")
     if not os.path.exists(manifest_path):
         raise SandboxExecutionError("sandbox script produced no output artifact")
-    if os.path.getsize(manifest_path) > _MANIFEST_MAX_BYTES:
+    if os.path.getsize(manifest_path) > _limits(limits).manifest_max_bytes:
         raise SandboxExecutionError("sandbox output manifest is too large")
     try:
         with open(manifest_path, encoding="utf-8") as f:
@@ -369,6 +406,7 @@ def run_in_sandbox(
     memory_mb: int,
     workdir: str,
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
+    limits: SandboxLimits | None = None,
 ) -> object:
     """Runs ``code`` (which must define ``adapt(current_model, X, y) -> model``) in a fresh
     subprocess and returns the model it produced. Raises SandboxExecutionError on timeout,
@@ -428,7 +466,7 @@ def run_in_sandbox(
             stderr=stderr[-4000:],
         )
 
-    return _load_output(workdir, current_model, _trusted(skops_trusted_types))
+    return _load_output(workdir, current_model, _trusted(skops_trusted_types), limits)
 
 
 def _docker_user() -> list[str]:
@@ -451,6 +489,7 @@ def run_in_docker(
     workdir: str,
     image: str,
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
+    limits: SandboxLimits | None = None,
 ) -> object:
     """The Phase 0 audit's "stronger isolation" backend: a real container boundary (its own
     filesystem and network namespace, an enforced memory cgroup on every OS - not just POSIX -
@@ -475,6 +514,7 @@ def run_in_docker(
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(script)
 
+    limits = _limits(limits)
     container = f"oran-sandbox-{uuid.uuid4().hex[:12]}"
     cmd = [
         "docker",
@@ -489,13 +529,13 @@ def run_in_docker(
         "--memory-swap",
         f"{memory_mb}m",
         "--pids-limit",
-        "128",
+        str(limits.docker_pids_limit),
         "--cpus",
-        "1",
+        str(limits.docker_cpus),
         "--read-only",
         "--tmpfs",
         # The container's own private in-memory /tmp, not a host temp path.
-        "/tmp:rw,noexec,nosuid,size=64m",  # nosec B108
+        f"/tmp:rw,noexec,nosuid,size={limits.docker_tmpfs_mb}m",  # nosec B108
         "--cap-drop",
         "ALL",
         "--security-opt",
@@ -515,7 +555,10 @@ def run_in_docker(
     except subprocess.TimeoutExpired as exc:
         # Killing the docker CLI does not stop the container: remove it explicitly.
         subprocess.run(
-            ["docker", "rm", "-f", container], capture_output=True, timeout=60, check=False
+            ["docker", "rm", "-f", container],
+            capture_output=True,
+            timeout=limits.docker_cleanup_timeout_s,
+            check=False,
         )
         raise SandboxExecutionError(
             "docker sandbox execution exceeded the timeout", timeout_s=timeout_s
@@ -532,7 +575,7 @@ def run_in_docker(
             stderr=proc.stderr[-4000:],
         )
 
-    return _load_output(workdir, current_model, _trusted(skops_trusted_types))
+    return _load_output(workdir, current_model, _trusted(skops_trusted_types), limits)
 
 
 def run_sandboxed(
@@ -547,6 +590,7 @@ def run_sandboxed(
     backend: str,
     docker_image: str = "",
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
+    limits: SandboxLimits | None = None,
 ) -> object:
     """Dispatches to `run_in_docker` or `run_in_sandbox` by `backend` ("docker" or
     "subprocess") - the one entry point `adaptation.llm_adapter` calls, so it never chooses
@@ -562,6 +606,7 @@ def run_sandboxed(
             workdir=workdir,
             image=docker_image,
             skops_trusted_types=skops_trusted_types,
+            limits=limits,
         )
     return run_in_sandbox(
         code,
@@ -572,4 +617,5 @@ def run_sandboxed(
         memory_mb=memory_mb,
         workdir=workdir,
         skops_trusted_types=skops_trusted_types,
+        limits=limits,
     )

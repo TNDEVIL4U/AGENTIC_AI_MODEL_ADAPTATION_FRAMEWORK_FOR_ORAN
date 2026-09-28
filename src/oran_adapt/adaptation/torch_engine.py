@@ -81,8 +81,8 @@ def fine_tune_torch(
     target_column: str,
     estimator_type: str,
     artifact_dir: str,
-    epochs: int = 5,
-    lr: float = 1e-2,
+    epochs: int,
+    lr: float,
 ) -> CandidateModel:
     X_t, y_t = _to_tensors(X, y, estimator_type)
     try:
@@ -116,8 +116,8 @@ def full_retrain_torch(
     target_column: str,
     estimator_type: str,
     artifact_dir: str,
-    epochs: int = 300,
-    lr: float = 1e-2,
+    epochs: int,
+    lr: float,
 ) -> CandidateModel:
     fresh = copy.deepcopy(current_model)
     _reset_parameters(fresh)

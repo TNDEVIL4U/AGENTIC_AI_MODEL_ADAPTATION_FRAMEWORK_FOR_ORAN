@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def _build(settings: Settings) -> PollingCdcSource:
-    return PollingCdcSource(settings.cdc_polling_table)
+    return PollingCdcSource(settings.cdc_polling_table, settings.cdc_schema_ref)
 
 
 SPEC = AdapterSpec(
@@ -22,7 +22,7 @@ SPEC = AdapterSpec(
         adapter="polling",
         description="trigger-fed cdc_changelog table, offset committed with the events",
         features=frozenset({"exactly_once_offsets", "offline"}),
-        config_keys=("cdc_polling_table",),
+        config_keys=("cdc_polling_table", "cdc_schema_ref"),
     ),
     factory=_build,
 )

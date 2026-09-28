@@ -11,12 +11,14 @@ from oran_adapt.analysis.merge import MergedSeries
 from oran_adapt.analysis.reuse import is_shifted
 from oran_adapt.analysis.schemas import DriftSummary
 from oran_adapt.core.config import Settings
+from oran_adapt.core.enums import Strategy
+from oran_adapt.core.frameworks import frameworks_for
 
-# Frameworks with a built-in engine for each kind of training (adaptation.engines.select_engine).
+# Frameworks with a built-in engine for each kind of training (core.frameworks.ENGINES).
 # Fine-tuning also needs the artifact itself to support it (e.g. an sklearn estimator with
 # partial_fit), which is checked on the loaded model at adaptation time.
-FINE_TUNE_FRAMEWORKS = frozenset({"sklearn", "torch", "pytorch"})
-FULL_RETRAIN_FRAMEWORKS = frozenset({"sklearn", "xgboost", "torch", "pytorch"})
+FINE_TUNE_FRAMEWORKS = frameworks_for(Strategy.FINE_TUNING)
+FULL_RETRAIN_FRAMEWORKS = frameworks_for(Strategy.FULL_RETRAINING)
 
 
 def framework_capabilities(framework: str | None, settings: Settings) -> dict[str, bool]:

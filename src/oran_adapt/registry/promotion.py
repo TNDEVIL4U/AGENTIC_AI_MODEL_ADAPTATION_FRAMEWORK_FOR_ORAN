@@ -33,21 +33,12 @@ from oran_adapt.core.errors import (
     ModelNotFoundError,
     PromotionError,
 )
-from oran_adapt.core.integrity import (
-    DEFAULT_ARTIFACT_MAX_BYTES,
-    check_size,
-    sha256_path,
-    verify_checksum,
-)
+from oran_adapt.core.integrity import check_size, sha256_path, verify_checksum
 from oran_adapt.core.logging import log_event
 from oran_adapt.db.models import ModelMetadata, ModelPromotion
 from oran_adapt.ports import ModelRegistryPort
 
 logger = logging.getLogger(__name__)
-
-CHECKSUM_TAG = "artifact.sha256"
-STATUS_TAG = "oran.status"
-
 
 @dataclass(frozen=True)
 class PromotionResult:
@@ -98,20 +89,22 @@ def verify_version_artifact(
     name: str,
     version: str,
     workdir: str,
-    *,
-    max_bytes: int = DEFAULT_ARTIFACT_MAX_BYTES,
 ) -> tuple[str, str]:
     """Download ``version``, check its size and its checksum against the registration-time
-    tag, and return ``(local_path, sha256)``. Records the checksum when the version has none."""
+    tag (both per ``registry.artifact_policy``), and return ``(local_path, sha256)``. Records the
+    checksum when the version has none."""
+    policy = registry.artifact_policy
     info = registry.get_version(name, version)
     local = registry.download_artifacts(name, version, os.path.join(workdir, f"verify-{version}"))
-    check_size(local, max_bytes, model=name, version=version)
-    expected = (info.tags or {}).get(CHECKSUM_TAG)
+    check_size(local, policy.max_bytes, model=name, version=version)
+    expected = (info.tags or {}).get(policy.checksum_tag)
     if expected:
-        verify_checksum(local, expected, model=name, version=version)
+        verify_checksum(
+            local, expected, chunk_bytes=policy.hash_chunk_bytes, model=name, version=version
+        )
         return local, expected
-    digest = sha256_path(local)
-    registry.set_version_tags(name, version, {CHECKSUM_TAG: digest})
+    digest = sha256_path(local, policy.hash_chunk_bytes)
+    registry.set_version_tags(name, version, {policy.checksum_tag: digest})
     log_event(
         logger,
         "artifact had no recorded checksum; recorded it now (trust on first use)",
@@ -221,10 +214,11 @@ def promote_version(
                 expected=version,
                 actual=now_live,
             )
-        registry.set_version_tags(name, version, {STATUS_TAG: ModelVersionStatus.LIVE.value})
+        status_tag = registry.artifact_policy.status_tag
+        registry.set_version_tags(name, version, {status_tag: ModelVersionStatus.LIVE.value})
         if previous is not None:
             registry.set_version_tags(
-                name, previous, {STATUS_TAG: ModelVersionStatus.ARCHIVED.value}
+                name, previous, {status_tag: ModelVersionStatus.ARCHIVED.value}
             )
         _audit_move(
             session, kind, model_id=model_id, version=version, previous=previous, actor=actor,
