@@ -110,9 +110,10 @@ for r in rows:
     svc, state, health = r["Service"], r["State"], r.get("Health", "")
     if svc in one_shot:
         continue
+    shown = health or "-"
     if state != "running" or health not in ("", "healthy"):
-        bad.append(f"{svc}: state={state} health={health or '-'}")
-    print(f"{svc:14} {state:8} {health or '-'}")
+        bad.append(f"{svc}: state={state} health={shown}")
+    print(f"{svc:14} {state:8} {shown}")
 if bad:
     sys.exit("not converged:\n  " + "\n  ".join(bad))
 ' "$ONE_SHOT_SERVICES"
@@ -120,7 +121,9 @@ if bad:
 # ---- endpoint checks ------------------------------------------------------------------------
 auth=(-H "X-API-Key: ${API_KEY}")
 
-curl -fsS "${BASE_URL}/health" | tee /dev/stderr | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"]=="ok"'
+health_body="$(curl -fsS "${BASE_URL}/health")"
+echo "health: ${health_body}"
+python3 -c 'import json,sys; assert json.load(sys.stdin)["status"]=="ok"' <<<"$health_body"
 echo
 curl -fsS "${BASE_URL}/readiness" | python3 -c '
 import json, sys
