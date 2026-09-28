@@ -54,10 +54,20 @@ jobs:
         env:
           CUDA_VISIBLE_DEVICES: ""
           LLM_PROVIDER: none
+        # `python -m pytest` (as run locally) puts the repo root on sys.path; some tests import
+        # shared helpers as `tests.unit.<module>`. On failure the tail of the output becomes an
+        # annotation, which (unlike job logs) is readable without signing in.
         run: |
-          pytest -p no:cacheprovider -rs \
+          set +e
+          python -m pytest -p no:cacheprovider -rs \
             --cov=oran_adapt --cov-report=term --cov-report=xml:coverage.xml \
-            --junitxml=junit.xml
+            --junitxml=junit.xml 2>&1 | tee pytest.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            msg="$(tail -n 60 pytest.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            echo "::error title=pytest exit ${rc}::${msg}"
+          fi
+          exit "$rc"
       - name: Upload test and coverage reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -79,10 +89,12 @@ jobs:
         run: docker build --tag oran-adapt-mlflow:ci docker/mlflow
       - name: Build sandbox image
         run: docker build --tag oran-adapt-sandbox:ci docker/sandbox
+      # Imports only: importing oran_adapt.api.main would build the app with default settings,
+      # whose SQLite path is under the read-only /app. The full start-up is phase-0-baseline's job.
       - name: Container smoke (api image imports and runs as non-root)
         run: |
           docker run --rm --entrypoint sh oran-adapt:ci -c \
-            'test "$(id -u)" != "0" && python -c "import oran_adapt, oran_adapt.api.main; print(oran_adapt.__version__)"'
+            'test "$(id -u)" != "0" && python -c "import oran_adapt, oran_adapt.api.app, oran_adapt.cli, torch, mlflow, xgboost, sklearn, evidently; print(oran_adapt.__version__, torch.__version__)"'
 
   phase-0-baseline:
     runs-on: ubuntu-24.04

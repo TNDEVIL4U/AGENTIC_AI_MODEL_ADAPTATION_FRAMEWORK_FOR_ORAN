@@ -20,13 +20,32 @@ if [[ -e .env ]]; then
   exit 2
 fi
 
+# Keep a copy of stderr so a failure can be reported as a GitHub annotation (annotations are
+# readable without signing in; job logs are not).
+ERR_LOG="$(mktemp)"
+exec 2> >(tee -a "$ERR_LOG" >&2)
+
+annotate() {  # annotate TITLE TEXT: one ::error annotation, newlines encoded
+  local text
+  text="$(printf '%s' "$2" | tail -n 60 | sed -e 's/%/%25/g' -e 's/\r/%0D/g' \
+    | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+  echo "::error title=$1::${text}"
+}
+
 teardown() {
   local rc=$?
   if [[ $rc -ne 0 ]]; then
     echo "::group::compose ps (failure)"; docker compose ps -a || true; echo "::endgroup::"
     echo "::group::compose logs (failure)"; docker compose logs --no-color --tail=200 || true
     echo "::endgroup::"
+    annotate "compose_smoke exit ${rc}" "$(cat "$ERR_LOG")"
+    annotate "compose ps" "$(docker compose ps -a --format '{{.Service}} {{.State}} {{.Health}} {{.ExitCode}}' 2>&1)"
+    for svc in $(docker compose ps -a --format '{{.Service}} {{.State}} {{.Health}} {{.ExitCode}}' 2>/dev/null \
+        | awk '($2!="running" && $NF!="0") || $3=="unhealthy" || $3=="starting" {print $1}'); do
+      annotate "logs: ${svc}" "$(docker compose logs --no-color --tail=40 "$svc" 2>&1)"
+    done
   fi
+  rm -f "$ERR_LOG"
   if [[ "${SMOKE_KEEP_UP:-0}" != "1" ]]; then
     docker compose down --volumes --remove-orphans || true
     rm -f .env
