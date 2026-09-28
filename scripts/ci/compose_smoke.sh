@@ -13,7 +13,7 @@ set -euo pipefail
 
 BASE_URL="${SMOKE_BASE_URL:-http://127.0.0.1:8000/api/v1}"
 TIMEOUT_S="${SMOKE_TIMEOUT_S:-600}"
-ONE_SHOT_SERVICES="minio-init debezium-init"
+ONE_SHOT_SERVICES="debezium-init"
 
 if [[ -e .env ]]; then
   echo "compose_smoke: .env already exists; refusing to overwrite it" >&2
@@ -59,8 +59,6 @@ API_KEY="$(openssl rand -hex 24)"
 API_KEY_SHA256="$(printf '%s' "$API_KEY" | sha256sum | cut -d' ' -f1)"
 cat > .env <<EOF
 POSTGRES_PASSWORD=$(openssl rand -hex 16)
-MINIO_ROOT_USER=oran
-MINIO_ROOT_PASSWORD=$(openssl rand -hex 16)
 API_KEYS='{"${API_KEY_SHA256}": "ADMIN:ci-smoke"}'
 LLM_PROVIDER=none
 SANDBOX_BACKEND=subprocess
@@ -82,7 +80,7 @@ until curl -fsS "${BASE_URL}/readiness" >/dev/null 2>&1; do
   sleep 5
 done
 
-# debezium-init starts only after the API is healthy; give the one-shots time to finish.
+# debezium-init starts only after the API is healthy; give it time to finish.
 for svc in $ONE_SHOT_SERVICES; do
   deadline=$((SECONDS + 180))
   while :; do

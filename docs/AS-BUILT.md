@@ -128,7 +128,7 @@ references. Validators check that the LLM key is present for the chosen provider
 |---|---|---|
 | PostgreSQL (SQLite for dev/tests) | all state | `db/` |
 | MLflow tracking + model registry | model versions, aliases, tags, artifacts, **model loading** (`mlflow.sklearn/xgboost/pytorch`) | `registry/client.py`, `adaptation/loaders.py` |
-| MinIO (S3) | MLflow artifact store (compose only) | `docker-compose.yml` |
+| MinIO (S3) | MLflow artifact store (compose only). **Removed in Hardening Phase 0**: its public images are gone; MLflow now keeps artifacts on the `mlartifacts` volume | `docker-compose.yml` |
 | Kafka + Debezium | CDC from `kpi_sample` (optional) | `cdc/sources.py`, `deploy/debezium/` |
 | Evidently AI | KS/PSI drift statistics, validation scores | `analysis/comparison.py`, `validation/evaluate.py` |
 | scikit-learn, XGBoost, PyTorch | model inspection, fine-tune and retrain | `adaptation/` |
@@ -139,7 +139,7 @@ references. Validators check that the LLM key is present for the chosen provider
 ## 7. Packaging state
 
 - `Dockerfile` (api / cdc-consumer image, non-root uid 10001), `docker/mlflow/Dockerfile`,
-  `docker/sandbox/Dockerfile`, and `docker-compose.yml` with postgres, minio, minio-init, mlflow,
+  `docker/sandbox/Dockerfile`, and `docker-compose.yml` with postgres, minio, minio-init (both removed in Hardening Phase 0), mlflow,
   kafka, debezium, debezium-init, api, cdc-consumer and prometheus.
 - **None of these images or the compose stack has ever been built or run.** Docker is not
   installed on the development laptop. Hardening Phase 0 moves the build and bring-up to GitHub

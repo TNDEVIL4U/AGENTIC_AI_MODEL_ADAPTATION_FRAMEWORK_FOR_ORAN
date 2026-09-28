@@ -7,8 +7,7 @@ This is deliberately the most expensive and most side-effectful test here: it bu
 pulls two more, starts three containers, and tears them down again. So on top of the module-wide
 Docker-availability skip every Phase 11 integration test uses, this one also requires an explicit
 RUN_DOCKER_E2E=1 opt-in and a POSTGRES_PASSWORD in the environment (docker-compose.yml requires
-that variable to start postgres at all). Since Phase 14 the stack also needs
-MINIO_ROOT_PASSWORD, and the API requires a key: E2E_API_KEY must be a key whose digest is in
+that variable to start postgres at all). Since Phase 14 the API also requires a key: E2E_API_KEY must be a key whose digest is in
 the .env API_KEYS with a role that may submit events (e.g. OPERATOR). Neither is set on the machine this was written on, and
 no `docker` CLI is installed there either, so this test has never actually been executed - it is
 written in full, per the Phase 0 audit's stated plan for Phase 11, for wherever Docker is."""
@@ -31,10 +30,9 @@ pytestmark = [
         shutil.which("docker") is None
         or os.environ.get("RUN_DOCKER_E2E") != "1"
         or not os.environ.get("POSTGRES_PASSWORD")
-        or not os.environ.get("MINIO_ROOT_PASSWORD")
         or not os.environ.get("E2E_API_KEY"),
         reason=(
-            "requires the docker CLI, RUN_DOCKER_E2E=1, POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD "
+            "requires the docker CLI, RUN_DOCKER_E2E=1, POSTGRES_PASSWORD "
             "and E2E_API_KEY set - this brings "
             "up real containers and is not run by default"
         ),

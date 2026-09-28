@@ -145,8 +145,8 @@ python -m oran_adapt.cli cdc materialize --dataset kpi   # fold CDC events into 
 
 ## Step 9: Full Docker stack (only on a machine with Docker)
 
-Not runnable on this laptop, because Docker is not installed. First set `POSTGRES_PASSWORD`,
-`MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` and `API_KEYS` in `.env`.
+Not runnable on this laptop, because Docker is not installed. First set `POSTGRES_PASSWORD`
+and `API_KEYS` in `.env`.
 
 ```powershell
 .\scripts\run_local.ps1 docker        # builds the sandbox image, then: docker compose up --build -d
@@ -157,8 +157,7 @@ python -m pytest -q tests/integration/test_docker_compose_e2e.py tests/integrati
 .\scripts\run_local.ps1 docker-down   # stop the stack (data volumes are kept)
 ```
 
-Ports (all bound to 127.0.0.1): API 8000, MLflow 5000, MinIO console 9001, Kafka Connect 8083,
-Prometheus 9090.
+Ports (all bound to 127.0.0.1): API 8000, MLflow 5000, Kafka Connect 8083, Prometheus 9090.
 
 ---
 

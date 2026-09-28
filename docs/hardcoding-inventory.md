@@ -86,9 +86,9 @@ Hardening Phase 1 has to decide, for each one, whether it stays a schema default
 | D2 | `Dockerfile:26` | `https://download.pytorch.org/whl/cpu` | build arg `TORCH_INDEX_URL` |
 | D3 | `Dockerfile:36-37,51-53` | uid/gid `10001`, port `8000`, healthcheck URL and timings | build args / compose and Helm values |
 | D4 | `docker-compose.yml:13-18` | image tag `oran-adapt:0.1.0`, DB user `oran`, DB name `oran_adapt`, hosts `postgres:5432`, `mlflow:5000`, `kafka:9092` | `.env`-driven variables |
-| D5 | `docker-compose.yml` (mlflow) | bucket `mlflow`, `--allowed-hosts` list, ports `5000`, `9000`, `9001` | `.env` variables |
+| D5 | `docker-compose.yml` (mlflow) | artifact path `/mlartifacts` (was bucket `mlflow` + MinIO ports `9000`, `9001` until removed in Hardening Phase 0), `--allowed-hosts` list, port `5000` | `.env` variables |
 | D6 | `docker-compose.yml` (debezium) | group and topic names, connector name `oran-kpi-sample` | `.env` variables |
-| D7 | `docker/mlflow/Dockerfile` | `mlflow==3.16.1`, `psycopg==3.3.6`, `boto3>=1.35,<2` | lock file for the MLflow image |
+| D7 | `docker/mlflow/Dockerfile` | `mlflow==3.16.1`, `psycopg==3.3.6` (boto3 removed with MinIO) | lock file for the MLflow image |
 | D8 | `deploy/debezium/kpi-connector.json` | `kpi_sample` table, DB names | templated per CDC source |
 
 ## E. Credentials in source
