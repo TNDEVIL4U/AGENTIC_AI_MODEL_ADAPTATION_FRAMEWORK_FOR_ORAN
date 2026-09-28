@@ -41,9 +41,9 @@ them yet: the code they describe still calls the datastore and the registry dire
 
 | Port | Today | Scheduled |
 |---|---|---|
-| `dataset` | `adaptation.data.load_data_version_frame` reads the local datastore | Hardening Phase 2 |
-| `artifact_store` | artifacts go through MLflow `--serve-artifacts` via the registry adapter | Hardening Phase 3 |
-| `deployment` | "deployed" means the registry's LIVE alias (`LIVE_ALIAS`) | Hardening Phase 3 |
+| `dataset` | `adaptation.data.load_data_version_frame` reads the local datastore | Hardening Phase 5 (data access by reference) |
+| `artifact_store` | artifacts go through MLflow `--serve-artifacts` via the registry adapter | Hardening Phase 2 (registry abstraction, filesystem/object-store adapter) |
+| `deployment` | "deployed" means the registry's LIVE alias (`LIVE_ALIAS`) | Hardening Phase 3 (deployment and serving propagation) |
 
 ## Not yet behind a port
 

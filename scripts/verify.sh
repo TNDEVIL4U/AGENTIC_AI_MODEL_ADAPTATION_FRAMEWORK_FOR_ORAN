@@ -40,20 +40,20 @@ fi
 
 # Packages (under oran_adapt) each phase touches; step 4 runs the tests importing any of them.
 case "$phase" in
-    1) scope="core api ports adapters plugins" ;;
-    2) scope="core db datastore cdc api" ;;
-    3) scope="registry adaptation adapters api" ;;
-    4) scope="sandbox adaptation" ;;
-    5) scope="analysis decision" ;;
-    6) scope="orchestrator api" ;;
-    7) scope="validation registry" ;;
-    8) scope="llm adapters" ;;
-    9) scope="api core" ;;
-    10) scope="cdc datastore" ;;
-    11) scope="core api orchestrator" ;;
-    12) scope="core api" ;;
-    13) scope="api core orchestrator" ;;
-    14) scope="core api orchestrator registry" ;;
+    1) scope="core api ports adapters plugins" ;;        # hexagonal core and configuration
+    2) scope="registry adapters ports bootstrap" ;;       # model registry abstraction
+    3) scope="registry orchestrator adapters ports" ;;    # deployment and serving propagation
+    4) scope="orchestrator adapters api" ;;               # outbound notifications
+    5) scope="datastore cdc analysis adaptation" ;;       # data access by reference
+    6) scope="orchestrator api" ;;                        # real execution layer
+    7) scope="validation registry orchestrator" ;;        # validation gate, progressive delivery
+    8) scope="adaptation adapters validation" ;;          # model-type plugins
+    9) scope="api adapters" ;;                            # security
+    10) scope="llm decision adaptation" ;;                # LLM paths
+    11) scope="core api" ;;                               # packaging and deployment
+    12) scope="core api orchestrator" ;;                  # observability
+    13) scope="core api orchestrator registry" ;;         # test and conformance consolidation
+    14) scope="core api" ;;                               # documentation, migration, samples
     15) scope="core api orchestrator registry sandbox" ;;
     *) echo "unknown phase '$phase' (expected 1-15)" >&2; exit 2 ;;
 esac
