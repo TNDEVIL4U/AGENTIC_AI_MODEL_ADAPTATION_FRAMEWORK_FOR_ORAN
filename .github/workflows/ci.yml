@@ -58,11 +58,13 @@ jobs:
         # annotation, which (unlike job logs) is readable without signing in.
         run: |
           set +e
-          python -m pytest -p no:cacheprovider -rs \
+          python -m pytest -p no:cacheprovider -rfEs \
             --cov=oran_adapt --cov-report=term --cov-report=xml:coverage.xml \
             --junitxml=junit.xml 2>&1 | tee pytest.log
           rc=${PIPESTATUS[0]}
           if [ "$rc" -ne 0 ]; then
+            failed="$(grep -E '^(FAILED|ERROR) ' pytest.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            echo "::error title=pytest failed tests::${failed:-none listed}"
             msg="$(tail -n 60 pytest.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
             echo "::error title=pytest exit ${rc}::${msg}"
           fi
