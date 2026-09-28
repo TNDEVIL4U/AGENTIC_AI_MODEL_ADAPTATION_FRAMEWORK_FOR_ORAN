@@ -14,7 +14,7 @@ that names each offending key, and every selected adapter's required keys must b
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import (
@@ -23,7 +23,12 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from oran_adapt.core.config_sources import SecretsSource, TomlFileSource, read_config_file
+from oran_adapt.core.config_sources import (
+    SecretsSource,
+    TomlFileSource,
+    is_secret_field,
+    read_config_file,
+)
 from oran_adapt.core.errors import ConfigurationError
 
 # Adapter selector key -> port. Each selected adapter's Capability.required_keys must be set.
@@ -49,6 +54,8 @@ class Settings(BaseSettings):
     # Environment variables the schema does not name are ignored (the environment holds far more
     # than this application's keys); unknown keys in a config file are an error instead.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # True only for the file lint: secret-typed keys then count as supplied from elsewhere.
+    _secrets_external: ClassVar[bool] = False
 
     @classmethod
     def settings_customise_sources(
@@ -309,6 +316,8 @@ class Settings(BaseSettings):
                 continue
             spec = plugins.resolve(port, name, config_key=selector)
             for key in spec.capability.required_keys:
+                if self._secrets_external and is_secret_field(type(self).model_fields[key]):
+                    continue
                 value = getattr(self, key)
                 if value is None or value == "" or value == [] or value == {}:
                     raise ConfigurationError(
@@ -345,7 +354,10 @@ def load_settings(**overrides: Any) -> Settings:
 
 
 class _FileOnlySettings(Settings):
-    """Settings from keyword arguments and defaults only (no environment, .env or secrets)."""
+    """Settings from keyword arguments and defaults only (no environment, .env or secrets).
+    Secret-typed keys are expected from the environment or a secrets backend, never a file."""
+
+    _secrets_external: ClassVar[bool] = True
 
     @classmethod
     def settings_customise_sources(
@@ -365,7 +377,7 @@ def lint_config_file(path: str) -> list[str]:
     try:
         _FileOnlySettings(**read_config_file(Settings, path))
     except ConfigurationError as exc:
-        return [f"{path}: {exc.message}"]
+        return [exc.message if str(path) in exc.message else f"{path}: {exc.message}"]
     except ValidationError as exc:
         return [f"{path}: {p['key']}: {p['error']}" for p in _problems(exc)]
     return []

@@ -30,7 +30,7 @@ from typing import Any
 import pandas as pd
 
 from oran_adapt.core.config import Settings, get_settings
-from oran_adapt.core.errors import AdaptationError
+from oran_adapt.core.errors import AdaptationError, ConfigurationError
 
 
 def _print(obj: Any) -> None:
@@ -259,6 +259,23 @@ def _cmd_auth_new_key(args, settings: Settings) -> Any:
     return body
 
 
+def _cmd_config_lint(args, settings: Settings | None) -> Any:
+    from oran_adapt.core.config import lint_config_file
+
+    problems = [p for path in args.files for p in lint_config_file(path)]
+    if problems:
+        raise ConfigurationError(
+            f"{len(problems)} problem(s) in config file(s)", problems=problems
+        )
+    return {"ok": True, "files": args.files}
+
+
+def _cmd_config_effective(args, settings: Settings) -> Any:
+    from oran_adapt.core.config_sources import effective_config
+
+    return effective_config(settings)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="oran-adapt", description=__doc__.splitlines()[0])
     top = p.add_subparsers(dest="group", required=True)
@@ -354,6 +371,14 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--name", help="who the key is for (shown as the audit actor)")
     c.add_argument("--stdin", action="store_true", help="hash a key read from stdin instead")
     c.set_defaults(fn=_cmd_auth_new_key)
+
+    config = top.add_parser("config").add_subparsers(dest="cmd", required=True)
+    c = config.add_parser("lint", help="validate config file(s) against the settings schema")
+    c.add_argument("files", nargs="+", metavar="FILE")
+    # Checks the files on their own, so a broken environment cannot stop the lint.
+    c.set_defaults(fn=_cmd_config_lint, needs_settings=False)
+    c = config.add_parser("effective", help="every key's effective value (redacted) and source")
+    c.set_defaults(fn=_cmd_config_effective)
     return p
 
 
@@ -365,7 +390,8 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     try:
-        _print(args.fn(args, get_settings()))
+        settings = get_settings() if getattr(args, "needs_settings", True) else None
+        _print(args.fn(args, settings))
     except AdaptationError as exc:
         _print(exc.to_dict())
         return 1

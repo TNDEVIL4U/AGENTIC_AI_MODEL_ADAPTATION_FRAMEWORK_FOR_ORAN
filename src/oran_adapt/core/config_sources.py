@@ -12,7 +12,8 @@ Precedence, highest first:
 The TOML file uses sections that join with ``_`` onto the flat key, so ``[llm]
 max_output_tokens = 1024`` sets ``llm_max_output_tokens`` (env ``LLM_MAX_OUTPUT_TOKENS``). A table
 whose flat name is itself a dict-typed key (``api_keys``, ``policy_roles``) is that key's value.
-Unknown keys in the file are an error, never ignored.
+Unknown keys in the file are an error, never ignored, and so are secret-typed keys: secrets come
+from the environment or the secrets backend only.
 """
 
 from __future__ import annotations
@@ -84,6 +85,13 @@ def read_config_file(settings_cls: type[BaseSettings], path: str | Path) -> dict
             f"config file {path} has unknown key(s): {', '.join(unknown)}",
             key=CONFIG_FILE_ENV,
             unknown=unknown,
+        )
+    secrets = sorted(k for k in values if is_secret_field(fields[k]))
+    if secrets:
+        raise ConfigurationError(
+            f"config file {path} holds secret key(s): {', '.join(secrets)}",
+            key=secrets[0].upper(),
+            hint="set secrets in the environment or through SECRETS_BACKEND, never in a file",
         )
     return values
 

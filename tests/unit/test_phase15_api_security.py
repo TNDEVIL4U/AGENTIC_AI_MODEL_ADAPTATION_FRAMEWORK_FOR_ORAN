@@ -8,7 +8,7 @@ import re
 
 from test_phase14_stage_b import KEYS, _h, secured, secured_settings
 
-from oran_adapt.api.security import DATA, PROMOTE, READ, SUBMIT
+from oran_adapt.api.security import ADMIN, DATA, PROMOTE, READ, SUBMIT
 from oran_adapt.core.enums import Role
 
 __all__ = ["secured", "secured_settings"]  # fixtures re-used from test_phase14_stage_b
@@ -24,6 +24,9 @@ WRITE_POLICY = {
     ("POST", "/api/v1/models/attach"): DATA,
     ("POST", "/api/v1/models/{model_id}/rollback"): PROMOTE,
 }
+
+# Read routes that need more than READ.
+PRIVILEGED_READS = {("GET", "/api/v1/config/effective"): ADMIN}
 
 ROLE_OF = {who: Role(spec.partition(":")[0]) for who, (_, spec) in KEYS.items()}
 
@@ -65,7 +68,7 @@ def test_each_role_reaches_exactly_the_routes_its_policy_allows(secured, secured
     for method, path in _routes(secured.app):
         if path in PUBLIC:
             continue
-        action = WRITE_POLICY.get((method, path), READ)
+        action = {**WRITE_POLICY, **PRIVILEGED_READS}.get((method, path), READ)
         allowed = {Role(r) for r in secured_settings.policy_roles[action]}
         for who, role in ROLE_OF.items():
             # An empty body: allowed callers get past the role check and stop at validation
