@@ -21,10 +21,11 @@ from test_phase14_member1 import (  # shared seeding helpers (same test director
 )
 
 from oran_adapt import cli
+from oran_adapt.adapters.kafka_cdc import KafkaCdcSource
+from oran_adapt.adapters.mlflow_registry import MlflowRegistry
+from oran_adapt.bootstrap import build_cdc_source
 from oran_adapt.cdc import (
-    KafkaCdcSource,
     PollingCdcSource,
-    build_source,
     from_debezium,
     materialize_cdc,
     run_cdc_once,
@@ -47,7 +48,6 @@ from oran_adapt.db.models import (
     KpiSample,
     ModelVersionEvaluation,
 )
-from oran_adapt.registry.client import MlflowRegistry
 
 T0 = datetime(2026, 3, 1, tzinfo=UTC)
 
@@ -63,7 +63,7 @@ def registry(settings) -> MlflowRegistry:
 
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 @pytest.fixture
@@ -300,14 +300,16 @@ class _FakeConsumer:
 def test_kafka_consumer_commits_after_storing_and_skips_redeliveries(
     session_factory, migrated_settings
 ) -> None:
-    settings = migrated_settings.model_copy(update={"cdc_mode": "kafka"})
+    settings = migrated_settings.model_copy(
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092"}
+    )
     batch = [
         _Msg(_debezium("c", None, _row(1, 0.5), lsn=1), 0),
         _Msg(_debezium("u", _row(1, 0.5), _row(1, 0.7), lsn=2), 1),
         _Msg(None, 2),  # tombstone: acknowledged, not stored
     ]
     fake = _FakeConsumer([batch, batch])  # the second is a redelivery of the same messages
-    source = build_source(settings, kafka_consumer=fake)
+    source = KafkaCdcSource(settings, fake)
     assert isinstance(source, KafkaCdcSource) and fake.subscribed == [settings.cdc_kafka_topic]
     before = _sample("cdc_events_total", {"source": "debezium", "operation": "UPDATE"})
 
@@ -325,7 +327,9 @@ def test_kafka_consumer_commits_after_storing_and_skips_redeliveries(
 
 # ---- chaos: Kafka down, consumer failure ------------------------------------------------------
 def test_kafka_unavailable_stores_and_commits_nothing(session_factory, migrated_settings) -> None:
-    settings = migrated_settings.model_copy(update={"cdc_mode": "kafka"})
+    settings = migrated_settings.model_copy(
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092"}
+    )
     broken = _FakeConsumer([
         [_Msg(_debezium("c", None, _row(1, 0.5)), 0), _Msg(None, 1, error="_ALL_BROKERS_DOWN")],
         RuntimeError("KafkaException: _TRANSPORT"),
@@ -344,13 +348,15 @@ def test_kafka_mode_without_client_library_is_reported(migrated_settings, monkey
     import sys
 
     monkeypatch.setitem(sys.modules, "confluent_kafka", None)  # import fails
-    settings = migrated_settings.model_copy(update={"cdc_mode": "kafka"})
+    settings = migrated_settings.model_copy(
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092"}
+    )
     with pytest.raises(CdcUnavailableError, match="confluent-kafka"):
-        build_source(settings)
+        build_cdc_source(settings)
     with pytest.raises(CdcUnavailableError, match="disabled"):
-        build_source(migrated_settings)  # cdc_mode defaults to disabled
+        build_cdc_source(migrated_settings)  # cdc_mode defaults to disabled
     assert isinstance(
-        build_source(migrated_settings.model_copy(update={"cdc_mode": "polling"})),
+        build_cdc_source(migrated_settings.model_copy(update={"cdc_mode": "polling"})),
         PollingCdcSource,
     )
 

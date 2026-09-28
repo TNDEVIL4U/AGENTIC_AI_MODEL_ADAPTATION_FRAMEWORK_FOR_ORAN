@@ -26,14 +26,14 @@ from test_phase14_member1 import (  # shared seeding helpers (same test director
 )
 
 from oran_adapt import cli
+from oran_adapt.adapters.access import hash_api_key
+from oran_adapt.adapters.mlflow_registry import MlflowRegistry
 from oran_adapt.api.app import create_app
-from oran_adapt.api.security import hash_api_key
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import AuditAction, JobStatus
 from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.db.base import create_db_engine, make_session_factory, session_scope
 from oran_adapt.db.models import AdaptationJob, AuditLog
-from oran_adapt.registry.client import MlflowRegistry
 
 KEYS = {
     "admin": ("admin-key-0123456789", "ADMIN:alice"),
@@ -58,7 +58,7 @@ def registry(settings) -> MlflowRegistry:
 
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 @pytest.fixture

@@ -1,52 +1,38 @@
-"""Thin wrapper over MLflow — the single authority for models, versions, artifacts, aliases."""
+"""Registry adapter ``mlflow``: models, versions, artifacts and aliases in MLflow.
+
+Artifacts go through the MLflow tracking server's own artifact store (``--serve-artifacts``,
+volume-backed); there is no separate object store.
+"""
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
 from mlflow import MlflowClient
 from mlflow.exceptions import MlflowException
 
+from oran_adapt.adapters.mlflow_models import (
+    FLAVORS,
+    MlflowFlavorHandler,
+    resolve_skops_trusted_types,
+)
 from oran_adapt.core.errors import (
     ArtifactError,
     ModelNotFoundError,
     RegistryUnavailableError,
     UnsupportedAdaptationError,
 )
+from oran_adapt.ports import AdapterSpec, Capability
 
-# Types beyond skops' built-in safe list that sklearn tree models need (see
-# Settings.mlflow_skops_trusted_types, which overrides this default).
-DEFAULT_SKOPS_TRUSTED_TYPES = (
-    "sklearn.tree._tree.Tree",
-    "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
-)
+if TYPE_CHECKING:
+    import pandas as pd
 
+    from oran_adapt.core.config import Settings
 
-def resolve_skops_trusted_types(model: object, allowed: tuple[str, ...] | list[str]) -> list[str]:
-    """The skops types ``model`` needs trusted to be saved by ``mlflow.sklearn``. Raises
-    ArtifactError - a deterministic failure, never retried - when it needs any type outside
-    ``allowed``, rather than letting MLflow fail later with a generic error that looks like an
-    outage."""
-    import skops.io as sio
-
-    try:
-        needed = sio.get_untrusted_types(data=sio.dumps(model))
-    except Exception as exc:
-        raise ArtifactError(
-            f"could not serialize {type(model).__name__} with skops", cause=str(exc)
-        ) from exc
-    refused = sorted(set(needed) - set(allowed))
-    if refused:
-        raise ArtifactError(
-            f"{type(model).__name__} needs skops types that are not on the trusted list",
-            untrusted_types=refused,
-            hint="review them, then add to MLFLOW_SKOPS_TRUSTED_TYPES",
-        )
-    return sorted(needed)
+_NOT_FOUND = "RESOURCE_DOES_NOT_EXIST"
 
 
 class MlflowRegistry:
@@ -55,18 +41,57 @@ class MlflowRegistry:
         tracking_uri: str,
         registry_uri: str | None = None,
         *,
-        skops_trusted_types: list[str] | tuple[str, ...] | None = None,
+        skops_trusted_types: list[str] | tuple[str, ...],
+        checksum_tag: str,
+        http_max_retries: int,
+        http_backoff_factor: float,
+        http_timeout_s: float,
     ) -> None:
-        # MLflow's default HTTP policy (7 retries with exponential backoff) makes an outage
-        # take minutes to surface. Fail fast unless the operator configured otherwise.
-        os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "1")
-        os.environ.setdefault("MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR", "0")
-        os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "10")
+        # MLflow's default HTTP policy (7 retries with exponential backoff) makes an outage take
+        # minutes to surface. Fail fast unless the operator set MLflow's own variables.
+        os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", str(http_max_retries))
+        os.environ.setdefault("MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR", str(http_backoff_factor))
+        os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", str(int(http_timeout_s)))
         self.tracking_uri = tracking_uri
         self.registry_uri = registry_uri or tracking_uri
+        self.skops_trusted_types = tuple(skops_trusted_types)
+        self.checksum_tag = checksum_tag
+        self._http = (http_max_retries, http_backoff_factor, http_timeout_s)
+        self.handler = MlflowFlavorHandler()
         self.client = MlflowClient(tracking_uri=tracking_uri, registry_uri=self.registry_uri)
-        self.skops_trusted_types = tuple(
-            DEFAULT_SKOPS_TRUSTED_TYPES if skops_trusted_types is None else skops_trusted_types
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> MlflowRegistry:
+        return cls(
+            settings.mlflow_tracking_uri,
+            settings.mlflow_registry_uri,
+            skops_trusted_types=settings.mlflow_skops_trusted_types,
+            checksum_tag=settings.registry_tags_checksum,
+            http_max_retries=settings.mlflow_http_max_retries,
+            http_backoff_factor=settings.mlflow_http_backoff_factor,
+            http_timeout_s=settings.mlflow_http_timeout_s,
+        )
+
+    # The MlflowClient holds sessions; a job worker process rebuilds it from the URIs.
+    def __getstate__(self) -> dict[str, Any]:
+        return {
+            "tracking_uri": self.tracking_uri,
+            "registry_uri": self.registry_uri,
+            "skops_trusted_types": self.skops_trusted_types,
+            "checksum_tag": self.checksum_tag,
+            "http": self._http,
+        }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        retries, backoff, timeout = state["http"]
+        self.__init__(  # type: ignore[misc]
+            state["tracking_uri"],
+            state["registry_uri"],
+            skops_trusted_types=state["skops_trusted_types"],
+            checksum_tag=state["checksum_tag"],
+            http_max_retries=retries,
+            http_backoff_factor=backoff,
+            http_timeout_s=timeout,
         )
 
     def ping(self) -> None:
@@ -83,7 +108,7 @@ class MlflowRegistry:
         try:
             return self.client.get_registered_model(name)
         except MlflowException as exc:
-            if getattr(exc, "error_code", "") == "RESOURCE_DOES_NOT_EXIST":
+            if getattr(exc, "error_code", "") == _NOT_FOUND:
                 raise ModelNotFoundError(f"Model '{name}' not found in MLflow", model=name) from exc
             raise RegistryUnavailableError("MLflow query failed", cause=str(exc)) from exc
 
@@ -133,7 +158,7 @@ class MlflowRegistry:
 
     def download_artifacts(self, name: str, version: str, dst_path: str) -> str:
         """Download a registered model version's artifacts to a local directory and return the
-        local path. Member 3's loaders load the native model object from that path."""
+        local path; ``load_model`` turns that directory into the native model object."""
         import mlflow.artifacts
 
         try:
@@ -145,7 +170,7 @@ class MlflowRegistry:
                     registry_uri=self.registry_uri,
                 )
         except MlflowException as exc:
-            if getattr(exc, "error_code", "") == "RESOURCE_DOES_NOT_EXIST":
+            if getattr(exc, "error_code", "") == _NOT_FOUND:
                 raise ModelNotFoundError(
                     f"Model '{name}' version '{version}' not found", model=name, version=version
                 ) from exc
@@ -153,14 +178,16 @@ class MlflowRegistry:
                 "MLflow artifact download failed", cause=str(exc)
             ) from exc
 
+    def load_model(self, local_path: str, framework: str) -> object:
+        return self.handler.load(local_path, framework)
+
     def get_version_by_alias(self, name: str, alias: str) -> str:
-        """The version currently serving traffic under ``alias`` (e.g. the orchestrator's
-        ``live_alias``). Raises ModelNotFoundError if the model has no version under that
-        alias yet."""
+        """The version currently under ``alias``. Raises ModelNotFoundError if the model has no
+        version under that alias yet."""
         try:
             return str(self.client.get_model_version_by_alias(name, alias).version)
         except MlflowException as exc:
-            if getattr(exc, "error_code", "") == "RESOURCE_DOES_NOT_EXIST":
+            if getattr(exc, "error_code", "") == _NOT_FOUND:
                 raise ModelNotFoundError(
                     f"model '{name}' has no version aliased '{alias}'", model=name, alias=alias
                 ) from exc
@@ -192,34 +219,29 @@ class MlflowRegistry:
         Raises UnsupportedAdaptationError for a framework with no MLflow flavor, ArtifactError
         for a model that cannot be serialized safely, RegistryUnavailableError when MLflow
         itself fails."""
+        import importlib
+
         import mlflow
         from mlflow.data.pandas_dataset import from_pandas
 
         fw = framework.lower()
-        if fw not in ("sklearn", "xgboost", "torch", "pytorch"):
+        flavor_name = FLAVORS.get(fw)
+        if flavor_name is None:
             raise UnsupportedAdaptationError(f"no MLflow log_model flavor for framework {framework!r}")
-        trusted = (
-            resolve_skops_trusted_types(model, self.skops_trusted_types) if fw == "sklearn" else []
-        )
+        flavor = importlib.import_module(flavor_name)
+        extra: dict[str, Any] = {}
+        if flavor_name == "mlflow.sklearn":
+            trusted = resolve_skops_trusted_types(model, self.skops_trusted_types)
+            extra["skops_trusted_types"] = trusted or None
+        elif flavor_name == "mlflow.pytorch":
+            extra["serialization_format"] = "pickle"
 
         try:
             with self._fluent_uris(), mlflow.start_run():
                 if input_frame is not None:
                     dataset = from_pandas(input_frame, name=input_name, digest=input_digest)
                     mlflow.log_input(dataset, context="training")
-                if fw == "sklearn":
-                    info = mlflow.sklearn.log_model(
-                        model,
-                        name="model",
-                        registered_model_name=name,
-                        skops_trusted_types=trusted or None,
-                    )
-                elif fw == "xgboost":
-                    info = mlflow.xgboost.log_model(model, name="model", registered_model_name=name)
-                else:
-                    info = mlflow.pytorch.log_model(
-                        model, name="model", registered_model_name=name, serialization_format="pickle"
-                    )
+                info = flavor.log_model(model, name="model", registered_model_name=name, **extra)
                 for metric_name, value in (metrics or {}).items():
                     mlflow.log_metric(metric_name, value)
                 if tags:
@@ -241,7 +263,7 @@ class MlflowRegistry:
         metrics: dict[str, float],
         tags: dict[str, str] | None = None,
     ) -> str:
-        """Register a candidate artifact (a local joblib file, as produced by Member 3's
+        """Register a candidate artifact (a local joblib file, as produced by the adaptation
         engines) as a new version of ``name``. See log_model for the errors it raises."""
         import joblib
 
@@ -266,7 +288,7 @@ class MlflowRegistry:
         try:
             return self.client.get_model_version(name, version)
         except MlflowException as exc:
-            if getattr(exc, "error_code", "") in ("RESOURCE_DOES_NOT_EXIST", "INVALID_PARAMETER_VALUE"):
+            if getattr(exc, "error_code", "") in (_NOT_FOUND, "INVALID_PARAMETER_VALUE"):
                 raise ModelNotFoundError(
                     f"Model '{name}' version '{version}' not found", model=name, version=version
                 ) from exc
@@ -274,13 +296,16 @@ class MlflowRegistry:
 
     def get_run_metrics(self, run_id: str | None) -> dict[str, float]:
         """The metrics logged on a version's source run (its training-time baseline); empty
-        when the version has no run or the run is gone."""
+        when the version has no run or the run has been deleted. Any other MLflow failure is
+        RegistryUnavailableError."""
         if not run_id:
             return {}
         try:
             return dict(self.client.get_run(run_id).data.metrics or {})
-        except MlflowException:
-            return {}
+        except MlflowException as exc:
+            if getattr(exc, "error_code", "") == _NOT_FOUND:
+                return {}
+            raise RegistryUnavailableError("MLflow run lookup failed", cause=str(exc)) from exc
 
     def delete_alias(self, name: str, alias: str) -> None:
         try:
@@ -289,14 +314,14 @@ class MlflowRegistry:
             raise RegistryUnavailableError("MLflow alias delete failed", cause=str(exc)) from exc
 
     def record_artifact_checksum(self, name: str, version: str, workdir: str) -> str:
-        """Download ``version``'s artifacts, hash them and store the hash as the
-        ``artifact.sha256`` version tag; returns the hash. Called right after registration so
-        every later load can be checked against it."""
+        """Download ``version``'s artifacts, hash them and store the hash as the checksum
+        version tag; returns the hash. Called right after registration so every later load can
+        be checked against it."""
         from oran_adapt.core.integrity import sha256_path
 
         local = self.download_artifacts(name, version, os.path.join(workdir, f"sha-{version}"))
         digest = sha256_path(local)
-        self.set_version_tags(name, version, {"artifact.sha256": digest})
+        self.set_version_tags(name, version, {self.checksum_tag: digest})
         return digest
 
     def describe_versions(self, name: str) -> list[dict[str, Any]]:
@@ -322,3 +347,25 @@ class MlflowRegistry:
             }
             for v in versions
         ]
+
+
+SPEC = AdapterSpec(
+    capability=Capability(
+        port="registry",
+        adapter="mlflow",
+        description="MLflow model registry; artifacts via the tracking server's artifact store",
+        features=frozenset({"aliases", "version_tags", "run_metrics", "lineage_inputs"}),
+        config_keys=(
+            "mlflow_tracking_uri",
+            "mlflow_registry_uri",
+            "mlflow_skops_trusted_types",
+            "registry_tags_checksum",
+            "mlflow_http_max_retries",
+            "mlflow_http_backoff_factor",
+            "mlflow_http_timeout_s",
+        ),
+        required_keys=("mlflow_tracking_uri",),
+        distributions=("mlflow",),
+    ),
+    factory=MlflowRegistry.from_settings,
+)

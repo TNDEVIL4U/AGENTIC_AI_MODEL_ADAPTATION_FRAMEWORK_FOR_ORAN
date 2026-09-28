@@ -20,6 +20,7 @@ from sklearn.linear_model import LogisticRegression
 from sqlalchemy import inspect as sa_inspect
 
 import oran_adapt.orchestrator.pipeline as pipeline_module
+from oran_adapt.adapters.mlflow_registry import MlflowRegistry
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import VersionEvaluation
 from oran_adapt.core.enums import (
@@ -53,7 +54,6 @@ from oran_adapt.db.models import (
     ModelVersionEvaluation,
 )
 from oran_adapt.orchestrator.jobs import submit_adaptation_job
-from oran_adapt.registry.client import MlflowRegistry
 from oran_adapt.registry.promotion import promote_version
 
 FEATURES = ["prb_util", "rsrp"]
@@ -70,7 +70,7 @@ def session_factory(migrated_settings):
 def registry(settings) -> MlflowRegistry:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 # ---- data ------------------------------------------------------------------------------------

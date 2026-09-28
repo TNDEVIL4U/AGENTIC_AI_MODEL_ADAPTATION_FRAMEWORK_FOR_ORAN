@@ -18,6 +18,7 @@ import pytest
 from sklearn.linear_model import LogisticRegression
 
 import oran_adapt.orchestrator.jobs as jobs_module
+from oran_adapt.adapters.mlflow_registry import MlflowRegistry
 from oran_adapt.core.enums import AssociationRole, DataKind, JobStatus
 from oran_adapt.core.errors import ModelNotFoundError, RegistryUnavailableError
 from oran_adapt.core.schemas import DriftEvent
@@ -34,7 +35,6 @@ from oran_adapt.db.models import (
 )
 from oran_adapt.orchestrator.jobs import submit_adaptation_job
 from oran_adapt.orchestrator.schemas import JobResult
-from oran_adapt.registry.client import MlflowRegistry
 
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
@@ -51,7 +51,7 @@ def session_factory(migrated_settings):
 def registry(settings) -> MlflowRegistry:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 def _frame(n: int, *, prb_lo: float, prb_hi: float, prb_seed: int, rsrp_seed: int) -> pd.DataFrame:
@@ -362,7 +362,7 @@ def test_full_pipeline_via_job_manager_registers_and_records_events(
 def test_api_submit_event_and_idempotent_resubmit(client, migrated_settings) -> None:
     engine = create_db_engine(migrated_settings.database_url)
     api_session_factory = make_session_factory(engine)
-    api_registry = MlflowRegistry(migrated_settings.mlflow_tracking_uri)
+    api_registry = MlflowRegistry.from_settings(migrated_settings)
     mlflow.set_tracking_uri(migrated_settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(migrated_settings.mlflow_tracking_uri)
 

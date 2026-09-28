@@ -9,7 +9,7 @@ snapshots form a lineage chain: v1's training data -> (+ drifted data) -> v2's t
 
 MLflow stays the only authority for models; the model_version values stored here are
 references to MLflow versions, and the registry side carries the matching `data.*` tags (see
-MlflowRegistry.log_model), so lineage can be followed from either end.
+ModelRegistryPort.log_model), so lineage can be followed from either end.
 """
 
 from __future__ import annotations

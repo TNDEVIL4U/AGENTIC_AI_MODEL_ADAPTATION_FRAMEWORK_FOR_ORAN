@@ -18,14 +18,13 @@ from oran_adapt.api.routes_data import current_router as current_data_router
 from oran_adapt.api.routes_data import router as data_router
 from oran_adapt.api.routes_health import router as health_router
 from oran_adapt.api.routes_models import router as models_router
-from oran_adapt.api.security import READ_ROLES, require_roles
+from oran_adapt.api.security import READ, require
+from oran_adapt.bootstrap import build_auth, build_llm, build_policy, build_registry
 from oran_adapt.core import correlation, metrics
 from oran_adapt.core.config import Settings, get_settings
 from oran_adapt.core.errors import AdaptationError
 from oran_adapt.core.logging import configure_logging
 from oran_adapt.db.base import create_db_engine, make_session_factory
-from oran_adapt.llm.client import build_llm_client
-from oran_adapt.registry.client import MlflowRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -141,12 +140,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = create_db_engine(settings.database_url)
     app.state.session_factory = make_session_factory(app.state.engine)
-    app.state.registry = MlflowRegistry(
-        settings.mlflow_tracking_uri,
-        settings.mlflow_registry_uri,
-        skops_trusted_types=settings.mlflow_skops_trusted_types,
-    )
-    app.state.llm_client = build_llm_client(settings)
+    app.state.registry = build_registry(settings)
+    app.state.llm_client = build_llm(settings)
+    app.state.auth = build_auth(settings)
+    app.state.policy = build_policy(settings)
     # Added first so it runs innermost: an oversized request still gets a correlation id and
     # is counted in the HTTP metrics by RequestContextMiddleware.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.api_max_request_bytes)
@@ -170,8 +167,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         return JSONResponse(status_code=422, content=json.loads(json.dumps(body, default=str)))
 
-    # Any role may read; write endpoints add their own stricter role check.
-    authenticated = [Depends(require_roles(*READ_ROLES))]
+    # Every caller needs the read action; write endpoints add their own.
+    authenticated = [Depends(require(READ))]
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(adaptation_router, prefix="/api/v1", dependencies=authenticated)
     app.include_router(data_router, prefix="/api/v1", dependencies=authenticated)

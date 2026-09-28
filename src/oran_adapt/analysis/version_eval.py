@@ -22,12 +22,11 @@ import time
 import pandas as pd
 
 from oran_adapt.adaptation.inspector import inspect_model
-from oran_adapt.adaptation.loaders import load_native_model
 from oran_adapt.analysis.schemas import VersionEvaluation
 from oran_adapt.core.config import Settings
 from oran_adapt.core.errors import AdaptationError, RegistryUnavailableError
 from oran_adapt.core.logging import log_event
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import ModelRegistryPort
 from oran_adapt.registry.promotion import verify_version_artifact
 from oran_adapt.validation.evaluate import evaluate_model
 from oran_adapt.validation.metrics import higher_is_better
@@ -35,7 +34,7 @@ from oran_adapt.validation.metrics import higher_is_better
 logger = logging.getLogger(__name__)
 
 
-def _candidates(registry: MlflowRegistry, name: str, live_version: str, limit: int) -> list:
+def _candidates(registry: ModelRegistryPort, name: str, live_version: str, limit: int) -> list:
     ready = [v for v in registry.list_versions(name) if (v.status or "READY") == "READY"]
     newest = ready[-limit:]
     if all(str(v.version) != live_version for v in newest):
@@ -51,7 +50,7 @@ def _degradation(metric: str, now: float, baseline: dict[str, float]) -> float |
 
 
 def _evaluate_one(
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     name: str,
     version_info,
     *,
@@ -72,7 +71,7 @@ def _evaluate_one(
 
     try:
         local, ev.artifact_sha256 = verify_version_artifact(registry, name, version, workdir)
-        model = load_native_model(local, framework)
+        model = registry.load_model(local, framework)
         inspection = inspect_model(model, framework)
     except RegistryUnavailableError:
         raise
@@ -116,7 +115,7 @@ def _evaluate_one(
 
 
 def evaluate_versions(
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     *,
     mlflow_name: str,
     framework: str,

@@ -44,13 +44,9 @@ def _session_factory(settings: Settings):
 
 
 def _registry(settings: Settings):
-    from oran_adapt.registry.client import MlflowRegistry
+    from oran_adapt.bootstrap import build_registry
 
-    return MlflowRegistry(
-        settings.mlflow_tracking_uri,
-        settings.mlflow_registry_uri,
-        skops_trusted_types=settings.mlflow_skops_trusted_types,
-    )
+    return build_registry(settings)
 
 
 def _cmd_db_upgrade(args, settings: Settings) -> Any:
@@ -222,8 +218,8 @@ def _cmd_model_show(args, settings: Settings) -> Any:
 
 
 def _cmd_event_submit(args, settings: Settings) -> Any:
+    from oran_adapt.bootstrap import build_llm
     from oran_adapt.core.schemas import DriftEvent
-    from oran_adapt.llm.client import build_llm_client
     from oran_adapt.orchestrator.jobs import submit_adaptation_job
 
     event = DriftEvent(
@@ -238,7 +234,7 @@ def _cmd_event_submit(args, settings: Settings) -> Any:
         event,
         settings,
         registry=_registry(settings),
-        llm_client=build_llm_client(settings),
+        llm_client=build_llm(settings),
         workdir=settings.artifact_workdir,
     ).model_dump(mode="json")
 
@@ -249,7 +245,7 @@ def _cmd_auth_new_key(args, settings: Settings) -> Any:
     is shown once, here, and stored nowhere."""
     import secrets
 
-    from oran_adapt.api.security import hash_api_key
+    from oran_adapt.adapters.access import hash_api_key
     from oran_adapt.core.enums import Role
 
     key = sys.stdin.readline().strip() if args.stdin else secrets.token_urlsafe(32)

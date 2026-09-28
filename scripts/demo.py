@@ -33,7 +33,6 @@ from sklearn.linear_model import Ridge
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from oran_adapt.adaptation.loaders import load_native_model
 from oran_adapt.api.app import create_app
 from oran_adapt.core.config import Settings
 from oran_adapt.db.base import session_scope
@@ -211,7 +210,7 @@ def run() -> None:
         local, _ = verify_version_artifact(
             app.state.registry, MODEL_ID.replace("-", "_"), new_version, str(run_dir / "predict")
         )
-        live_model = load_native_model(local, "sklearn")
+        live_model = app.state.registry.load_model(local, "sklearn")
         sample = drifted[FEATURES].tail(5)
         predictions = live_model.predict(sample)
         check(len(predictions) == 5 and np.isfinite(predictions).all(), "bad predictions")

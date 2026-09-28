@@ -36,7 +36,6 @@ from oran_adapt.adaptation.engines import run_engine, select_engine
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.leakage import check_leakage
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
-from oran_adapt.adaptation.loaders import load_native_model
 from oran_adapt.adaptation.schemas import CandidateModel, ModelInspection
 from oran_adapt.analysis.engine import analyze
 from oran_adapt.analysis.reuse_decision import decide_reuse
@@ -71,7 +70,7 @@ from oran_adapt.decision.engine import decide
 from oran_adapt.llm.client import LlmClient
 from oran_adapt.orchestrator.context import current_job_id, report_stage
 from oran_adapt.orchestrator.schemas import JobResult
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import ModelRegistryPort
 from oran_adapt.registry.promotion import current_live, promote_version, verify_version_artifact
 from oran_adapt.validation.engine import validate_candidate
 
@@ -226,7 +225,7 @@ def run_adaptation_job(
     event: DriftEvent,
     settings: Settings,
     *,
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     llm_client: LlmClient | None,
     workdir: str,
 ) -> JobResult:
@@ -467,7 +466,7 @@ def run_adaptation_job(
             f"model '{event.model_id}' has no framework on record; cannot load it to adapt",
             model_id=event.model_id,
         )
-    current_model = load_native_model(local_path, framework)
+    current_model = registry.load_model(local_path, framework)
     inspection = inspect_model(current_model, framework)
 
     train_records = [r for r in records if r.id not in holdout_ids]

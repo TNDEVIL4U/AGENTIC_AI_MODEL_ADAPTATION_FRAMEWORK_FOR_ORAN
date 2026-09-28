@@ -19,6 +19,40 @@ dependencies = [
 [project.scripts]
 oran-adapt = "oran_adapt.cli:main"
 
+# Adapters, one entry-point group per port (oran_adapt.plugins). A third-party distribution adds
+# its own under the same groups; the config key naming the adapter selects it.
+[project.entry-points."oran_adapt.registry"]
+mlflow = "oran_adapt.adapters.mlflow_registry:SPEC"
+
+[project.entry-points."oran_adapt.model_handler"]
+mlflow-flavors = "oran_adapt.adapters.mlflow_models:SPEC"
+
+[project.entry-points."oran_adapt.llm"]
+anthropic = "oran_adapt.adapters.llm_providers:ANTHROPIC"
+gemini = "oran_adapt.adapters.llm_providers:GEMINI"
+
+[project.entry-points."oran_adapt.cdc_source"]
+kafka = "oran_adapt.adapters.kafka_cdc:SPEC"
+polling = "oran_adapt.adapters.polling_cdc:SPEC"
+
+[project.entry-points."oran_adapt.job_executor"]
+process = "oran_adapt.adapters.job_executors:PROCESS"
+thread = "oran_adapt.adapters.job_executors:THREAD"
+
+[project.entry-points."oran_adapt.auth"]
+api-key = "oran_adapt.adapters.access:API_KEY"
+
+[project.entry-points."oran_adapt.policy"]
+static-rbac = "oran_adapt.adapters.access:STATIC_RBAC"
+
+[project.entry-points."oran_adapt.notification"]
+log = "oran_adapt.adapters.notify:LOG"
+webhook = "oran_adapt.adapters.notify:WEBHOOK"
+
+[project.entry-points."oran_adapt.secrets"]
+env = "oran_adapt.adapters.secrets:ENV"
+file = "oran_adapt.adapters.secrets:FILE"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "pytest-xdist>=3.8", "ruff"]
 # CDC_MODE=kafka (production CDC from Debezium). Not needed for the polling fallback.

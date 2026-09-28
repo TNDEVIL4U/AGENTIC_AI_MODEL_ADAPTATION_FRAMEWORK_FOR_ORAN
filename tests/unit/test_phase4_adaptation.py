@@ -12,17 +12,17 @@ from torch import nn
 from oran_adapt.adaptation.capability import assess_capability, assess_schema_compatibility
 from oran_adapt.adaptation.engines import EngineKind, select_engine
 from oran_adapt.adaptation.inspector import inspect_model
-from oran_adapt.adaptation.loaders import load_native_model
 from oran_adapt.adaptation.schemas import CapabilityAssessment, ModelInspection, SchemaCompatibility
+from oran_adapt.adapters.mlflow_models import MlflowFlavorHandler
+from oran_adapt.adapters.mlflow_registry import MlflowRegistry
 from oran_adapt.core.enums import Strategy
 from oran_adapt.core.errors import ArtifactError, ModelNotFoundError, UnsupportedAdaptationError
-from oran_adapt.registry.client import MlflowRegistry
 
 
 @pytest.fixture
 def registry(settings) -> MlflowRegistry:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 def _log_sklearn_model(name: str, *, warm_start: bool = False) -> None:
@@ -45,7 +45,7 @@ def _log_torch_model(name: str) -> None:
 def test_sklearn_artifact_round_trip(registry, tmp_path) -> None:
     _log_sklearn_model("sk-test-model", warm_start=True)
     local_path = registry.download_artifacts("sk-test-model", "1", str(tmp_path / "dl"))
-    model = load_native_model(local_path, "sklearn")
+    model = MlflowFlavorHandler().load(local_path, "sklearn")
     inspection = inspect_model(model, "sklearn")
 
     assert inspection.framework == "sklearn"
@@ -60,7 +60,7 @@ def test_sklearn_artifact_round_trip(registry, tmp_path) -> None:
 def test_torch_artifact_round_trip(registry, tmp_path) -> None:
     _log_torch_model("torch-test-model")
     local_path = registry.download_artifacts("torch-test-model", "1", str(tmp_path / "dl"))
-    model = load_native_model(local_path, "torch")
+    model = MlflowFlavorHandler().load(local_path, "torch")
     inspection = inspect_model(model, "torch")
 
     assert inspection.framework == "torch"
@@ -80,14 +80,14 @@ def test_download_missing_version_raises_model_not_found(registry, tmp_path) -> 
 
 def test_load_native_model_unsupported_framework_raises(tmp_path) -> None:
     with pytest.raises(UnsupportedAdaptationError):
-        load_native_model(str(tmp_path), "tensorflow")
+        MlflowFlavorHandler().load(str(tmp_path), "tensorflow")
 
 
 def test_load_native_model_wraps_corrupt_artifact_as_artifact_error(tmp_path) -> None:
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
     with pytest.raises(ArtifactError):
-        load_native_model(str(empty_dir), "sklearn")
+        MlflowFlavorHandler().load(str(empty_dir), "sklearn")
 
 
 def test_inspect_model_unsupported_framework_raises() -> None:

@@ -15,6 +15,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 
 from oran_adapt.adaptation.data import holdout_size
+from oran_adapt.adapters.mlflow_models import resolve_skops_trusted_types
+from oran_adapt.adapters.mlflow_registry import MlflowRegistry
 from oran_adapt.core.errors import (
     ArtifactError,
     ConflictError,
@@ -31,7 +33,6 @@ from oran_adapt.datastore import (
 )
 from oran_adapt.db.base import create_db_engine, make_session_factory, session_scope
 from oran_adapt.db.models import ModelMetadata
-from oran_adapt.registry.client import MlflowRegistry, resolve_skops_trusted_types
 from oran_adapt.registry.onboarding import onboard_model
 
 FEATURES = ["prb_util", "cqi", "rsrp"]
@@ -52,10 +53,7 @@ def session_factory(migrated_settings):
 
 @pytest.fixture
 def registry(migrated_settings) -> MlflowRegistry:
-    return MlflowRegistry(
-        migrated_settings.mlflow_tracking_uri,
-        skops_trusted_types=migrated_settings.mlflow_skops_trusted_types,
-    )
+    return MlflowRegistry.from_settings(migrated_settings)
 
 
 # --------------------------------------------------------------------------- hashing / ingest
@@ -133,7 +131,9 @@ def test_registry_calls_leave_no_global_mlflow_state(registry, monkeypatch):
 
 
 def test_untrusted_type_is_a_deterministic_artifact_error(migrated_settings):
-    strict = MlflowRegistry(migrated_settings.mlflow_tracking_uri, skops_trusted_types=[])
+    strict = MlflowRegistry.from_settings(
+        migrated_settings.model_copy(update={"mlflow_skops_trusted_types": []})
+    )
     rf = RandomForestRegressor(n_estimators=2, random_state=0).fit(np.zeros((4, 1)), [0, 1, 0, 1])
     with pytest.raises(ArtifactError) as exc:
         strict.log_model("rf_strict", rf, framework="sklearn")

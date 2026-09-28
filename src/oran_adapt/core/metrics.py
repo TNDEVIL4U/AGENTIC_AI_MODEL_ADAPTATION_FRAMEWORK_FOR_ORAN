@@ -62,6 +62,9 @@ CDC_PROCESSING_LAG = Gauge(
 )
 LLM_REQUESTS = Counter("llm_requests_total", "Calls made to the LLM provider.", ["provider"])
 LLM_FAILURES = Counter("llm_failures_total", "LLM calls that failed.", ["provider"])
+NOTIFICATION_FAILURES = Counter(
+    "notifications_failed_total", "Notifications a backend failed to deliver.", ["backend"]
+)
 SANDBOX_FAILURES = Counter(
     "sandbox_failures_total",
     "Generated adapters refused by the code scan or failing inside the sandbox.",

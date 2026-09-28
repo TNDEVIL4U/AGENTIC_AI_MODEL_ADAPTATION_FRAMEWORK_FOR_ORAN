@@ -63,7 +63,7 @@ from oran_adapt.core.config import Settings
 from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.db.base import session_scope
 from oran_adapt.db.migrate import upgrade_to_head
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import ModelRegistryPort
 from oran_adapt.registry.onboarding import onboard_model
 
 torch.set_num_threads(2)
@@ -241,7 +241,7 @@ class Demo:
         self.run_tag = run_tag
         self.app = create_app(settings)
         self.client = TestClient(self.app)
-        self.registry: MlflowRegistry = self.app.state.registry
+        self.registry: ModelRegistryPort = self.app.state.registry
         self.rows: list[tuple[str, str, str, str, bool]] = []
 
     def mlflow_name(self, model_id: str) -> str:
@@ -283,12 +283,10 @@ class Demo:
 
     # ------------------------------------------------------------------ first drift cycle
     def reload_and_predict(self, sc: Scenario) -> str:
-        from oran_adapt.adaptation.loaders import load_native_model
-
         name = self.mlflow_name(sc.model_id)
         version = self.live(sc.model_id)
         path = self.registry.download_artifacts(name, version, str(self.run_dir / f"reload-{sc.model_id}-v{version}"))
-        model = load_native_model(path, sc.framework)
+        model = self.registry.load_model(path, sc.framework)
         probe = sc.make_frame(5, shift=sc.drift_shift, seed=999)[FEATURES]
         if sc.framework == "torch":
             with torch.no_grad():

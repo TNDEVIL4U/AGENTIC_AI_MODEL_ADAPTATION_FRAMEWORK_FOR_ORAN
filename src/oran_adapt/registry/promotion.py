@@ -41,7 +41,7 @@ from oran_adapt.core.integrity import (
 )
 from oran_adapt.core.logging import log_event
 from oran_adapt.db.models import ModelMetadata, ModelPromotion
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import ModelRegistryPort
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def _model_meta(session: Session, model_id: str) -> ModelMetadata:
     return meta
 
 
-def current_live(registry: MlflowRegistry, name: str, alias: str) -> str | None:
+def current_live(registry: ModelRegistryPort, name: str, alias: str) -> str | None:
     try:
         return registry.get_version_by_alias(name, alias)
     except ModelNotFoundError:
@@ -94,7 +94,7 @@ def current_live(registry: MlflowRegistry, name: str, alias: str) -> str | None:
 
 
 def verify_version_artifact(
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     name: str,
     version: str,
     workdir: str,
@@ -122,7 +122,7 @@ def verify_version_artifact(
     return local, digest
 
 
-def _restore_alias(registry: MlflowRegistry, name: str, alias: str, previous: str | None) -> None:
+def _restore_alias(registry: ModelRegistryPort, name: str, alias: str, previous: str | None) -> None:
     try:
         if previous is None:
             registry.delete_alias(name, alias)
@@ -141,7 +141,7 @@ def _restore_alias(registry: MlflowRegistry, name: str, alias: str, previous: st
 
 def promote_version(
     session: Session,
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     *,
     model_id: str,
     version: str,
@@ -313,7 +313,7 @@ def last_applied_promotion(session: Session, model_id: str) -> ModelPromotion | 
 
 def rollback_model(
     session: Session,
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     *,
     model_id: str,
     live_alias: str,
@@ -325,8 +325,6 @@ def rollback_model(
 ) -> PromotionResult:
     """Move LIVE back. Without ``target_version`` it goes to the version LIVE held before the
     latest applied promotion. The target must exist, pass its checksum and load as a model."""
-    from oran_adapt.adaptation.loaders import load_native_model
-
     meta = _model_meta(session, model_id)
     if target_version is None:
         last = last_applied_promotion(session, model_id)
@@ -347,7 +345,7 @@ def rollback_model(
             version=target_version,
         )
     try:
-        load_native_model(local, meta.framework)
+        registry.load_model(local, meta.framework)
     except Exception as exc:
         raise ArtifactError(
             f"rollback target version {target_version} does not load",

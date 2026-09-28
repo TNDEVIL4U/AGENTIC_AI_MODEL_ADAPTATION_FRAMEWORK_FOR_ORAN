@@ -27,6 +27,7 @@ import pandas as pd
 import pytest
 from sklearn.linear_model import LogisticRegression
 
+from oran_adapt.adapters.mlflow_registry import MlflowRegistry
 from oran_adapt.core.enums import AssociationRole, DataKind, EngineKind, Strategy
 from oran_adapt.core.errors import ModelNotFoundError
 from oran_adapt.core.schemas import DriftEvent
@@ -39,7 +40,6 @@ from oran_adapt.db.models import (
     ModelMetadata,
 )
 from oran_adapt.orchestrator.pipeline import run_adaptation_job
-from oran_adapt.registry.client import MlflowRegistry
 
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
@@ -84,7 +84,7 @@ def registry(settings) -> MlflowRegistry:
     # via MlflowRegistry.register_candidate) - reset both explicitly so each test starts clean.
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 def _insert_version(session, dataset, *, version, kind, role, model_id, frame, start):

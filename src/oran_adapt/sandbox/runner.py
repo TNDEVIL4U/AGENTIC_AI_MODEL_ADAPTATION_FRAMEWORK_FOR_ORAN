@@ -285,11 +285,15 @@ def _watch_memory(
 
 
 def _trusted(types: tuple[str, ...] | list[str] | None) -> tuple[str, ...] | list[str]:
+    """``types``, or else the schema default of MLFLOW_SKOPS_TRUSTED_TYPES (its one definition)."""
     if types is not None:
         return types
-    from oran_adapt.registry.client import DEFAULT_SKOPS_TRUSTED_TYPES
+    from oran_adapt.core.config import Settings
 
-    return DEFAULT_SKOPS_TRUSTED_TYPES
+    default: list[str] = Settings.model_fields["mlflow_skops_trusted_types"].get_default(
+        call_default_factory=True
+    )
+    return default
 
 
 def _load_output(

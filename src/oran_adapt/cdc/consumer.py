@@ -15,7 +15,8 @@ from collections.abc import Callable
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from oran_adapt.cdc.sources import CdcSource, build_source
+from oran_adapt.bootstrap import build_cdc_source
+from oran_adapt.cdc.sources import CdcSource
 from oran_adapt.cdc.store import store_events
 from oran_adapt.core.config import Settings
 from oran_adapt.core.errors import CdcProcessingError
@@ -28,7 +29,7 @@ def run_cdc_once(
     session_factory: Callable[[], Session], settings: Settings, *, source: CdcSource | None = None
 ) -> dict:
     """Process one batch. Returns counts; raises CdcUnavailableError / CdcProcessingError."""
-    source = source or build_source(settings)
+    source = source or build_cdc_source(settings)
     with session_factory() as session:
         events, position = source.fetch(session, settings.cdc_batch_size)
         try:
@@ -61,11 +62,13 @@ def run_cdc(
     settings: Settings,
     *,
     source: CdcSource | None = None,
-    idle_sleep_s: float = 1.0,
+    idle_sleep_s: float | None = None,
     max_batches: int | None = None,
 ) -> dict:
-    """Keep consuming until interrupted (or ``max_batches``), sleeping when a batch is empty."""
-    source = source or build_source(settings)
+    """Keep consuming until interrupted (or ``max_batches``), sleeping ``idle_sleep_s`` (default
+    CDC_IDLE_POLL_S) when a batch is empty."""
+    source = source or build_cdc_source(settings)
+    idle = settings.cdc_idle_poll_s if idle_sleep_s is None else idle_sleep_s
     totals = {"batches": 0, "stored": 0, "duplicates": 0}
     try:
         while max_batches is None or totals["batches"] < max_batches:
@@ -74,7 +77,7 @@ def run_cdc(
             totals["stored"] += summary["stored"]
             totals["duplicates"] += summary["duplicates"]
             if not summary["fetched"]:
-                time.sleep(idle_sleep_s)
+                time.sleep(idle)
     except KeyboardInterrupt:
         pass
     finally:

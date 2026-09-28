@@ -27,7 +27,7 @@ from oran_adapt.datastore.versioning import (
     link_model_data,
 )
 from oran_adapt.db.models import ModelMetadata
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import ModelRegistryPort
 
 
 @dataclass
@@ -68,7 +68,7 @@ def _check_target(frame: pd.DataFrame, target_column: str) -> None:
 
 def onboard_model(
     session: Session,
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     *,
     model_id: str,
     model: object,
@@ -166,7 +166,7 @@ def onboard_model(
 
 def attach_existing_model(
     session: Session,
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     *,
     model_id: str,
     mlflow_model_name: str,

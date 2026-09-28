@@ -12,7 +12,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
-from oran_adapt.api.security import DATA_ROLES, DataEditor, require_roles
+from oran_adapt.api.security import DATA, DataEditor, require
 from oran_adapt.core.errors import DatasetNotFoundError
 from oran_adapt.datastore import (
     get_or_create_dataset,
@@ -50,7 +50,7 @@ class VersionCreate(BaseModel):
     source: str | None = None
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_roles(*DATA_ROLES))])
+@router.post("", status_code=201, dependencies=[Depends(require(DATA))])
 def create_dataset(body: DatasetCreate, request: Request) -> dict:
     with session_scope(request.app.state.session_factory) as session:
         ds = get_or_create_dataset(

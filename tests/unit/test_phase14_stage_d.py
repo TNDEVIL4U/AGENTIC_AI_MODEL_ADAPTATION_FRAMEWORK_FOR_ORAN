@@ -23,6 +23,7 @@ from test_phase14_member1 import (  # shared seeding helpers (same test director
 
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.leakage import check_leakage
+from oran_adapt.adapters.mlflow_registry import MlflowRegistry
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import (
     DataVersionRef,
@@ -37,7 +38,6 @@ from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.db.base import create_db_engine, make_session_factory, session_scope
 from oran_adapt.db.models import AuditLog, DataRecord
 from oran_adapt.decision.engine import decide
-from oran_adapt.registry.client import MlflowRegistry
 from oran_adapt.validation.evaluate import evaluate_model
 from oran_adapt.validation.metrics import (
     compute_metrics,
@@ -65,7 +65,7 @@ def registry(settings) -> MlflowRegistry:
 
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 def _frame(n: int = 80, seed: int = 0) -> pd.DataFrame:

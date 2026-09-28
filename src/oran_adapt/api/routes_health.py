@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, Response
 
 from oran_adapt import __version__
-from oran_adapt.api.security import READ_ROLES, require_roles
+from oran_adapt.api.security import READ, require
 from oran_adapt.core import metrics
 from oran_adapt.core.errors import AdaptationError
 from oran_adapt.core.schemas import ComponentHealth, HealthResponse, ReadyResponse
@@ -45,6 +45,6 @@ def ready(request: Request, response: Response) -> ReadyResponse:
 def prometheus_metrics(request: Request) -> Response:
     """Prometheus scrape endpoint. Needs a key (any role) unless ``metrics_public`` is set."""
     if not request.app.state.settings.metrics_public:
-        require_roles(*READ_ROLES)(request)
+        require(READ)(request)
     body, content_type = metrics.render()
     return Response(content=body, media_type=content_type)

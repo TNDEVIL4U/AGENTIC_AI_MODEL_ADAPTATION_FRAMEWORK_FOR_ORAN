@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
-from oran_adapt.api.security import DATA_ROLES, Promoter, require_roles
+from oran_adapt.api.security import DATA, Promoter, require
 from oran_adapt.core.errors import ModelBusyError, ModelNotFoundError
 from oran_adapt.datastore import model_data_links
 from oran_adapt.db.base import session_scope
@@ -91,7 +91,7 @@ def get_model(model_id: str, request: Request) -> dict:
     return body
 
 
-@router.post("/attach", status_code=201, dependencies=[Depends(require_roles(*DATA_ROLES))])
+@router.post("/attach", status_code=201, dependencies=[Depends(require(DATA))])
 def attach_model(body: AttachModel, request: Request) -> dict:
     state = request.app.state
     with session_scope(state.session_factory) as session:

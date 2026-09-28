@@ -134,3 +134,39 @@ class JobAbandonedError(AdaptationError):
     the old job FAILED with this error so it does not stay in a running state forever."""
 
     code = "JOB_ABANDONED"
+
+
+class AuthenticationError(AdaptationError):
+    """No valid credential was presented (HTTP 401)."""
+
+    code = "UNAUTHENTICATED"
+
+
+class PermissionDeniedError(AdaptationError):
+    """The authenticated caller's role may not perform the action (HTTP 403)."""
+
+    code = "FORBIDDEN"
+
+
+class JobWorkerError(AdaptationError):
+    """A job worker died or crashed without reporting an AdaptationError. Same code as any other
+    unexpected failure, so the recorded job error is unchanged by the execution mode."""
+
+    code = "INTERNAL_ERROR"
+
+
+def rebuild_error(code: str, message: str, context: dict[str, object]) -> AdaptationError:
+    """An AdaptationError sent across a process boundary as (code, message, context), rebuilt
+    with its original class so ``except`` clauses and the recorded code behave the same."""
+    stack: list[type[AdaptationError]] = [AdaptationError]
+    while stack:
+        cls = stack.pop()
+        if cls.code == code:
+            try:
+                return cls(message, **context)
+            except TypeError:
+                break
+        stack.extend(cls.__subclasses__())
+    err = AdaptationError(message, **context)
+    err.code = code
+    return err

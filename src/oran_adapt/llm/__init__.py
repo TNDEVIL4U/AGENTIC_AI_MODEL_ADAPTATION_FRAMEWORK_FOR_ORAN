@@ -1,5 +1,5 @@
-"""Provider-agnostic LLM client (Anthropic / Gemini) shared by decision and, later, adaptation."""
+"""LLM access through the LLMPort (see oran_adapt.llm.client)."""
 
-from oran_adapt.llm.client import LlmClient, build_llm_client
+from oran_adapt.llm.client import InstrumentedLlmClient, LlmClient
 
-__all__ = ["LlmClient", "build_llm_client"]
+__all__ = ["InstrumentedLlmClient", "LlmClient"]
