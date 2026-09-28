@@ -83,8 +83,9 @@ def test_the_subprocess_sandbox_inherits_no_secrets(monkeypatch) -> None:
 
     env = runner._sandbox_env()
 
-    assert set(env) <= set(runner._INHERITED_ENV_VARS)
+    assert set(env) <= set(runner._INHERITED_ENV_VARS) | set(runner._SINGLE_THREAD_ENV)
     assert "secret" not in " ".join(env.values())
+    assert env["OPENBLAS_NUM_THREADS"] == "1"
 
 
 def test_the_docker_backend_runs_isolated(tmp_path, monkeypatch) -> None:

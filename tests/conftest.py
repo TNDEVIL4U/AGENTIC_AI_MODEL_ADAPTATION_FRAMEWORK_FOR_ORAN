@@ -60,3 +60,20 @@ def migrated_settings(settings) -> Settings:
 def client(migrated_settings) -> Iterator[TestClient]:
     with TestClient(create_app(migrated_settings)) as c:
         yield c
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """A failing sandbox run keeps the child's stderr in the error's context, which pytest never
+    prints. Append its tail to the one-line failure summary so CI annotations show the cause."""
+    outcome = yield
+    report = outcome.get_result()
+    excinfo = call.excinfo
+    if not report.failed or excinfo is None:
+        return
+    context = getattr(excinfo.value, "context", None)
+    stderr = context.get("stderr") if isinstance(context, dict) else None
+    crash = getattr(report.longrepr, "reprcrash", None)
+    if stderr and crash is not None:
+        tail = " | ".join(line.strip() for line in str(stderr).splitlines()[-8:] if line.strip())
+        crash.message += f" [returncode={context.get('returncode')}; stderr: {tail[-800:]}]"

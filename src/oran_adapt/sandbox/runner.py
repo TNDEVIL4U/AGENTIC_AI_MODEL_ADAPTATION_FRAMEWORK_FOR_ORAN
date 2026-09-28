@@ -93,8 +93,19 @@ _INHERITED_ENV_VARS = (
 )
 
 
+# One BLAS/OpenMP thread: each extra thread reserves its own buffers, and on a many-core Linux
+# host that address space alone can exceed the RLIMIT_AS ceiling before any user code runs.
+_SINGLE_THREAD_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+}
+
+
 def _sandbox_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k in _INHERITED_ENV_VARS}
+    env = {k: v for k, v in os.environ.items() if k in _INHERITED_ENV_VARS}
+    env.update(_SINGLE_THREAD_ENV)
+    return env
 
 
 def _memory_limit_preexec(memory_mb: int) -> Callable[[], None] | None:
