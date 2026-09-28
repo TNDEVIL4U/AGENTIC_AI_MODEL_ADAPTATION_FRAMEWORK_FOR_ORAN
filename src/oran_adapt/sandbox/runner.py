@@ -1,13 +1,15 @@
 """Member 3 - sandbox execution: runs security-checked adaptation code in an isolated
-subprocess with a wall-clock timeout and (on POSIX) a hard address-space ceiling, and hands
+subprocess with a wall-clock timeout and a resident-memory watchdog, and hands
 inputs/outputs across the process boundary via pickle files rather than a shared object graph -
 the point of a sandbox is that a compromised or merely buggy script's blast radius stops at the
 subprocess, never touching this process's memory, environment or open handles.
 
 This is the "restricted subprocess" backend the Phase 0 audit documents as weaker than Docker
-isolation (no filesystem/network namespace, no cgroup, and no memory ceiling at all on Windows,
-where `resource.setrlimit` does not exist) but real and exercised in tests, unlike the Docker
-backend which cannot run on this machine.
+isolation: no filesystem/network namespace and no cgroup. Its memory limit is a soft one - the
+parent polls the child's resident memory (Linux and Windows; not enforced on other platforms) and
+kills it once it passes `memory_mb`, so a very fast spike can briefly overshoot. An address-space
+rlimit is not used: numpy/OpenBLAS/torch reserve far more address space than they touch, so any
+useful ceiling fails their import before user code runs. The Docker backend is the hard limit.
 """
 
 from __future__ import annotations
@@ -16,8 +18,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import uuid
-from collections.abc import Callable
 
 import joblib
 import pandas as pd
@@ -93,8 +95,8 @@ _INHERITED_ENV_VARS = (
 )
 
 
-# One BLAS/OpenMP thread: each extra thread reserves its own buffers, and on a many-core Linux
-# host that address space alone can exceed the RLIMIT_AS ceiling before any user code runs.
+# One BLAS/OpenMP thread: each extra thread allocates its own buffers, which on a many-core host
+# inflates the sandbox's memory for no benefit on the small fits it runs.
 _SINGLE_THREAD_ENV = {
     "OMP_NUM_THREADS": "1",
     "OPENBLAS_NUM_THREADS": "1",
@@ -108,17 +110,178 @@ def _sandbox_env() -> dict[str, str]:
     return env
 
 
-def _memory_limit_preexec(memory_mb: int) -> Callable[[], None] | None:
-    if os.name != "posix":
+_MEMORY_POLL_S = 0.05
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    class _ProcessMemoryCounters(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    class _ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32.OpenProcess.restype = wintypes.HANDLE
+    _kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    _kernel32.K32GetProcessMemoryInfo.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_ProcessMemoryCounters),
+        wintypes.DWORD,
+    ]
+    _kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    _kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    _kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ProcessEntry32W)]
+    _kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ProcessEntry32W)]
+    _PROCESS_TERMINATE = 0x0001
+    _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    _TH32CS_SNAPPROCESS = 0x2
+    _INVALID_HANDLE = ctypes.c_void_p(-1).value
+
+    def _parent_map() -> dict[int, int]:
+        snapshot = _kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
+        if not snapshot or snapshot == _INVALID_HANDLE:
+            return {}
+        try:
+            parents: dict[int, int] = {}
+            entry = _ProcessEntry32W()
+            entry.dwSize = ctypes.sizeof(entry)
+            ok = _kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while ok:
+                parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+                ok = _kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+            return parents
+        finally:
+            _kernel32.CloseHandle(snapshot)
+
+    def _terminate(pid: int) -> None:
+        handle = _kernel32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+        if handle:
+            try:
+                _kernel32.TerminateProcess(handle, 1)
+            finally:
+                _kernel32.CloseHandle(handle)
+
+    def _rss_bytes(pid: int) -> int | None:
+        handle = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            counters = _ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            if not _kernel32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                return None
+            return int(counters.WorkingSetSize)
+        finally:
+            _kernel32.CloseHandle(handle)
+
+elif sys.platform.startswith("linux"):
+    import signal
+
+    def _parent_map() -> dict[int, int]:
+        parents: dict[int, int] = {}
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            try:
+                with open(f"/proc/{name}/stat", encoding="ascii", errors="replace") as f:
+                    # "pid (comm) state ppid ..." - comm may itself contain spaces or ")".
+                    fields = f.read().rpartition(")")[2].split()
+                parents[int(name)] = int(fields[1])
+            except (OSError, ValueError, IndexError):
+                continue
+        return parents
+
+    def _terminate(pid: int) -> None:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    def _rss_bytes(pid: int) -> int | None:
+        try:
+            with open(f"/proc/{pid}/status", encoding="ascii", errors="replace") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) * 1024
+        except (OSError, ValueError):
+            return None
         return None
 
-    def _apply() -> None:
-        import resource
+else:
 
-        limit_bytes = memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+    def _parent_map() -> dict[int, int]:
+        return {}
 
-    return _apply
+    def _terminate(pid: int) -> None:
+        return None
+
+    def _rss_bytes(pid: int) -> int | None:
+        return None  # no portable RSS source without a new dependency: limit not enforced
+
+
+def _descendants(root: int) -> list[int]:
+    """Every live process below ``root``. On Windows a venv's python.exe is a launcher that runs
+    the real interpreter as its child, so the sandbox's memory lives one level down."""
+    children: dict[int, list[int]] = {}
+    for pid, ppid in _parent_map().items():
+        if pid != ppid:
+            children.setdefault(ppid, []).append(pid)
+    found: list[int] = []
+    queue = list(children.get(root, []))
+    while queue:
+        pid = queue.pop()
+        found.append(pid)
+        queue.extend(children.get(pid, []))
+    return found
+
+
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    """Kill ``proc`` and everything it started: killing only a launcher would leave the real
+    interpreter running and holding the output pipes open."""
+    for pid in _descendants(proc.pid):
+        _terminate(pid)
+    proc.kill()
+
+
+def _watch_memory(
+    proc: subprocess.Popen[str], limit_bytes: int, stop: threading.Event, tripped: list[int]
+) -> None:
+    """Kill ``proc``'s tree once its total resident memory passes ``limit_bytes``; record it."""
+    while not stop.wait(_MEMORY_POLL_S):
+        if proc.poll() is not None:
+            return  # exited: its pid may already belong to another process
+        readings = [_rss_bytes(pid) for pid in (proc.pid, *_descendants(proc.pid))]
+        rss = sum(r for r in readings if r is not None)
+        if rss > limit_bytes:
+            tripped.append(rss)
+            _kill_tree(proc)
+            return
 
 
 def _trusted(types: tuple[str, ...] | list[str] | None) -> tuple[str, ...] | list[str]:
@@ -218,28 +381,47 @@ def run_in_sandbox(
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(script)
 
+    proc = subprocess.Popen(
+        # -P: the workdir is not put on sys.path, so a planted module cannot shadow imports.
+        [sys.executable, "-P", script_path],
+        cwd=workdir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_sandbox_env(),
+    )
+    stop = threading.Event()
+    tripped: list[int] = []
+    watchdog = threading.Thread(
+        target=_watch_memory,
+        args=(proc, memory_mb * 1024 * 1024, stop, tripped),
+        name="sandbox-memory-watchdog",
+        daemon=True,
+    )
+    watchdog.start()
     try:
-        proc = subprocess.run(
-            # -P: the workdir is not put on sys.path, so a planted module cannot shadow imports.
-            [sys.executable, "-P", script_path],
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            env=_sandbox_env(),
-            preexec_fn=_memory_limit_preexec(memory_mb),
-            check=False,
-        )
+        _, stderr = proc.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired as exc:
+        _kill_tree(proc)
+        proc.communicate()
         raise SandboxExecutionError(
             "sandbox execution exceeded the timeout", timeout_s=timeout_s
         ) from exc
+    finally:
+        stop.set()
+        watchdog.join()
 
+    if tripped:
+        raise SandboxExecutionError(
+            "sandbox execution exceeded the memory limit",
+            memory_mb=memory_mb,
+            rss_mb=tripped[0] // (1024 * 1024),
+        )
     if proc.returncode != 0:
         raise SandboxExecutionError(
             "sandbox script exited with a non-zero status",
             returncode=proc.returncode,
-            stderr=proc.stderr[-4000:],
+            stderr=stderr[-4000:],
         )
 
     return _load_output(workdir, current_model, _trusted(skops_trusted_types))

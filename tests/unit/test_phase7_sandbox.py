@@ -6,7 +6,7 @@ external and there is no local provider to call."""
 
 from __future__ import annotations
 
-import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -152,23 +152,32 @@ def test_run_in_sandbox_raises_on_timeout(tmp_path) -> None:
         )
 
 
-@pytest.mark.skipif(os.name != "posix", reason="RLIMIT_AS memory ceiling is POSIX-only")
-def test_run_in_sandbox_enforces_memory_limit_on_posix(tmp_path) -> None:
+@pytest.mark.skipif(
+    sys.platform != "win32" and not sys.platform.startswith("linux"),
+    reason="the resident-memory watchdog reads RSS on Linux and Windows only",
+)
+def test_run_in_sandbox_enforces_memory_limit(tmp_path) -> None:
+    # Written, not just reserved, memory - 16 MB at a time, up to 1.5 GB against a 600 MB limit -
+    # so resident memory really grows and the watchdog catches it long before the end.
     code = (
+        "import time\n"
         "def adapt(current_model, X, y):\n"
-        "    hog = bytearray(2 * 1024 * 1024 * 1024)\n"  # 2GB against a 64MB ceiling
+        "    hog = []\n"
+        "    for _ in range(96):\n"
+        "        hog.append(b'x' * (16 * 1024 * 1024))\n"
+        "        time.sleep(0.02)\n"
         "    return current_model\n"
     )
     X, y = _frame(n=5)
 
-    with pytest.raises(SandboxExecutionError):
+    with pytest.raises(SandboxExecutionError, match="memory limit"):
         run_in_sandbox(
             code,
             current_model=None,
             X=X,
             y=y,
-            timeout_s=30,
-            memory_mb=64,
+            timeout_s=60,
+            memory_mb=600,
             workdir=str(tmp_path / "sandbox"),
         )
 

@@ -481,16 +481,16 @@ These are real, code-verified gaps — not hypothetical — surfaced here so an 
 only this manual (not the source) still learns about them. See
 `docs/IMPLEMENTATION_CHECKLIST.md`'s "Known gaps" section for how each was verified.
 
-- **No enforced memory ceiling for the sandbox on Windows.** When `SANDBOX_BACKEND=subprocess`
+- **The subprocess sandbox's memory ceiling is a soft one.** When `SANDBOX_BACKEND=subprocess`
   (the default), LLM-generated adaptation code runs with an enforced wall-clock timeout
-  (`SANDBOX_TIMEOUT_S`) on every OS, but the memory ceiling (`SANDBOX_MEMORY_MB`) is only
-  enforced on POSIX via `resource.setrlimit(RLIMIT_AS, ...)` — that syscall does not exist on
-  Windows, so `_memory_limit_preexec()` in `src/oran_adapt/sandbox/runner.py` is a no-op there.
-  A runaway or malicious LLM-generated script (already restricted by the AST safety scanner to
-  a small import allowlist, but still capable of e.g. allocating a huge array) can therefore
-  consume unbounded memory on a Windows host. The only way to get an actually-enforced memory
-  limit today is `SANDBOX_BACKEND=docker` (see §9), which applies `--memory`/`--memory-swap` at
-  the container level on every host OS — untested here for lack of a local Docker install.
+  (`SANDBOX_TIMEOUT_S`) and a resident-memory watchdog: the parent polls the child's RSS every
+  50 ms (`/proc` on Linux, `K32GetProcessMemoryInfo` on Windows) and kills it once it passes
+  `SANDBOX_MEMORY_MB`. A very fast allocation can briefly overshoot before the next poll, and on
+  other platforms (e.g. macOS) the ceiling is not enforced. An address-space rlimit is not used:
+  numpy/OpenBLAS/torch reserve far more address space than they touch, so a useful `RLIMIT_AS`
+  fails their import before any adaptation code runs. For a hard limit use
+  `SANDBOX_BACKEND=docker` (see §9), which applies `--memory`/`--memory-swap` at the container
+  level on every host OS.
 - **PSI is noisy on small samples.** Drift statistics come from Evidently AI's `ValueDrift`
   metric. Its PSI uses equal-width (Sturges) bins, and with only a few dozen rows per segment it
   can exceed `ANALYSIS_PSI_REUSE_THRESHOLD` (0.1), or even `DECISION_FULL_RETRAIN_PSI_THRESHOLD`

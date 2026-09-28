@@ -17,6 +17,7 @@ RUN apt-get update \
  && pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
     numpy==2.5.3 \
     pandas==3.0.6 \
+    pyarrow==25.0.1 \
     scipy==1.18.1 \
     scikit-learn==1.9.1 \
     xgboost==3.4.1 \
