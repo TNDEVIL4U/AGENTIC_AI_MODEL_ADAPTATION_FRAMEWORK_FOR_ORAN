@@ -30,7 +30,8 @@ def isolated(monkeypatch, tmp_path) -> Path:
     """No config file, no ``.env`` and none of the keys these tests set, from the shell."""
     monkeypatch.chdir(tmp_path)
     for key in (CONFIG_FILE_ENV, "ENVIRONMENT", "LOG_LEVEL", "JOB_TIMEOUT_S", "CDC_MODE",
-                "KAFKA_BOOTSTRAP_SERVERS", *(k.upper() for k in PRODUCTION_REQUIRED)):
+                "KAFKA_BOOTSTRAP_SERVERS", "SECRETS_BACKEND", "SECRETS_DIR", "ANTHROPIC_API_KEY",
+                *(k.upper() for k in PRODUCTION_REQUIRED)):
         monkeypatch.delenv(key, raising=False)
     return tmp_path
 
@@ -88,6 +89,28 @@ def test_a_file_holding_a_secret_is_refused(isolated, monkeypatch) -> None:
         Settings(_env_file=None)
     assert info.value.context["key"] == "ANTHROPIC_API_KEY"
     assert SECRET not in json.dumps(info.value.to_dict())
+
+
+def test_the_file_secrets_backend_supplies_secret_keys(isolated, monkeypatch) -> None:
+    # The Docker/Kubernetes secret-mount layout: one file per secret, lower-case name, a
+    # trailing newline that is not part of the value.
+    secrets_dir = isolated / "secrets"
+    secrets_dir.mkdir()
+    (secrets_dir / "anthropic_api_key").write_text(SECRET + "\n", encoding="utf-8")
+    monkeypatch.setenv("SECRETS_BACKEND", "file")
+    monkeypatch.setenv("SECRETS_DIR", str(secrets_dir))
+    settings = Settings(_env_file=None)
+    assert settings.anthropic_api_key is not None
+    assert settings.anthropic_api_key.get_secret_value() == SECRET
+    assert effective_config(settings)["anthropic_api_key"] == {"value": REDACTED, "source": "secrets"}
+
+
+def test_the_file_secrets_backend_needs_an_existing_directory(isolated, monkeypatch) -> None:
+    monkeypatch.setenv("SECRETS_BACKEND", "file")
+    monkeypatch.setenv("SECRETS_DIR", str(isolated / "absent"))
+    with pytest.raises(ConfigurationError) as info:
+        Settings(_env_file=None)
+    assert info.value.context["key"] == "SECRETS_DIR"
 
 
 def test_effective_config_redacts_secrets_and_url_passwords(isolated) -> None:
