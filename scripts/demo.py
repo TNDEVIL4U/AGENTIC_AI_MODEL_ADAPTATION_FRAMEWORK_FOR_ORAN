@@ -107,6 +107,7 @@ def run() -> None:
             onboarded = onboard_model(
                 s,
                 app.state.registry,
+                app.state.model_handler,
                 model_id=MODEL_ID,
                 model=model,
                 framework="sklearn",
@@ -211,7 +212,7 @@ def run() -> None:
         local, _ = verify_version_artifact(
             app.state.registry, MODEL_ID.replace("-", "_"), new_version, str(run_dir / "predict")
         )
-        live_model = app.state.registry.load_model(local, "sklearn")
+        live_model = app.state.model_handler.load(local, "sklearn")
         sample = drifted[FEATURES].tail(5)
         predictions = live_model.predict(sample)
         check(len(predictions) == 5 and np.isfinite(predictions).all(), "bad predictions")

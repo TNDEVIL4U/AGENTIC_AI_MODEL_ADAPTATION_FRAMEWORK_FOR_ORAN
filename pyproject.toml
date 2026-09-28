@@ -22,10 +22,19 @@ oran-adapt = "oran_adapt.cli:main"
 # Adapters, one entry-point group per port (oran_adapt.plugins). A third-party distribution adds
 # its own under the same groups; the config key naming the adapter selects it.
 [project.entry-points."oran_adapt.registry"]
-mlflow = "oran_adapt.adapters.mlflow_registry:SPEC"
+mlflow = "oran_adapt.adapters.registry.mlflow:SPEC"
+filesystem = "oran_adapt.adapters.registry.filesystem:SPEC"
+mirror = "oran_adapt.adapters.registry.mirror:SPEC"
+sagemaker = "oran_adapt.adapters.registry.sagemaker:SPEC"
+vertex = "oran_adapt.adapters.registry.vertex:SPEC"
+
+[project.entry-points."oran_adapt.artifact_store"]
+filesystem = "oran_adapt.adapters.registry.artifact_stores:FILESYSTEM"
+fsspec = "oran_adapt.adapters.registry.artifact_stores:FSSPEC"
 
 [project.entry-points."oran_adapt.model_handler"]
-mlflow-flavors = "oran_adapt.adapters.mlflow_models:SPEC"
+mlflow-flavors = "oran_adapt.adapters.registry.mlflow.flavors:SPEC"
+native = "oran_adapt.adapters.handlers.native:SPEC"
 
 [project.entry-points."oran_adapt.llm"]
 anthropic = "oran_adapt.adapters.llm_providers:ANTHROPIC"
@@ -57,6 +66,12 @@ file = "oran_adapt.adapters.secrets:FILE"
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "pytest-xdist>=3.8", "ruff"]
 # CDC_MODE=kafka (production CDC from Debezium). Not needed for the polling fallback.
 kafka = ["confluent-kafka>=2.3"]
+# ARTIFACT_STORE_BACKEND=fsspec; add the filesystem driver for the URL (s3fs, gcsfs, adlfs).
+object-store = ["fsspec>=2023.1"]
+# REGISTRY_BACKEND=sagemaker.
+sagemaker = ["boto3>=1.28"]
+# REGISTRY_BACKEND=vertex (Application Default Credentials).
+vertex = ["google-auth>=2.20"]
 # scripts/security_check.py: static security scan, dependency audit, type check, SBOM.
 security = ["bandit[toml]>=1.8", "pip-audit>=2.9", "mypy>=1.15", "cyclonedx-bom>=6"]
 

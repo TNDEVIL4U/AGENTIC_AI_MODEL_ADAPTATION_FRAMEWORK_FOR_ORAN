@@ -9,18 +9,21 @@ adapter whose required keys are unset, fails here with a ConfigurationError nami
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from oran_adapt import plugins
 from oran_adapt.llm.client import InstrumentedLlmClient
+from oran_adapt.registry.handlers import ModelHandlers
 
 if TYPE_CHECKING:
     from oran_adapt.core.config import Settings
     from oran_adapt.ports import (
+        ArtifactStorePort,
         AuthPort,
         CdcSourcePort,
         JobExecutorPort,
         LLMPort,
+        ModelHandlerPort,
         ModelRegistryPort,
         NotificationPort,
         PolicyPort,
@@ -41,6 +44,7 @@ def _make(port: str, settings: Settings, config_key: str) -> Any:
 class Container:
     settings: Settings
     registry: ModelRegistryPort
+    model_handler: ModelHandlerPort
     llm: LLMPort | None
     job_executor: JobExecutorPort
     auth: AuthPort
@@ -52,6 +56,21 @@ class Container:
 def build_registry(settings: Settings) -> ModelRegistryPort:
     registry: ModelRegistryPort = _make("registry", settings, "registry_backend")
     return registry
+
+
+def build_model_handler(settings: Settings) -> ModelHandlerPort:
+    """Every installed model handler: loading picks the one that recognises an artifact,
+    saving uses the one MODEL_FORMAT names."""
+    handlers: dict[str, ModelHandlerPort] = {
+        name: cast("ModelHandlerPort", spec.factory(settings))
+        for name, spec in plugins.adapters("model_handler").items()
+    }
+    return ModelHandlers(handlers, settings.model_format)
+
+
+def build_artifact_store(settings: Settings) -> ArtifactStorePort:
+    store: ArtifactStorePort = _make("artifact_store", settings, "artifact_store_backend")
+    return store
 
 
 def build_llm(settings: Settings) -> LLMPort | None:
@@ -94,6 +113,7 @@ def build_container(settings: Settings) -> Container:
     return Container(
         settings=settings,
         registry=build_registry(settings),
+        model_handler=build_model_handler(settings),
         llm=build_llm(settings),
         job_executor=build_job_executor(settings),
         auth=build_auth(settings),

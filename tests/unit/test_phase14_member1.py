@@ -20,7 +20,7 @@ from sklearn.linear_model import LogisticRegression
 from sqlalchemy import inspect as sa_inspect
 
 import oran_adapt.orchestrator.pipeline as pipeline_module
-from oran_adapt.adapters.mlflow_registry import MlflowRegistry
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import VersionEvaluation
 from oran_adapt.core.enums import (

@@ -35,6 +35,8 @@ from oran_adapt.core.frameworks import ADAPTABLE_FRAMEWORKS
 # Adapter selector key -> port. Each selected adapter's Capability.required_keys must be set.
 ADAPTER_SELECTORS: dict[str, str] = {
     "registry_backend": "registry",
+    "model_format": "model_handler",
+    "artifact_store_backend": "artifact_store",
     "llm_provider": "llm",
     "job_execution_mode": "job_executor",
     "cdc_mode": "cdc_source",
@@ -46,7 +48,11 @@ ADAPTER_SELECTORS: dict[str, str] = {
 # Selector values that mean "this port is switched off" rather than naming an adapter.
 DISABLED = {"llm_provider": "none", "cdc_mode": "disabled"}
 # Keys a production deployment must set explicitly (a default would point at a local file).
-PRODUCTION_REQUIRED = ("database_url", "mlflow_tracking_uri", "artifact_workdir")
+# Each selected adapter adds its own storage keys (Capability.production_keys).
+PRODUCTION_REQUIRED = ("database_url", "artifact_workdir")
+# Selectors whose adapter is built only by another adapter: in use when a selected adapter lists
+# the selector among its config_keys (the filesystem registry uses ARTIFACT_STORE_BACKEND).
+SUBORDINATE_SELECTORS = frozenset({"artifact_store_backend"})
 
 _ALL_ROLES = ["ADMIN", "OPERATOR", "ML_ENGINEER", "READ_ONLY"]
 
@@ -76,7 +82,8 @@ class Settings(BaseSettings):
             file_source,
         )
 
-    # "production" refuses defaulted storage locations (PRODUCTION_REQUIRED).
+    # "production" refuses defaulted storage locations (PRODUCTION_REQUIRED and the selected
+    # adapters' production_keys).
     environment: Literal["development", "production"] = "development"
 
     database_url: str = "sqlite:///./data/oran_adapt.db"
@@ -86,6 +93,51 @@ class Settings(BaseSettings):
 
     # Model registry adapter (entry point group oran_adapt.registry).
     registry_backend: str = "mlflow"
+    # Model handler (oran_adapt.model_handler) that serializes new versions. Loading uses
+    # whichever installed handler recognises a version's artifact, whatever this names.
+    model_format: str = "mlflow-flavors"
+    # Artifact store (oran_adapt.artifact_store) behind the filesystem registry.
+    artifact_store_backend: str = "filesystem"
+    artifact_store_root: str = "./data/artifact-store"
+    # fsspec URL of the object-store adapter, e.g. s3://bucket/prefix (needs s3fs), gs://...
+    # (gcsfs), abfs://... (adlfs), or memory://name for tests.
+    artifact_store_url: str | None = None
+    # Registry adapter "filesystem": version metadata as JSON files under this directory (a
+    # local disk or a shared volume), artifacts in the artifact store above.
+    registry_fs_root: str = "./data/registry"
+    registry_fs_lock_timeout_s: float = Field(30.0, gt=0)
+    # Registry adapter "mirror": every read from the primary, every write to the primary and
+    # then the replica (both are registry adapter names, and must differ). "fail" raises when
+    # the replica write fails; "log" logs it and carries on with the primary's result.
+    registry_mirror_primary: str | None = None
+    registry_mirror_replica: str | None = None
+    registry_mirror_on_replica_error: Literal["fail", "log"] = "fail"
+    # Registry adapter "sagemaker": model package groups; artifacts as model.tar.gz in S3.
+    # Credentials come from the standard AWS chain, never from this file.
+    sagemaker_region: str | None = None
+    sagemaker_s3_bucket: str | None = None
+    sagemaker_s3_prefix: str = "oran-models"
+    sagemaker_inference_image: str | None = None
+    sagemaker_group_prefix: str = ""
+    # Request / response content types declared in each version's InferenceSpecification.
+    sagemaker_content_types: list[str] = ["application/json", "text/csv"]
+    # Endpoint override (a VPC endpoint or an emulator); None uses the regional endpoint.
+    sagemaker_endpoint_url: str | None = None
+    # Registry adapter "vertex": Vertex AI Model Registry over REST; artifacts in GCS.
+    # Credentials come from Google Application Default Credentials.
+    vertex_project: str | None = None
+    vertex_location: str | None = None
+    vertex_gcs_bucket: str | None = None
+    vertex_gcs_prefix: str = "oran-models"
+    vertex_serving_image: str | None = None
+    vertex_api_endpoint: str | None = None  # None: https://<location>-aiplatform.googleapis.com
+    vertex_storage_endpoint: str = "https://storage.googleapis.com"
+    vertex_http_timeout_s: float = Field(30.0, gt=0)
+    vertex_operation_timeout_s: float = Field(600.0, gt=0)
+    vertex_operation_poll_s: float = Field(5.0, gt=0)
+    # Attempts at a conditional (generation-matched) write of a version's tag file when another
+    # writer changed it in between.
+    vertex_tag_update_attempts: int = Field(5, ge=1)
     # MLflow client HTTP behaviour, applied to MLFLOW_HTTP_REQUEST_* unless those are set.
     mlflow_http_max_retries: int = Field(1, ge=0)
     mlflow_http_backoff_factor: float = Field(0.0, ge=0)
@@ -295,7 +347,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _production_explicit(self) -> Settings:
         if self.environment == "production":
-            missing = [k for k in PRODUCTION_REQUIRED if k not in self.model_fields_set]
+            required = [*PRODUCTION_REQUIRED, *self._adapter_production_keys()]
+            missing = [k for k in dict.fromkeys(required) if k not in self.model_fields_set]
             if missing:
                 raise ConfigurationError(
                     "ENVIRONMENT=production requires "
@@ -305,6 +358,28 @@ class Settings(BaseSettings):
                     missing=[k.upper() for k in missing],
                 )
         return self
+
+    def _adapter_production_keys(self) -> list[str]:
+        """The production_keys of every adapter in use, in selector order."""
+        from oran_adapt import plugins
+
+        specs = {
+            selector: plugins.resolve(port, getattr(self, selector), config_key=selector)
+            for selector, port in ADAPTER_SELECTORS.items()
+            if DISABLED.get(selector) != getattr(self, selector)
+        }
+        referenced = {
+            key
+            for selector, spec in specs.items()
+            if selector not in SUBORDINATE_SELECTORS
+            for key in spec.capability.config_keys
+        }
+        return [
+            key
+            for selector, spec in specs.items()
+            if selector not in SUBORDINATE_SELECTORS or selector in referenced
+            for key in spec.capability.production_keys
+        ]
 
     @model_validator(mode="after")
     def _adapter_keys_present(self) -> Settings:

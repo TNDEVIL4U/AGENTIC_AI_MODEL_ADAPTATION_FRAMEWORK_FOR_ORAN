@@ -264,6 +264,7 @@ class Demo:
             result = onboard_model(
                 session,
                 self.registry,
+                self.app.state.model_handler,
                 model_id=sc.model_id,
                 model=model,
                 framework=sc.framework,
@@ -286,7 +287,7 @@ class Demo:
         name = self.mlflow_name(sc.model_id)
         version = self.live(sc.model_id)
         path = self.registry.download_artifacts(name, version, str(self.run_dir / f"reload-{sc.model_id}-v{version}"))
-        model = self.registry.load_model(path, sc.framework)
+        model = self.app.state.model_handler.load(path, sc.framework)
         probe = sc.make_frame(5, shift=sc.drift_shift, seed=999)[FEATURES]
         if sc.framework == "torch":
             with torch.no_grad():

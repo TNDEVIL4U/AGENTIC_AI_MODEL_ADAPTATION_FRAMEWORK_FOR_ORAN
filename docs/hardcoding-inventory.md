@@ -124,7 +124,7 @@ above are from the baseline and no longer match.
 | B1, B2 | `ARTIFACT_MAX_BYTES`, `ARTIFACT_HASH_CHUNK_BYTES`; the module constants are gone |
 | B3, B4 | torch `epochs`/`lr` are required; `run_engine` takes `adaptation.engines.TorchBudget.from_settings(settings)` |
 | B5, B6, B7 | `min_psi_rows`, `live_alias`, `sandbox_backend`, `sandbox_docker_image` are required arguments |
-| C1, C3 | required when `ENVIRONMENT=production` (with `MLFLOW_TRACKING_URI`) |
+| C1, C3 | required when `ENVIRONMENT=production` (with the selected adapters' storage keys since Phase 2) |
 | C8 | default derived from `core.frameworks.ADAPTABLE_FRAMEWORKS` |
 | C9 | no default; required when `CDC_MODE=kafka` (startup names the key) |
 
@@ -143,11 +143,29 @@ are still literals. The framework names in `sandbox/runner.py` and `sandbox/secu
 sandbox's serialization formats and import allow-list, not dispatch. Section D is Hardening
 Phase 9.
 
+## Hardening Phase 2 status
+
+**Closed:**
+
+| # | Now |
+|---|---|
+| C2 | `MLFLOW_TRACKING_URI` is the `mlflow` registry adapter's config: listed in its `Capability.config_keys`, required only when `REGISTRY_BACKEND=mlflow`, and demanded by `ENVIRONMENT=production` only then (`Capability.production_keys`). A production deployment on another registry sets that registry's storage keys instead (`REGISTRY_FS_ROOT`, plus `ARTIFACT_STORE_ROOT` for the filesystem artifact store). No module outside `adapters/registry/mlflow/` imports MLflow (import-boundary test) |
+
+**Changed but still open:**
+
+- **C12** (`MLFLOW_SKOPS_TRUSTED_TYPES`) is no longer MLflow-specific in use: the `native` and
+  `mlflow-flavors` handlers and the sandbox all read it. Only the name is vendor-prefixed. Renaming
+  it to `handlers.sklearn.trusted_types` needs a deprecation alias and is left for Hardening
+  Phase 12 (config migration).
+- **C7** (`LIVE_ALIAS` / `CANDIDATE_ALIAS`): aliases are now a registry-port concept every adapter
+  implements (conformance check `aliases`), so they are no longer MLflow semantics. Moving them
+  under deployment targets is Hardening Phase 3.
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 |
-|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) |
-| B (duplicated defaults) | 7 | 0 |
-| C (settings needing a decision) | 14 | 10 |
-| D (infrastructure) | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 |
+|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 |
+| D (infrastructure) | 8 | 8 | 8 |

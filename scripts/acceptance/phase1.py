@@ -27,7 +27,8 @@ ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = sorted((ROOT / "config" / "examples").glob("*.toml"))
 # Keys a developer shell may set that would change what these checks see.
 SCRUBBED = ("ORAN_CONFIG_FILE", "ENVIRONMENT", "CDC_MODE", "KAFKA_BOOTSTRAP_SERVERS",
-            "DATABASE_URL", "MLFLOW_TRACKING_URI", "ARTIFACT_WORKDIR")
+            "DATABASE_URL", "MLFLOW_TRACKING_URI", "ARTIFACT_WORKDIR", "REGISTRY_BACKEND",
+            "ARTIFACT_STORE_BACKEND")
 
 
 def _cli(args: list[str], cwd: Path, **env: str) -> tuple[int, dict]:
@@ -56,7 +57,7 @@ def missing_adapter_key_fails_startup(tmp: Path) -> str:
 def production_refuses_defaulted_storage(tmp: Path) -> str:
     code, body = _cli(["config", "effective"], tmp, ENVIRONMENT="production")
     assert code == 1 and body["code"] == "CONFIGURATION_ERROR", body
-    assert body["context"]["missing"] == ["DATABASE_URL", "MLFLOW_TRACKING_URI", "ARTIFACT_WORKDIR"], body
+    assert body["context"]["missing"] == ["DATABASE_URL", "ARTIFACT_WORKDIR", "MLFLOW_TRACKING_URI"], body
     return body["message"]
 
 

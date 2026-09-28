@@ -27,7 +27,7 @@ import pandas as pd
 import pytest
 from sklearn.linear_model import LogisticRegression
 
-from oran_adapt.adapters.mlflow_registry import MlflowRegistry
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.core.enums import AssociationRole, DataKind, EngineKind, Strategy
 from oran_adapt.core.errors import ModelNotFoundError
 from oran_adapt.core.schemas import DriftEvent
@@ -81,7 +81,7 @@ def session_factory(migrated_settings):
 def registry(settings) -> MlflowRegistry:
     # mlflow.*.log_model (used by _seed_model below) only follows the *global* fluent tracking/
     # registry URI, which a previous test in this session may have left pointed elsewhere (e.g.
-    # via MlflowRegistry.register_candidate) - reset both explicitly so each test starts clean.
+    # via registry.publishing.register_candidate) - reset both explicitly so each test starts clean.
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
     return MlflowRegistry.from_settings(settings)

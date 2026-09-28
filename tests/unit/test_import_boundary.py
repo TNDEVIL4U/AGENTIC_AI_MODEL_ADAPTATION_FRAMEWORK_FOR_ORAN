@@ -1,4 +1,5 @@
-"""Zero vendor branching: only oran_adapt.adapters may import a vendor SDK.
+"""Zero vendor branching: only oran_adapt.adapters may import a vendor SDK, and an SDK with a
+home in SDK_HOMES only from there (mlflow only from adapters/registry/mlflow/).
 
 Domain code talks to ports (oran_adapt.ports); adapters are resolved once at the composition
 root. This test fails the build as soon as a vendor SDK import appears anywhere else, including
@@ -22,14 +23,25 @@ VENDOR_SDKS = frozenset(
         "boto3",
         "botocore",
         "confluent_kafka",
+        "google.auth",
+        "google.cloud",
         "google.genai",
         "hvac",
         "kserve",
         "kubernetes",
         "mlflow",
         "openai",
+        "sagemaker",
     }
 )
+
+# SDK -> the adapter packages / modules (relative to oran_adapt) that alone may import it.
+SDK_HOMES: dict[str, tuple[str, ...]] = {
+    "mlflow": ("adapters/registry/mlflow",),
+    "boto3": ("adapters/registry/sagemaker.py",),
+    "botocore": ("adapters/registry/sagemaker.py",),
+    "google.auth": ("adapters/registry/vertex.py",),
+}
 
 
 def _vendor(module: str) -> str | None:
@@ -60,32 +72,42 @@ def _imports(tree: ast.AST) -> list[tuple[int, str]]:
     return found
 
 
+def _allowed(root: Path, path: Path, sdk: str) -> bool:
+    homes = SDK_HOMES.get(sdk)
+    if homes is None:
+        return (root / "adapters") in path.parents
+    return any(path == root / home or (root / home) in path.parents for home in homes)
+
+
 def violations(root: Path = SRC) -> list[str]:
-    adapters = root / "adapters"
     out: list[str] = []
     for path in sorted(root.rglob("*.py")):
-        if adapters in path.parents:
-            continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for lineno, module in _imports(tree):
             sdk = _vendor(module)
-            if sdk:
-                out.append(f"{path.relative_to(root.parent)}:{lineno}: imports {sdk}")
+            if sdk and not _allowed(root, path, sdk):
+                rel = path.relative_to(root.parent).as_posix()
+                out.append(f"{rel}:{lineno}: imports {sdk}")
     return sorted(set(out))
 
 
-def test_no_vendor_sdk_outside_adapters() -> None:
+def test_no_vendor_sdk_outside_its_adapter() -> None:
     found = violations()
-    assert not found, "vendor SDK imported outside oran_adapt.adapters:\n" + "\n".join(found)
+    assert not found, "vendor SDK imported outside its adapter:\n" + "\n".join(found)
 
 
 def test_the_check_catches_a_violation(tmp_path: Path) -> None:
     pkg = tmp_path / "oran_adapt"
-    (pkg / "adapters").mkdir(parents=True)
+    (pkg / "adapters" / "registry" / "mlflow").mkdir(parents=True)
     (pkg / "domain.py").write_text(
         "def f():\n    from google import genai\n    import mlflow.sklearn\n", encoding="utf-8"
     )
-    (pkg / "adapters" / "ok.py").write_text("import mlflow\n", encoding="utf-8")
+    (pkg / "adapters" / "ok.py").write_text("import anthropic\n", encoding="utf-8")
+    (pkg / "adapters" / "registry" / "mlflow" / "ok.py").write_text(
+        "import mlflow\n", encoding="utf-8"
+    )
+    (pkg / "adapters" / "other.py").write_text("from mlflow import MlflowClient\n", "utf-8")
     found = violations(pkg)
-    assert len(found) == 2
-    assert all("domain.py" in line for line in found)
+    assert len(found) == 3, found
+    assert sum("domain.py" in line for line in found) == 2
+    assert any("adapters/other.py" in line for line in found)

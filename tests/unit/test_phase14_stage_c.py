@@ -22,7 +22,7 @@ from test_phase14_member1 import (  # shared seeding helpers (same test director
 
 from oran_adapt import cli
 from oran_adapt.adapters.kafka_cdc import KafkaCdcSource
-from oran_adapt.adapters.mlflow_registry import MlflowRegistry
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.bootstrap import build_cdc_source
 from oran_adapt.cdc import (
     PollingCdcSource,

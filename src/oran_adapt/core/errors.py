@@ -40,6 +40,12 @@ class DataVersionConflictError(ConflictError):
     code = "DATA_VERSION_CONFLICT"
 
 
+class InvalidReferenceError(AdaptationError):
+    """A model URI, model name, version or alias that is malformed (not merely absent)."""
+
+    code = "INVALID_REFERENCE"
+
+
 class DatasetNotFoundError(AdaptationError):
     code = "DATASET_NOT_FOUND"
 

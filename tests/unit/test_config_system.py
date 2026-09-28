@@ -31,7 +31,8 @@ def isolated(monkeypatch, tmp_path) -> Path:
     monkeypatch.chdir(tmp_path)
     for key in (CONFIG_FILE_ENV, "ENVIRONMENT", "LOG_LEVEL", "JOB_TIMEOUT_S", "CDC_MODE",
                 "KAFKA_BOOTSTRAP_SERVERS", "SECRETS_BACKEND", "SECRETS_DIR", "ANTHROPIC_API_KEY",
-                *(k.upper() for k in PRODUCTION_REQUIRED)):
+                "REGISTRY_BACKEND", "ARTIFACT_STORE_BACKEND", "MLFLOW_TRACKING_URI",
+                "REGISTRY_FS_ROOT", "ARTIFACT_STORE_ROOT", *(k.upper() for k in PRODUCTION_REQUIRED)):
         monkeypatch.delenv(key, raising=False)
     return tmp_path
 
@@ -52,7 +53,23 @@ def test_a_selected_adapter_without_its_required_key_fails_naming_it(isolated) -
 def test_production_refuses_defaulted_storage_locations(isolated) -> None:
     with pytest.raises(ConfigurationError) as info:
         load_settings(_env_file=None, environment="production")
-    assert info.value.context["missing"] == [k.upper() for k in PRODUCTION_REQUIRED]
+    assert info.value.context["missing"] == [
+        *(k.upper() for k in PRODUCTION_REQUIRED), "MLFLOW_TRACKING_URI"
+    ]
+
+
+def test_production_requires_the_selected_registrys_storage_not_mlflows(isolated) -> None:
+    with pytest.raises(ConfigurationError) as info:
+        load_settings(_env_file=None, environment="production", registry_backend="filesystem")
+    assert info.value.context["missing"] == [
+        *(k.upper() for k in PRODUCTION_REQUIRED), "REGISTRY_FS_ROOT", "ARTIFACT_STORE_ROOT"
+    ]
+    settings = load_settings(
+        _env_file=None, environment="production", registry_backend="filesystem",
+        database_url="sqlite:////srv/app.db", artifact_workdir="/srv/work",
+        registry_fs_root="/srv/registry", artifact_store_root="/srv/store",
+    )
+    assert "mlflow_tracking_uri" not in settings.model_fields_set
 
 
 def test_a_bad_value_fails_naming_the_key(isolated) -> None:

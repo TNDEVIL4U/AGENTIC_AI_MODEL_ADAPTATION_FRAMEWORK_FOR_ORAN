@@ -18,7 +18,7 @@ import pytest
 from sklearn.linear_model import LogisticRegression
 
 import oran_adapt.orchestrator.jobs as jobs_module
-from oran_adapt.adapters.mlflow_registry import MlflowRegistry
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.core.enums import AssociationRole, DataKind, JobStatus
 from oran_adapt.core.errors import ModelNotFoundError, RegistryUnavailableError
 from oran_adapt.core.schemas import DriftEvent

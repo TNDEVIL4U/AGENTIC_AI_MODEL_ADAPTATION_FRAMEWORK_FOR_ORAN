@@ -3,7 +3,13 @@ and third-party distributions) and are resolved once, by name, at the compositio
 (``oran_adapt.bootstrap``) via the ``oran_adapt.<port>`` entry-point groups."""
 
 from oran_adapt.ports.capability import AdapterSpec, Capability
-from oran_adapt.ports.registry import ArtifactStorePort, ModelHandlerPort, ModelRegistryPort
+from oran_adapt.ports.registry import (
+    ArtifactStorePort,
+    ModelHandlerPort,
+    ModelRegistryPort,
+    ModelVersion,
+    RegisteredModel,
+)
 from oran_adapt.ports.runtime import (
     CdcSourcePort,
     DatasetPort,
@@ -46,9 +52,11 @@ __all__ = [
     "LLMPort",
     "ModelHandlerPort",
     "ModelRegistryPort",
+    "ModelVersion",
     "Notification",
     "NotificationPort",
     "PolicyPort",
     "Principal",
+    "RegisteredModel",
     "SecretsPort",
 ]

@@ -27,7 +27,8 @@ from oran_adapt.datastore.versioning import (
     link_model_data,
 )
 from oran_adapt.db.models import ModelMetadata
-from oran_adapt.ports import ModelRegistryPort
+from oran_adapt.ports import ModelHandlerPort, ModelRegistryPort
+from oran_adapt.registry.publishing import publish_model
 
 
 @dataclass
@@ -69,6 +70,7 @@ def _check_target(frame: pd.DataFrame, target_column: str) -> None:
 def onboard_model(
     session: Session,
     registry: ModelRegistryPort,
+    handler: ModelHandlerPort,
     *,
     model_id: str,
     model: object,
@@ -118,10 +120,13 @@ def onboard_model(
     features = (
         training_frame.drop(columns=[timestamp_column]) if timestamp_column else training_frame
     )
-    version = registry.log_model(
+    version = publish_model(
+        registry,
+        handler,
         name,
         model,
         framework=framework,
+        workdir=None,
         tags={
             "oran.model_id": model_id,
             "data.dataset_id": dataset_id,

@@ -25,8 +25,9 @@ class Capability:
     ``features`` are short, port-specific capability flags (e.g. ``"aliases"``, ``"streaming"``)
     the core may test for instead of branching on the adapter's name. ``config_keys`` are the
     settings the adapter reads; ``required_keys`` must be set when the adapter is selected, and
-    startup fails naming them otherwise. ``distributions`` are the optional Python packages the
-    adapter needs installed.
+    startup fails naming them otherwise. ``production_keys`` have a default pointing at a local
+    development path; ENVIRONMENT=production refuses to start until they are set explicitly.
+    ``distributions`` are the optional Python packages the adapter needs installed.
     """
 
     port: str
@@ -35,6 +36,7 @@ class Capability:
     features: frozenset[str] = field(default_factory=frozenset)
     config_keys: tuple[str, ...] = ()
     required_keys: tuple[str, ...] = ()
+    production_keys: tuple[str, ...] = ()
     distributions: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
@@ -45,6 +47,7 @@ class Capability:
             "features": sorted(self.features),
             "config_keys": list(self.config_keys),
             "required_keys": list(self.required_keys),
+            "production_keys": list(self.production_keys),
             "distributions": list(self.distributions),
         }
 

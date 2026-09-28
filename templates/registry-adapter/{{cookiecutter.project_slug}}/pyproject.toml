@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "{{ cookiecutter.project_slug }}"
+version = "0.1.0"
+description = "{{ cookiecutter.project_name }}: a model registry adapter for oran-adapt"
+requires-python = ">=3.11"
+# Add your backend's SDK here. Import it only inside registry.py (never in __init__.py), so
+# listing the adapters works where the SDK is not installed.
+dependencies = ["oran-adapt", "pydantic-settings>=2"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+# The entry-point name is the value REGISTRY_BACKEND selects.
+[project.entry-points."oran_adapt.registry"]
+{{ cookiecutter.adapter_name }} = "{{ cookiecutter.package }}:SPEC"
+
+[tool.setuptools.packages.find]
+where = ["src"]

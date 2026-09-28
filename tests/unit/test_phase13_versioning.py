@@ -15,8 +15,9 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 
 from oran_adapt.adaptation.data import holdout_size
-from oran_adapt.adapters.mlflow_models import resolve_skops_trusted_types
-from oran_adapt.adapters.mlflow_registry import MlflowRegistry
+from oran_adapt.adapters.handlers.native import resolve_skops_trusted_types
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
+from oran_adapt.bootstrap import build_model_handler
 from oran_adapt.core.errors import (
     ArtifactError,
     ConflictError,
@@ -34,6 +35,7 @@ from oran_adapt.datastore import (
 from oran_adapt.db.base import create_db_engine, make_session_factory, session_scope
 from oran_adapt.db.models import ModelMetadata
 from oran_adapt.registry.onboarding import onboard_model
+from oran_adapt.registry.publishing import describe_versions, publish_model
 
 FEATURES = ["prb_util", "cqi", "rsrp"]
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -54,6 +56,11 @@ def session_factory(migrated_settings):
 @pytest.fixture
 def registry(migrated_settings) -> MlflowRegistry:
     return MlflowRegistry.from_settings(migrated_settings)
+
+
+@pytest.fixture
+def handler(migrated_settings):
+    return build_model_handler(migrated_settings)
 
 
 # --------------------------------------------------------------------------- hashing / ingest
@@ -109,49 +116,56 @@ def test_timestamp_column_and_lineage_chain(session_factory):
 
 # --------------------------------------------------------------------------- registry
 @pytest.mark.heavy
-def test_tree_models_register_with_trusted_types(registry):
+def test_tree_models_register_with_trusted_types(registry, handler, migrated_settings):
     rf = RandomForestRegressor(n_estimators=5, max_depth=3, random_state=0)
     df = _frame(50)
     rf.fit(df[FEATURES], df["target"])
-    assert resolve_skops_trusted_types(rf, registry.skops_trusted_types) == ["sklearn.tree._tree.Tree"]
-    version = registry.log_model("rf_model", rf, framework="sklearn", tags={"k": "v"})
+    trusted = migrated_settings.mlflow_skops_trusted_types
+    assert resolve_skops_trusted_types(rf, trusted) == ["sklearn.tree._tree.Tree"]
+    version = publish_model(
+        registry, handler, "rf_model", rf, framework="sklearn", workdir=None, tags={"k": "v"}
+    )
     assert version == "1"
-    assert registry.describe_versions("rf_model")[0]["tags"]["k"] == "v"
+    assert describe_versions(registry, "rf_model")[0]["tags"]["k"] == "v"
 
 
 @pytest.mark.heavy
-def test_registry_calls_leave_no_global_mlflow_state(registry, monkeypatch):
+def test_registry_calls_leave_no_global_mlflow_state(registry, handler, monkeypatch):
     import os
 
     monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     monkeypatch.delenv("MLFLOW_REGISTRY_URI", raising=False)
-    registry.log_model("leak_check", Ridge().fit([[0.0], [1.0]], [0.0, 1.0]), framework="sklearn")
+    model = Ridge().fit([[0.0], [1.0]], [0.0, 1.0])
+    publish_model(registry, handler, "leak_check", model, framework="sklearn", workdir=None)
     assert "MLFLOW_TRACKING_URI" not in os.environ
     assert "MLFLOW_REGISTRY_URI" not in os.environ
 
 
-def test_untrusted_type_is_a_deterministic_artifact_error(migrated_settings):
-    strict = MlflowRegistry.from_settings(
-        migrated_settings.model_copy(update={"mlflow_skops_trusted_types": []})
+@pytest.mark.parametrize("model_format", ["mlflow-flavors", "native"])
+def test_untrusted_type_is_a_deterministic_artifact_error(migrated_settings, model_format, tmp_path):
+    strict = build_model_handler(
+        migrated_settings.model_copy(
+            update={"mlflow_skops_trusted_types": [], "model_format": model_format}
+        )
     )
     rf = RandomForestRegressor(n_estimators=2, random_state=0).fit(np.zeros((4, 1)), [0, 1, 0, 1])
     with pytest.raises(ArtifactError) as exc:
-        strict.log_model("rf_strict", rf, framework="sklearn")
+        strict.save(rf, "sklearn", str(tmp_path / "rf"))
     assert exc.value.context["untrusted_types"] == ["sklearn.tree._tree.Tree"]
 
 
 # --------------------------------------------------------------------------- onboarding
 @pytest.mark.heavy
-def test_onboard_links_mlflow_version_and_data(session_factory, registry):
+def test_onboard_links_mlflow_version_and_data(session_factory, registry, handler):
     hist = _frame(100)
     model = Ridge().fit(hist[FEATURES], hist["target"])
     with session_scope(session_factory) as s:
-        res = onboard_model(s, registry, model_id="thr", model=model, framework="sklearn", live_alias="live",
+        res = onboard_model(s, registry, handler, model_id="thr", model=model, framework="sklearn", live_alias="live",
                             task_type="regressor", target_column="target", dataset_id="thr-kpis",
                             training_frame=hist, drifted_frame=_frame(50, shift=3, seed=2))
     assert res.model_version == "1" and res.drifted_data.version == "v1-drift"
     assert res.drifted_data.data_start > res.training_data.data_end
-    [v1] = registry.describe_versions("thr")
+    [v1] = describe_versions(registry, "thr")
     assert v1["aliases"] == ["live"]
     assert v1["tags"]["data.training_hash"] == res.training_data.content_hash
     with session_scope(session_factory) as s:
@@ -159,15 +173,15 @@ def test_onboard_links_mlflow_version_and_data(session_factory, registry):
     assert roles == {("1", "TRAINING"), ("1", "DRIFT_OBSERVED")}
 
     with pytest.raises(ConflictError), session_scope(session_factory) as s:
-        onboard_model(s, registry, model_id="thr", model=model, framework="sklearn", live_alias="live",
+        onboard_model(s, registry, handler, model_id="thr", model=model, framework="sklearn", live_alias="live",
                       task_type="regressor", target_column="target", dataset_id="x",
                       training_frame=hist)
 
 
-def test_onboard_rejects_missing_target_before_touching_mlflow(session_factory, registry):
+def test_onboard_rejects_missing_target_before_touching_mlflow(session_factory, registry, handler):
     hist = _frame(20)
     with pytest.raises(ArtifactError), session_scope(session_factory) as s:
-        onboard_model(s, registry, model_id="bad", model=Ridge(), framework="sklearn", live_alias="live",
+        onboard_model(s, registry, handler, model_id="bad", model=Ridge(), framework="sklearn", live_alias="live",
                       task_type="regressor", target_column="nope", dataset_id="d",
                       training_frame=hist)
     assert registry.client.search_registered_models() == []
@@ -188,7 +202,7 @@ def test_pipeline_snapshots_training_data_and_tags_lineage(client, migrated_sett
     hist = _frame(200, seed=1)
     model = Ridge().fit(hist[FEATURES], hist["target"])
     with session_scope(app.state.session_factory) as s:
-        onboard_model(s, app.state.registry, model_id="thr", model=model, framework="sklearn", live_alias="live",
+        onboard_model(s, app.state.registry, app.state.model_handler, model_id="thr", model=model, framework="sklearn", live_alias="live",
                       task_type="regressor", target_column="target", dataset_id="thr-kpis",
                       training_frame=hist, drifted_frame=_frame(200, shift=3, seed=2),
                       drifted_version="drift-1")

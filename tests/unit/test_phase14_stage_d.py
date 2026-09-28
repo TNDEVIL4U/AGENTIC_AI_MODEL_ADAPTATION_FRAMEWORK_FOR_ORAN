@@ -23,7 +23,7 @@ from test_phase14_member1 import (  # shared seeding helpers (same test director
 
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.leakage import check_leakage
-from oran_adapt.adapters.mlflow_registry import MlflowRegistry
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import (
     DataVersionRef,

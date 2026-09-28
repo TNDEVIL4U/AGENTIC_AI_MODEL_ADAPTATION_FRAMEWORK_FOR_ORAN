@@ -41,6 +41,7 @@ from oran_adapt.analysis.engine import analyze
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import ReuseDecision, VersionEvaluation
 from oran_adapt.analysis.version_eval import evaluate_versions
+from oran_adapt.bootstrap import build_model_handler
 from oran_adapt.core import metrics
 from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
@@ -72,6 +73,7 @@ from oran_adapt.orchestrator.context import current_job_id, report_stage
 from oran_adapt.orchestrator.schemas import JobResult
 from oran_adapt.ports import ModelRegistryPort
 from oran_adapt.registry.promotion import current_live, promote_version, verify_version_artifact
+from oran_adapt.registry.publishing import record_artifact_checksum, register_candidate
 from oran_adapt.sandbox.runner import SandboxLimits
 from oran_adapt.validation.engine import validate_candidate
 
@@ -234,6 +236,7 @@ def run_adaptation_job(
     is adaptable but has no ``target_column`` on record. Every other outcome - no action, an
     existing version reused, a rejected candidate, a registered candidate - comes back as a
     JobResult, never an exception."""
+    handler = build_model_handler(settings)
     model_meta = session.execute(
         select(ModelMetadata).where(ModelMetadata.model_id == event.model_id)
     ).scalar_one_or_none()
@@ -340,6 +343,7 @@ def run_adaptation_job(
         eval_started = time.perf_counter()
         evaluations = evaluate_versions(
             registry,
+            handler,
             mlflow_name=model_meta.mlflow_model_name,
             framework=framework,
             target_column=target,
@@ -465,7 +469,7 @@ def run_adaptation_job(
             f"model '{event.model_id}' has no framework on record; cannot load it to adapt",
             model_id=event.model_id,
         )
-    current_model = registry.load_model(local_path, framework)
+    current_model = handler.load(local_path, framework)
     inspection = inspect_model(current_model, framework)
 
     train_records = [r for r in records if r.id not in holdout_ids]
@@ -608,10 +612,13 @@ def run_adaptation_job(
         ref for ref in (package.historical_data, package.drifted_data) if ref is not None
     ]
     name = model_meta.mlflow_model_name
-    new_version = registry.register_candidate(
+    new_version = register_candidate(
+        registry,
+        handler,
         name,
         candidate.artifact_path,
         framework=candidate.framework,
+        workdir=os.path.join(workdir, "publish"),
         metrics=candidate.metrics,
         tags={
             "oran.model_id": event.model_id,
@@ -622,7 +629,8 @@ def run_adaptation_job(
             "oran.correlation_id": get_correlation_id() or "",
             "adaptation.strategy": decision.strategy.value,
             "adaptation.applied_strategy": str(candidate.applied_strategy or decision.strategy),
-            "adaptation.note": candidate.adaptation_note[:500],
+            # 250: the smallest per-tag limit of the registry adapters (SageMaker, 256).
+            "adaptation.note": candidate.adaptation_note[:250],
             "adaptation.engine": candidate.engine.value,
             "candidate.sha256": candidate_sha,
             "validation.metric": report.metric_name,
@@ -634,7 +642,9 @@ def run_adaptation_job(
         },
     )
     metrics.REGISTRATIONS.inc()
-    registry.record_artifact_checksum(name, new_version, os.path.join(workdir, "registered"))
+    record_artifact_checksum(
+        registry, name, new_version, os.path.join(workdir, "registered")
+    )
     _audit(
         session,
         AuditAction.MODEL_REGISTERED,

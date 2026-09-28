@@ -50,6 +50,12 @@ def _registry(settings: Settings):
     return build_registry(settings)
 
 
+def _model_handler(settings: Settings):
+    from oran_adapt.bootstrap import build_model_handler
+
+    return build_model_handler(settings)
+
+
 def _cmd_db_upgrade(args, settings: Settings) -> Any:
     from oran_adapt.db.migrate import upgrade_to_head
 
@@ -164,6 +170,7 @@ def _cmd_model_onboard(args, settings: Settings) -> Any:
         result = onboard_model(
             session,
             _registry(settings),
+            _model_handler(settings),
             model_id=args.model_id,
             model=model,
             framework=args.framework,
@@ -206,6 +213,7 @@ def _cmd_model_show(args, settings: Settings) -> Any:
     from oran_adapt.datastore import model_data_links
     from oran_adapt.db.base import session_scope
     from oran_adapt.db.models import ModelMetadata
+    from oran_adapt.registry.publishing import describe_versions
 
     with session_scope(_session_factory(settings)) as session:
         meta = session.execute(
@@ -218,7 +226,7 @@ def _cmd_model_show(args, settings: Settings) -> Any:
     return {
         "model_id": args.model_id,
         "mlflow_model_name": name,
-        "versions": _registry(settings).describe_versions(name),
+        "versions": describe_versions(_registry(settings), name),
         "data_links": links,
     }
 

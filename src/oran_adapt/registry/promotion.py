@@ -36,7 +36,7 @@ from oran_adapt.core.errors import (
 from oran_adapt.core.integrity import check_size, sha256_path, verify_checksum
 from oran_adapt.core.logging import log_event
 from oran_adapt.db.models import ModelMetadata, ModelPromotion
-from oran_adapt.ports import ModelRegistryPort
+from oran_adapt.ports import ModelHandlerPort, ModelRegistryPort
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +308,7 @@ def last_applied_promotion(session: Session, model_id: str) -> ModelPromotion | 
 def rollback_model(
     session: Session,
     registry: ModelRegistryPort,
+    handler: ModelHandlerPort,
     *,
     model_id: str,
     live_alias: str,
@@ -339,7 +340,7 @@ def rollback_model(
             version=target_version,
         )
     try:
-        registry.load_model(local, meta.framework)
+        handler.load(local, meta.framework)
     except Exception as exc:
         raise ArtifactError(
             f"rollback target version {target_version} does not load",

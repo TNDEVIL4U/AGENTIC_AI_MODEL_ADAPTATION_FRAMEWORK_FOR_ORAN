@@ -23,6 +23,7 @@ from oran_adapt.db.models import ModelLock, ModelMetadata, ModelPromotion, Model
 from oran_adapt.orchestrator.locks import add_lock, release_lock, take_over_expired_lock
 from oran_adapt.registry.onboarding import attach_existing_model
 from oran_adapt.registry.promotion import rollback_model
+from oran_adapt.registry.publishing import describe_versions
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -83,7 +84,7 @@ def get_model(model_id: str, request: Request) -> dict:
             raise ModelNotFoundError(f"model '{model_id}' is not onboarded", model_id=model_id)
         body = _summary(meta)
         body["data_links"] = model_data_links(session, model_id)
-    versions = state.registry.describe_versions(body["mlflow_model_name"])
+    versions = describe_versions(state.registry, body["mlflow_model_name"])
     alias = state.settings.live_alias
     body["live_alias"] = alias
     body["live_version"] = next((v["version"] for v in versions if alias in v["aliases"]), None)
@@ -110,7 +111,7 @@ def get_model_versions(model_id: str, request: Request) -> dict:
     state = request.app.state
     with session_scope(state.session_factory) as session:
         name = _require_model(session, model_id).mlflow_model_name
-    versions = state.registry.describe_versions(name)
+    versions = describe_versions(state.registry, name)
     alias = state.settings.live_alias
     live = next((v["version"] for v in versions if alias in v["aliases"]), None)
     for v in versions:
@@ -216,6 +217,7 @@ def rollback(
             result = rollback_model(
                 session,
                 state.registry,
+                state.model_handler,
                 model_id=model_id,
                 live_alias=settings.live_alias,
                 workdir=os.path.join(settings.artifact_workdir, holder),

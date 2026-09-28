@@ -27,7 +27,7 @@ from test_phase14_member1 import (  # shared seeding helpers (same test director
 
 from oran_adapt import cli
 from oran_adapt.adapters.access import hash_api_key
-from oran_adapt.adapters.mlflow_registry import MlflowRegistry
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.api.app import create_app
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import AuditAction, JobStatus
