@@ -1,5 +1,5 @@
 # Full oran-adapt stack: PostgreSQL (app data + CDC source), MLflow (registry; artifacts on a volume),
-# Kafka + Debezium (production CDC), the API, the CDC consumer, and Prometheus.
+# Kafka + Debezium (production CDC), the API, the job worker, the CDC consumer, and Prometheus.
 #
 #   cp .env.example .env      # then set POSTGRES_PASSWORD, API_KEYS, ...
 #   docker compose up -d --build
@@ -139,6 +139,14 @@ services:
     depends_on:
       api: {condition: service_healthy}
       kafka: {condition: service_healthy}
+
+  worker:  # claims and runs the adaptation jobs the API queues (docs/adapters/job_queue.md)
+    <<: *app
+    command: ["oran-adapt", "worker", "run"]
+    healthcheck: {disable: true}
+    stop_grace_period: 45s  # > JOB_DRAIN_TIMEOUT_S: a stopping worker requeues its job
+    depends_on:
+      api: {condition: service_healthy}
 
   prometheus:
     image: prom/prometheus:v2.54.1

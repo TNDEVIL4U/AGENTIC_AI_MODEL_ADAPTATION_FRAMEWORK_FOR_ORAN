@@ -22,15 +22,19 @@ VENDOR_SDKS = frozenset(
         "anthropic",
         "boto3",
         "botocore",
+        "celery",
         "confluent_kafka",
         "google.auth",
         "google.cloud",
         "google.genai",
         "hvac",
+        "kombu",
         "kserve",
         "kubernetes",
         "mlflow",
         "openai",
+        "redis",
+        "rq",
         "sagemaker",
     }
 )
@@ -51,6 +55,10 @@ SDK_HOMES: dict[str, tuple[str, ...]] = {
     ),
     "confluent_kafka": ("adapters/kafka_cdc.py", "adapters/notify_brokers.py"),
     "google.auth": ("adapters/registry/vertex.py",),
+    "celery": ("adapters/job_queues.py",),
+    "kombu": ("adapters/job_queues.py",),
+    "redis": ("adapters/job_queues.py",),
+    "rq": ("adapters/job_queues.py",),
 }
 
 

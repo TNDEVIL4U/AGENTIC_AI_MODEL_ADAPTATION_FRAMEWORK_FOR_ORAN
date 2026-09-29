@@ -53,6 +53,13 @@ mapping. The table below is the baseline as audited.
 
 ## 5. Assumes a single process (finding #5, Hardening Phase 6)
 
+**Closed in Hardening Phase 6** (`docs/PHASE6_REPORT.md`): the API only queues a job and a
+separate worker claims it under a lease, with fencing, a reaper, deadlines and cancellation
+that kill the whole process tree, retries by requeue, poison quarantine, graceful drain, worker
+classes, priorities and per-tenant limits. Queue adapters: `database`, `celery`, `rq`,
+`kubernetes`, `inline` (development only). The Prometheus registry is still per process
+(below); it is scraped per pod. The table below is the baseline as audited.
+
 | Where | Assumption |
 |---|---|
 | `api/routes_adaptation.py:23-41` | the HTTP request **blocks until the job finishes**; a long job holds an API threadpool slot and the client connection |

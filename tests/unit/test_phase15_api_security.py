@@ -18,8 +18,10 @@ PUBLIC = {"/api/v1/health", "/api/v1/ready", "/api/v1/readiness", "/api/v1/metri
 # Every state-changing route and the policy action it requires.
 WRITE_POLICY = {
     ("POST", "/api/v1/adaptation/events"): SUBMIT,
+    ("POST", "/api/v1/adaptation/jobs/{job_id}/cancel"): SUBMIT,
     ("POST", "/api/v1/datasets"): DATA,
     ("POST", "/api/v1/datasets/{dataset_id}/versions"): DATA,
+    ("POST", "/api/v1/datasets/{dataset_id}/versions/{version}/verify"): DATA,
     ("POST", "/api/v1/datasets/{dataset_id}/cdc/materialize"): DATA,
     ("POST", "/api/v1/models/attach"): DATA,
     ("POST", "/api/v1/models/{model_id}/rollback"): PROMOTE,

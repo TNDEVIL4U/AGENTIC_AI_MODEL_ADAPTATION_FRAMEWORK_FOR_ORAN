@@ -344,6 +344,7 @@ def test_full_pipeline_via_job_manager_registers_and_records_events(
         assert transitions == list(pairwise(path))
         assert path[1:] == [
             "RECEIVED",
+            "QUEUED",
             "VALIDATING",
             "DATA_PREPARING",
             "EVALUATING_VERSIONS",

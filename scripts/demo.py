@@ -87,6 +87,8 @@ def run() -> None:
         artifact_workdir=str(run_dir / "work"),
         log_json=False,
         auth_enabled=False,  # a local demo; see RUN.md section 3 for API keys
+        # One process, no worker: each submitted job runs inside its request.
+        job_queue_backend="inline",
     )
     print(f"Demo folder: {run_dir}")
     upgrade_to_head(settings.database_url)

@@ -195,7 +195,8 @@ def _seed_three_similar(session_factory, registry, settings, *, model_id, name):
 # ---- state machine ---------------------------------------------------------------------------
 def test_state_machine_allows_the_spec_path_and_refuses_jumps() -> None:
     path = [
-        "RECEIVED", "VALIDATING", "DATA_PREPARING", "EVALUATING_VERSIONS", "REUSE_DECISION",
+        "RECEIVED", "QUEUED", "VALIDATING", "DATA_PREPARING", "EVALUATING_VERSIONS",
+        "REUSE_DECISION",
         "DECISION_PENDING", "ADAPTING", "VALIDATING_CANDIDATE", "REGISTERING", "PROMOTING",
         "COMPLETED",
     ]
@@ -203,7 +204,7 @@ def test_state_machine_allows_the_spec_path_and_refuses_jumps() -> None:
         check_transition(cur, nxt)
     check_transition("REUSE_DECISION", "PROMOTING")  # reuse skips adaptation
     check_transition("PROMOTING", "ROLLED_BACK")
-    check_transition("ADAPTING", "DATA_PREPARING")  # retry after a transient failure
+    check_transition("ADAPTING", "QUEUED")  # requeued after a transient failure
 
     with pytest.raises(InvalidTransitionError):
         check_transition("RECEIVED", "PROMOTING")
@@ -312,7 +313,8 @@ def test_best_older_version_goes_live_without_training(
 
     path = _path(session_factory, job.job_id)
     assert path == [
-        "RECEIVED", "VALIDATING", "DATA_PREPARING", "EVALUATING_VERSIONS", "REUSE_DECISION",
+        "RECEIVED", "QUEUED", "VALIDATING", "DATA_PREPARING", "EVALUATING_VERSIONS",
+        "REUSE_DECISION",
         "PROMOTING", "COMPLETED",
     ]
 

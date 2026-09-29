@@ -27,6 +27,7 @@ from oran_adapt.bootstrap import (
     build_auth,
     build_data_access,
     build_deployer,
+    build_job_queue,
     build_llm,
     build_model_handler,
     build_notifiers,
@@ -176,6 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.deployer = build_deployer(settings, app.state.registry)
     app.state.model_handler = build_model_handler(settings)
     app.state.llm_client = build_llm(settings)
+    app.state.job_queue = build_job_queue(settings)
     app.state.auth = build_auth(settings)
     app.state.policy = build_policy(settings)
     app.state.notifiers = build_notifiers(settings)
@@ -234,6 +236,7 @@ def _status_for(exc: AdaptationError) -> int:
         "DATA_VERSION_CONFLICT": 409,
         "MODEL_BUSY": 409,
         "INVALID_STATE_TRANSITION": 409,
+        "JOB_NOT_CANCELLABLE": 409,
         "ARTIFACT_INTEGRITY_FAILED": 422,
         "INVALID_REFERENCE": 422,
         "DATA_SOURCE_NOT_ALLOWED": 422,
@@ -244,5 +247,6 @@ def _status_for(exc: AdaptationError) -> int:
         "MLFLOW_UNAVAILABLE": 503,
         "DEPLOYMENT_UNAVAILABLE": 503,
         "DATABASE_UNAVAILABLE": 503,
+        "JOB_QUEUE_UNAVAILABLE": 503,
         "JOB_TIMEOUT": 504,
     }.get(exc.code, 500)

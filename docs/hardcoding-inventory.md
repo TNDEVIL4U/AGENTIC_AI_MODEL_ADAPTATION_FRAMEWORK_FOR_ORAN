@@ -202,11 +202,26 @@ setting the topic. What is still a literal, and why:
 | `cdc/triggers.py` | identifiers limited to `[A-Za-z_][A-Za-z0-9_]{0,62}` | they are interpolated into DDL, and 63 is PostgreSQL's identifier limit |
 | `api/routes_data.py` | `limit` at most 1000 rows per page; `storage_uri` at most 500 characters | a bound on one response; the `storage_uri` column width |
 
+## Hardening Phase 6 status
+
+No baseline item reopened. The worker, reaper, executors and queue adapters
+(`orchestrator/worker.py`, `adapters/job_executors.py`, `adapters/job_queues.py`) take every
+interval, threshold, class, priority, tenant limit, queue name, broker URL and pod spec from
+`JOB_*` keys (`docs/adapters/job_queue.md`, "Configuration"). C14 still covers the `JOB_*`
+schema defaults. What is still a literal, and why:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `adapters/job_queues.py` | Kubernetes Job name `<K8S_NAME_PREFIX>oran-job-<job_id>-a<attempt>` | it must be unique per attempt and fit the 63-character DNS label; the job id makes it unique |
+| `orchestrator/worker.py` | lease tokens and worker ids from `uuid4().hex` | identifiers, not tunables |
+| `api/routes_adaptation.py` | `limit` at most 1000 jobs per page | a bound on one response, as on the other list routes |
+| `docker-compose.yml` (worker) | `stop_grace_period: 45s` | must exceed `JOB_DRAIN_TIMEOUT_S` (30 s); it belongs with D4 (compose values) |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 |
-|---|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 |
+|---|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 |

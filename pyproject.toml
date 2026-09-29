@@ -48,6 +48,13 @@ polling = "oran_adapt.adapters.polling_cdc:SPEC"
 process = "oran_adapt.adapters.job_executors:PROCESS"
 thread = "oran_adapt.adapters.job_executors:THREAD"
 
+[project.entry-points."oran_adapt.job_queue"]
+database = "oran_adapt.adapters.job_queues:DATABASE"
+inline = "oran_adapt.adapters.job_queues:INLINE"
+celery = "oran_adapt.adapters.job_queues:CELERY"
+rq = "oran_adapt.adapters.job_queues:RQ"
+kubernetes = "oran_adapt.adapters.job_queues:KUBERNETES"
+
 [project.entry-points."oran_adapt.auth"]
 api-key = "oran_adapt.adapters.access:API_KEY"
 
@@ -107,6 +114,9 @@ fsspec = ["fsspec>=2023.1"]
 parquet = ["pyarrow>=14"]
 # NOTIFICATION_BACKEND=pubsub with NOTIFICATION_PUBSUB_CREDENTIALS=adc.
 pubsub = ["google-auth>=2.20"]
+# JOB_QUEUE_BACKEND=celery / rq (workers woken through a broker).
+celery = ["celery>=5.3"]
+rq = ["rq>=1.15", "redis>=5"]
 # scripts/security_check.py: static security scan, dependency audit, type check, SBOM.
 security = ["bandit[toml]>=1.8", "pip-audit>=2.9", "mypy>=1.15", "cyclonedx-bom>=6"]
 

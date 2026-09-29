@@ -40,6 +40,7 @@ ADAPTER_SELECTORS: dict[str, str] = {
     "artifact_store_backend": "artifact_store",
     "llm_provider": "llm",
     "job_execution_mode": "job_executor",
+    "job_queue_backend": "job_queue",
     "cdc_mode": "cdc_source",
     "auth_backend": "auth",
     "policy_backend": "policy",
@@ -281,6 +282,65 @@ class Settings(BaseSettings):
     job_execution_mode: str = "process"
     # How long a terminated worker gets to exit before it is killed outright.
     job_kill_grace_s: float = Field(5.0, gt=0)
+
+    # The job queue (orchestrator.worker, docs/adapters/job_queue.md). The API only records a job
+    # QUEUED; workers (`oran-adapt worker run`) claim and run it. The database holds the queue,
+    # so it survives any broker; JOB_QUEUE_BACKEND only says how workers are woken:
+    # "database" (workers poll), "celery", "rq", "kubernetes" (a Job per attempt), or "inline"
+    # (the submitting call runs the job itself: tests and development only).
+    job_queue_backend: str = "database"
+    # The checkpoint interval: how often a running job's supervisor renews its lease and model
+    # lock and looks for a cancel request, the deadline and a drain.
+    job_heartbeat_s: float = Field(5.0, gt=0)
+    # A lease not renewed for this long is lost: the reaper requeues the job (or quarantines it).
+    job_lease_ttl_s: float = Field(30.0, gt=0)
+    # How often an idle worker looks for a job; how often workers run the reaper.
+    job_poll_interval_s: float = Field(1.0, gt=0)
+    job_reap_interval_s: float = Field(10.0, gt=0)
+    # A queued job the broker has not delivered for this long is published again.
+    job_republish_after_s: float = Field(300.0, gt=0)
+    # Attempts that may end without an outcome (worker killed, lease lost) before the job is
+    # quarantined (FAILED, JOB_QUARANTINED) instead of being run again.
+    job_poison_threshold: int = Field(3, ge=1)
+    # How long a stopping worker (SIGTERM, SIGINT, Ctrl+Break) lets its running job continue
+    # before stopping it and putting it back in the queue.
+    job_drain_timeout_s: float = Field(30.0, ge=0)
+    # Wall-clock limit of a job from submission, queue time included (unset: only the
+    # per-attempt JOB_TIMEOUT_S applies).
+    job_deadline_s: float | None = Field(None, gt=0)
+    # Worker classes: a job runs only on workers serving its class. The class comes from the
+    # model's framework through JOB_CLASS_BY_FRAMEWORK ({"torch": "gpu"}), else
+    # JOB_DEFAULT_CLASS. JOB_WORKER_CLASSES: the classes a worker serves unless --classes says.
+    job_default_class: str = "default"
+    job_class_by_framework: dict[str, str] = {}
+    job_worker_classes: list[str] = ["default"]
+    # Claim order: higher first, then oldest first. Taken from the event's severity.
+    job_priority_by_severity: dict[str, int] = {"CRITICAL": 30, "HIGH": 20, "MEDIUM": 10, "LOW": 0}
+    job_default_priority: int = 0
+    # How many of the next claimable jobs a worker tries per poll: a candidate another worker
+    # wins, or whose tenant is at its limit, is skipped for the next one.
+    job_claim_candidates: int = Field(10, ge=1)
+    # Tenants: the submitting principal's name, mapped through JOB_TENANT_BY_PRINCIPAL. At most
+    # JOB_TENANT_LIMITS[tenant] (else JOB_TENANT_CONCURRENCY; 0 = unlimited) of a tenant's jobs
+    # run at once.
+    job_tenant_by_principal: dict[str, str] = {}
+    job_default_tenant: str = "default"
+    job_tenant_concurrency: int = Field(0, ge=0)
+    job_tenant_limits: dict[str, int] = {}
+    # "celery": the task is published to queue <JOB_QUEUE_NAME_PREFIX><class>.
+    job_queue_name_prefix: str = "oran-jobs-"
+    job_queue_celery_broker_url: SecretStr | None = None
+    job_queue_celery_task: str = "oran_adapt.run_job"
+    # "rq": a Redis Queue per class, running oran_adapt.orchestrator.worker.run_job_by_id.
+    job_queue_rq_redis_url: SecretStr | None = None
+    # "kubernetes": a batch/v1 Job per attempt, through the K8S_* API settings. The pod runs
+    # `oran-adapt worker run-job --job-id <id>` in JOB_QUEUE_K8S_IMAGE; JOB_QUEUE_K8S_CLASS_PODS
+    # adds pod spec fields per class ({"gpu": {"nodeSelector": {...}, "resources": {...}}}).
+    job_queue_k8s_image: str | None = None
+    job_queue_k8s_env_secret: str | None = None
+    job_queue_k8s_service_account: str | None = None
+    job_queue_k8s_class_pods: dict[str, dict[str, Any]] = {}
+    job_queue_k8s_ttl_after_finished_s: int = Field(3600, ge=0)
 
     # Member 1 (analysis) reuse thresholds. A feature is treated as "shifted" once its PSI
     # crosses analysis_psi_reuse_threshold OR its KS test p-value drops below
@@ -578,6 +638,18 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _job_timings_consistent(self) -> Settings:
+        if self.job_lease_ttl_s <= 2 * self.job_heartbeat_s:
+            raise ConfigurationError(
+                "JOB_LEASE_TTL_S must be more than twice JOB_HEARTBEAT_S, or one late heartbeat "
+                "loses a healthy job's lease",
+                key="JOB_LEASE_TTL_S",
+                job_lease_ttl_s=self.job_lease_ttl_s,
+                job_heartbeat_s=self.job_heartbeat_s,
+            )
+        return self
+
+    @model_validator(mode="after")
     def _production_explicit(self) -> Settings:
         if self.environment == "production":
             required = [*PRODUCTION_REQUIRED, *self._adapter_production_keys()]
@@ -588,6 +660,17 @@ class Settings(BaseSettings):
                 if k not in self.model_fields_set
                 and not (self._secrets_external and is_secret_field(fields[k]))
             ]
+            from oran_adapt import plugins
+
+            for selector, port in ADAPTER_SELECTORS.items():
+                for name in selected_adapters(self, selector):
+                    spec = plugins.resolve(port, name, config_key=selector)
+                    if "development_only" in spec.capability.features:
+                        raise ConfigurationError(
+                            f"{selector.upper()}={name} is for tests and development only, "
+                            "not ENVIRONMENT=production",
+                            key=selector.upper(),
+                        )
             if missing:
                 raise ConfigurationError(
                     "ENVIRONMENT=production requires "

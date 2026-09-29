@@ -7,6 +7,8 @@ class JobStatus(StrEnum):
     """Adaptation job states. Allowed moves between them live in core.state_machine."""
 
     RECEIVED = "RECEIVED"
+    # Waiting in the job queue for a worker (first run, or again after a transient failure).
+    QUEUED = "QUEUED"
     VALIDATING = "VALIDATING"  # the inbound event is being checked
     DATA_PREPARING = "DATA_PREPARING"
     EVALUATING_VERSIONS = "EVALUATING_VERSIONS"
@@ -21,6 +23,8 @@ class JobStatus(StrEnum):
     ROLLED_BACK = "ROLLED_BACK"
     # The job ran past Settings.job_timeout_s and its worker process was killed.
     TIMED_OUT = "TIMED_OUT"
+    # Stopped on request (POST /adaptation/jobs/{id}/cancel) before it reached the registry.
+    CANCELLED = "CANCELLED"
     # Written by releases before Phase 14; kept so older job rows still load. Never entered now.
     ANALYZING = "ANALYZING"
     MODEL_COMPARISON = "MODEL_COMPARISON"
@@ -28,7 +32,13 @@ class JobStatus(StrEnum):
 
 
 TERMINAL_STATUSES = frozenset(
-    {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ROLLED_BACK, JobStatus.TIMED_OUT}
+    {
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.ROLLED_BACK,
+        JobStatus.TIMED_OUT,
+        JobStatus.CANCELLED,
+    }
 )
 
 
@@ -132,3 +142,4 @@ class AuditAction(StrEnum):
     MODEL_PROMOTED = "MODEL_PROMOTED"
     MODEL_ROLLED_BACK = "MODEL_ROLLED_BACK"
     NOTIFICATION_REDRIVEN = "NOTIFICATION_REDRIVEN"
+    JOB_CANCEL_REQUESTED = "JOB_CANCEL_REQUESTED"

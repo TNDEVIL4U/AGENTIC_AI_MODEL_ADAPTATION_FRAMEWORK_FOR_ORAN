@@ -12,7 +12,8 @@ is the record of *why* each default was chosen.
 |---|---|---|---|---|
 | `llm` | `LLM_PROVIDER` | `none` (deterministic path, no LLM) | `anthropic`, `gemini` | Which LLM provider, if any, is the operator allowed to call from the RIC environment? |
 | `cdc_source` | `CDC_MODE` | `disabled` | `polling` (DB trigger + outbox table), `kafka` | Is a Kafka/Debezium pipeline available, or only the database itself? |
-| `job_executor` | `JOB_EXECUTION_MODE` | `process` (hard timeout, isolated) | `thread` (tests, debugging) | Will jobs move to a queue or cluster executor (Celery, Kubernetes Jobs)? |
+| `job_executor` | `JOB_EXECUTION_MODE` (how a worker runs one attempt) | `process` (hard timeout, whole process tree killed) | `thread` (tests, debugging) | – (settled: jobs run in workers since Phase 6) |
+| `job_queue` | `JOB_QUEUE_BACKEND` | `database` (workers poll the job table; no broker) | `celery`, `rq`, `kubernetes`, `inline` (development only) | Is there a broker (RabbitMQ, Redis) or a cluster the workers should be woken through? See "Job queue adapters" below. |
 | `notification` | `NOTIFICATION_BACKEND` (comma-separated: several sinks at once, or `none`) | `log` | `webhook`, `slack`, `pagerduty`, `email`, `kafka`, `sqs`, `sns`, `pubsub`, `nats` | Which channel does the operations team watch, and which system consumes job events? See "Notification adapters" below. |
 | `secrets` | `SECRETS_BACKEND` | `env` | `file` (mounted secret files, e.g. Kubernetes/Docker secrets) | Is a secrets manager (Vault, a cloud KMS) mandated? |
 | `registry` | `REGISTRY_BACKEND` | `mlflow` (standing decision: MLflow with `--serve-artifacts`) | `filesystem`, `mirror`, `sagemaker`, `vertex` | Will the deployment keep MLflow, or register models in a cloud registry (SageMaker, Vertex)? See "Registry adapters" below. |
@@ -133,6 +134,29 @@ Defaults and assumptions, with the key that changes each:
 | Referenced data needs a timestamp column; there is no "start + spacing" fallback. | Row order in an object is not a time axis. | `DATASET_TIME_COLUMN`, `timestamp_column` per version |
 | CDC can follow any table; `kpi_sample` is only the default. Triggers are generated for review, not applied automatically. | Applying DDL to an operator's database is the operator's decision. | `CDC_*_COLUMN`, `CDC_DATASET_ID`, `oran-adapt cdc trigger-sql` |
 | `file` and `fsspec` (`memory://`) were tested for real, `http` and `gcs` against a local server, `s3` against a client double. **None of `http`, `s3`, `gcs` or a non-memory fsspec filesystem is verified against a real store.** | No cloud account or object store in the local gate. | the adapter's keys |
+
+## Job queue adapters
+
+Since Phase 6 the API only queues a job; a worker process (`oran-adapt worker run`) claims and
+runs it. The database is the queue: a claim is one conditional `UPDATE`, and a broker adapter
+only wakes workers, so a lost or repeated broker message neither loses nor doubles a job.
+`oran_adapt.conformance.job_queue` is the behaviour each adapter must show, and
+`docs/adapters/job_queue.md` explains each key.
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| Workers poll the database; no broker is required. | Every installation already has the database; a broker is a decision per installation. | `JOB_QUEUE_BACKEND`, `JOB_POLL_INTERVAL_S` |
+| A worker renews its lease every 5 s; a lease unrenewed for 30 s is taken back by the reaper. | Detects a dead worker within about half a minute without much database traffic. | `JOB_HEARTBEAT_S`, `JOB_LEASE_TTL_S`, `JOB_REAP_INTERVAL_S` |
+| A job whose attempts end 3 times without an outcome is quarantined. | A job that kills its workers must not take down the pool. | `JOB_POISON_THRESHOLD` |
+| A stopping worker waits 30 s for its job, then requeues it without charging an attempt. | Deploys and scale-downs must not use up retries. | `JOB_DRAIN_TIMEOUT_S` |
+| No deadline and no per-tenant limit by default. | Neither has a value the framework can know. | `JOB_DEADLINE_S`, `JOB_TENANT_CONCURRENCY`, `JOB_TENANT_LIMITS` |
+| One worker class, `default`; GPU jobs need a class mapping and workers started for it. | No GPU node is known. | `JOB_CLASS_BY_FRAMEWORK`, `JOB_WORKER_CLASSES`, `JOB_QUEUE_K8S_CLASS_PODS` |
+| A job lost while registering or promoting is not re-run; it fails `JOB_ABANDONED` with `needs_reconciliation`. | Re-running could register or promote twice. | – |
+| `inline` runs a job inside its request, and production refuses it. | Only for demos and one-process development. | `JOB_QUEUE_BACKEND` |
+| No `arq` adapter; `rq` covers the Redis family. | An arq adapter would repeat the RQ one through the same port. | – |
+| `celery`, `rq` and `kubernetes` were tested against doubles only. **None is verified against a real broker or cluster, and the claim was not run on PostgreSQL.** | No broker, cluster or PostgreSQL in the local gate. | the adapter's keys |
 
 ## Not yet behind a port
 

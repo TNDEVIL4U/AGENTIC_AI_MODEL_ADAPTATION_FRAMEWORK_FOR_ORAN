@@ -28,6 +28,10 @@ own earlier "Phase 1–15" commit labels are a different, older numbering.
   per-model row lock in `model_lock` with a TTL (`MODEL_LOCK_TTL_S`). A second event for a busy
   model is refused with `MODEL_BUSY` (409), and nothing is recorded.
 - CDC consumer: a separate long-running CLI process (`oran-adapt cdc run --mode kafka|polling`).
+- **Since Hardening Phase 6 this section describes the old model.** The POST only records the job
+  as `QUEUED` (201) and a separate worker process (`oran-adapt worker run`, compose service
+  `worker`) claims it under a lease and runs it with `JOB_EXECUTION_MODE`. Retries are requeues,
+  and timeouts, deadlines and cancellation kill the whole process tree (`docs/adapters/job_queue.md`).
 - There is no broker, no work queue, no separate worker service and no outbound notifications.
   Callers poll `GET /jobs/{id}`, or simply wait on the blocking POST. (Since Hardening Phase 4
   every job transition is also delivered to the configured notification sinks through a
@@ -44,8 +48,10 @@ add stricter roles. With `AUTH_ENABLED=false`, every caller is `anonymous`/ADMIN
 | GET | `/health` | none | – | `HealthResponse{status, version}` |
 | GET | `/ready`, `/readiness` | none | – | `ReadyResponse{ready, components[]}`; 503 unless DB **and** MLflow answer |
 | GET | `/metrics` | none if `METRICS_PUBLIC` | – | Prometheus text |
-| POST | `/adaptation/events` | ADMIN, OPERATOR, ML_ENGINEER | `DriftEvent` (`core/schemas.py`) | `JobResponse`; 201 new, 200 duplicate |
+| POST | `/adaptation/events` | ADMIN, OPERATOR, ML_ENGINEER | `DriftEvent` (`core/schemas.py`) | `JobResponse`; 201 new, 200 duplicate (since Phase 6: returned at once with status `QUEUED`) |
 | GET | `/adaptation/jobs/{job_id}` | any | – | `JobResponse` + `transitions[]` |
+| GET | `/adaptation/jobs?status&model_id&tenant&quarantined&limit&offset` | any | – | jobs, newest first (Phase 6) |
+| POST | `/adaptation/jobs/{job_id}/cancel` | ADMIN, OPERATOR, ML_ENGINEER | – | 200 cancelled, 202 cancel requested, 409 `JOB_NOT_CANCELLABLE` (Phase 6) |
 | POST | `/datasets` | ADMIN, ML_ENGINEER | `{dataset_id, name?, description?}` | dataset |
 | GET | `/datasets` | any | – | list |
 | POST | `/datasets/{id}/versions` | ADMIN, ML_ENGINEER | `VersionCreate` with **inline `records: list[dict]`** (since Hardening Phase 5: *or* a `storage_uri` read by a dataset adapter, see `docs/adapters/dataset.md`) | `VersionInfo`; 201/200 |
@@ -81,8 +87,8 @@ any non-terminal except RECEIVED/VALIDATING → DATA_PREPARING (transient retry)
 
 Terminal states: `COMPLETED`, `FAILED`, `ROLLED_BACK`, `TIMED_OUT`. The legacy values
 `ANALYZING`, `MODEL_COMPARISON` and `DECISION_MADE` still load but are never entered. Every
-transition writes an `adaptation_event` row. There is no `CANCELLED` and no
-`AWAITING_APPROVAL`.
+transition writes an `adaptation_event` row. There is no `CANCELLED` (added as a
+terminal state in Hardening Phase 6) and no `AWAITING_APPROVAL`.
 
 "Promotion" means moving the MLflow alias `LIVE_ALIAS` (default `live`) to a new version and
 tagging `oran.status`. Nothing is pushed to a serving layer (`registry/promotion.py`).

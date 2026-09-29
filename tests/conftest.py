@@ -50,6 +50,9 @@ def settings(tmp_path, database_url) -> Settings:
         # No background dispatcher thread in every app a test starts; the notification tests
         # (test_phase4_notifications) turn it on or drive the dispatcher themselves.
         notification_dispatch_enabled=False,
+        # A submitted job runs in the submitting call, so tests see its outcome at once; the
+        # Phase 6 tests (test_phase6_execution) drive the queue and workers themselves.
+        job_queue_backend="inline",
     )
 
 

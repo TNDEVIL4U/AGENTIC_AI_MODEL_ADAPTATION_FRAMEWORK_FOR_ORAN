@@ -140,8 +140,9 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/adaptation/e
 [[ "$code" == "401" ]] || { echo "expected 401 without a key, got $code" >&2; exit 1; }
 echo "auth: unauthenticated POST refused (401)"
 
-# One drift event for a model that is not onboarded: the job must be recorded and end FAILED
-# with MODEL_NOT_FOUND (201), and the same event_id again must be a duplicate (200).
+# One drift event for a model that is not onboarded: the job must be queued (201), the worker
+# service must run it to FAILED with MODEL_NOT_FOUND, and the same event_id again must be a
+# duplicate (200).
 event='{"model_id":"ci-smoke-unregistered","event_id":"ci-smoke-1","drift_score":0.9}'
 resp="$(curl -sS -w '\n%{http_code}' "${auth[@]}" -H 'Content-Type: application/json' \
   -X POST "${BASE_URL}/adaptation/events" -d "$event")"
@@ -150,10 +151,20 @@ code="${resp##*$'\n'}"; body="${resp%$'\n'*}"
 job_id="$(printf '%s' "$body" | python3 -c '
 import json, sys
 b = json.load(sys.stdin)
-assert b["status"] == "FAILED" and b["error"]["code"] == "MODEL_NOT_FOUND", b
-assert b["duplicate"] is False, b
+assert b["status"] == "QUEUED" and b["duplicate"] is False, b
 print(b["job_id"])')"
-echo "event: job ${job_id} recorded FAILED/MODEL_NOT_FOUND"
+echo "event: job ${job_id} queued"
+
+job_status=""
+for _ in $(seq 1 60); do
+  job_status="$(curl -fsS "${auth[@]}" "${BASE_URL}/adaptation/jobs/${job_id}" | python3 -c '
+import json, sys
+b = json.load(sys.stdin)
+print(b["status"] + ("/" + b["error"]["code"] if b.get("error") else ""))')"
+  case "$job_status" in QUEUED|VALIDATING|DATA_PREPARING) sleep 2 ;; *) break ;; esac
+done
+[[ "$job_status" == "FAILED/MODEL_NOT_FOUND" ]]   || { echo "worker: expected FAILED/MODEL_NOT_FOUND, got ${job_status}" >&2; exit 1; }
+echo "worker: job ${job_id} ran to FAILED/MODEL_NOT_FOUND"
 
 resp="$(curl -sS -w '\n%{http_code}' "${auth[@]}" -H 'Content-Type: application/json' \
   -X POST "${BASE_URL}/adaptation/events" -d "$event")"

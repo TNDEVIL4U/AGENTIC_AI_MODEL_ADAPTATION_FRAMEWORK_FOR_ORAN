@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         DatasetPort,
         DeploymentPort,
         JobExecutorPort,
+        JobQueuePort,
         LLMPort,
         ModelHandlerPort,
         ModelRegistryPort,
@@ -53,6 +54,7 @@ class Container:
     model_handler: ModelHandlerPort
     llm: LLMPort | None
     job_executor: JobExecutorPort
+    job_queue: JobQueuePort
     auth: AuthPort
     policy: PolicyPort
     notifiers: dict[str, NotificationPort]
@@ -105,6 +107,12 @@ def build_llm(settings: Settings) -> LLMPort | None:
 def build_job_executor(settings: Settings) -> JobExecutorPort:
     executor: JobExecutorPort = _make("job_executor", settings, "job_execution_mode")
     return executor
+
+
+def build_job_queue(settings: Settings) -> JobQueuePort:
+    """How workers are woken for a queued job (JOB_QUEUE_BACKEND; the queue is the database)."""
+    queue: JobQueuePort = _make("job_queue", settings, "job_queue_backend")
+    return queue
 
 
 def build_cdc_source(settings: Settings) -> CdcSourcePort:
@@ -164,6 +172,7 @@ def build_container(settings: Settings) -> Container:
         model_handler=build_model_handler(settings),
         llm=build_llm(settings),
         job_executor=build_job_executor(settings),
+        job_queue=build_job_queue(settings),
         auth=build_auth(settings),
         policy=build_policy(settings),
         notifiers=build_notifiers(settings),

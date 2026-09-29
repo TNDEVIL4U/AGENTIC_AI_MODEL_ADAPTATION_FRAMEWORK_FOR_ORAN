@@ -427,6 +427,8 @@ def run(tracking_uri: str | None) -> int:
         log_json=False,
         log_level="WARNING",
         auth_enabled=False,  # a local demo; see RUN.md section 3 for API keys
+        # One process, no worker: each submitted job runs inside its request.
+        job_queue_backend="inline",
     )
 
     _banner("1. Migrating the database and starting the API")

@@ -117,6 +117,31 @@ JOB_TIMEOUTS = Counter(
     "Adaptation jobs recorded TIMED_OUT, by the stage their worker had reached when killed.",
     ["stage"],
 )
+JOB_QUEUE_DEPTH = Gauge(
+    "job_queue_depth",
+    "Jobs QUEUED and not quarantined, by worker class (set by the reaper).",
+    ["worker_class"],
+)
+JOB_QUEUE_OLDEST_AGE = Gauge(
+    "job_queue_oldest_age_seconds",
+    "Age of the oldest QUEUED job, by worker class (set by the reaper).",
+    ["worker_class"],
+)
+JOB_REQUEUES = Counter(
+    "job_requeues_total",
+    "Jobs put back in the queue, by reason: retry (transient error), lost (worker died), "
+    "lease_expired (found by the reaper) or drained (worker shut down).",
+    ["reason"],
+)
+JOB_QUARANTINED = Counter(
+    "job_quarantined_total",
+    "Poison jobs quarantined after JOB_POISON_THRESHOLD attempts without an outcome.",
+)
+JOB_CANCELLED = Counter(
+    "job_cancelled_total",
+    "Jobs recorded CANCELLED, by where the cancel found them: queued or running.",
+    ["where"],
+)
 DATASET_ROWS_READ = Counter(
     "dataset_rows_read_total",
     "Data rows read for analysis and training, by how the version stores them "

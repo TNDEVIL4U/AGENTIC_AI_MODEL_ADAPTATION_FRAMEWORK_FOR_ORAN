@@ -11,9 +11,11 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -126,6 +128,7 @@ class PerformanceRecord(Base):
 
 class AdaptationJob(Base):
     __tablename__ = "adaptation_job"
+    __table_args__ = (Index("ix_adaptation_job_claim", "status", "worker_class", "available_at"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     job_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True)
@@ -140,7 +143,39 @@ class AdaptationJob(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+    # The job queue (orchestrator.queue): who may run the job, in what order, and who runs it
+    # now. A worker claims a QUEUED job whose available_at has passed by writing a fresh
+    # lease_token; every later write of that worker is fenced on the token.
+    tenant: Mapped[str] = mapped_column(String(100), default="default", index=True)
+    worker_class: Mapped[str] = mapped_column(String(50), default="default")
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(200))
+    lease_token: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_by: Mapped[str | None] = mapped_column(String(200))
+    # Attempts that ended without an outcome (the worker died or lost its lease); at
+    # JOB_POISON_THRESHOLD the job is quarantined instead of being run again.
+    lost_count: Mapped[int] = mapped_column(Integer, default=0)
+    quarantined: Mapped[bool] = mapped_column(Boolean, default=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     events: Mapped[list[AdaptationEvent]] = relationship(back_populates="job")
+
+
+class JobSlot(Base):
+    """One of a tenant's concurrency slots (JOB_TENANT_CONCURRENCY / JOB_TENANT_LIMITS), held by
+    the job running in it. The primary key makes the limit exact across workers: two claims of
+    the same slot cannot both commit. ``expires_at`` is renewed with the job's lease, so a slot
+    whose worker died frees itself."""
+
+    __tablename__ = "job_slot"
+    tenant: Mapped[str] = mapped_column(String(100), primary_key=True)
+    slot: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class AdaptationEvent(Base):

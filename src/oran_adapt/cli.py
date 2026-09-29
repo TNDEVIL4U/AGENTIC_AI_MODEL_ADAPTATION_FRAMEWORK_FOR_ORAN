@@ -21,6 +21,11 @@ the same database / MLflow registry the API uses (configured through the usual s
     python -m oran_adapt.cli notifications dispatch
     python -m oran_adapt.cli notifications list --status DEAD
     python -m oran_adapt.cli notifications redrive --sink webhook
+    python -m oran_adapt.cli worker run --classes default,gpu
+    python -m oran_adapt.cli worker run-job --job-id 3f2a...
+    python -m oran_adapt.cli jobs list --status QUEUED
+    python -m oran_adapt.cli jobs cancel --job-id 3f2a...
+    python -m oran_adapt.cli jobs reap
 
 ``--model-file`` is loaded with joblib (i.e. unpickled): only pass files you trust.
 """
@@ -384,6 +389,61 @@ def _cmd_event_submit(args, settings: Settings) -> Any:
     ).model_dump(mode="json")
 
 
+def _classes(value: str | None) -> list[str] | None:
+    return [c.strip() for c in value.split(",") if c.strip()] if value else None
+
+
+def _cmd_worker_run(args, settings: Settings) -> Any:
+    """Claim and run queued jobs until stopped (SIGTERM, Ctrl+C, Ctrl+Break drain it)."""
+    from oran_adapt.orchestrator.worker import install_drain_handlers, worker_from_settings
+
+    worker = worker_from_settings(settings, classes=_classes(args.classes))
+    install_drain_handlers(worker)
+    ran = worker.run(once=args.once, max_jobs=args.max_jobs)
+    return {"worker": worker.owner, "classes": worker.classes, "jobs_run": ran}
+
+
+def _cmd_worker_run_job(args, settings: Settings) -> Any:
+    """One attempt of one job: what a broker message (celery, rq, a Kubernetes Job) runs."""
+    from oran_adapt.orchestrator.worker import install_drain_handlers, worker_from_settings
+
+    worker = worker_from_settings(settings)
+    install_drain_handlers(worker)
+    return {"worker": worker.owner, "job_id": args.job_id, "ran": worker.run_job(args.job_id)}
+
+
+def _cmd_jobs_list(args, settings: Settings) -> Any:
+    from oran_adapt.core.enums import JobStatus
+    from oran_adapt.db.base import session_scope
+    from oran_adapt.orchestrator.jobs import list_jobs
+
+    with session_scope(_session_factory(settings)) as session:
+        return list_jobs(
+            session, limit=args.limit or settings.api_pagination_default_limit,
+            status=JobStatus(args.status) if args.status else None, model_id=args.model_id,
+            tenant=args.tenant, quarantined=True if args.quarantined else None,
+        )
+
+
+def _cmd_jobs_cancel(args, settings: Settings) -> Any:
+    import getpass
+
+    from oran_adapt.orchestrator.jobs import request_cancel
+
+    response, immediate = request_cancel(
+        _session_factory(settings), settings, args.job_id, actor=f"cli:{getpass.getuser()}"
+    )
+    return {**response.model_dump(mode="json"), "cancelled_now": immediate}
+
+
+def _cmd_jobs_reap(args, settings: Settings) -> Any:
+    """One reaper pass: requeue expired leases, time out overdue queued jobs, republish."""
+    from oran_adapt.bootstrap import build_job_queue
+    from oran_adapt.orchestrator.worker import reap
+
+    return reap(_session_factory(settings), settings, build_job_queue(settings))
+
+
 def _cmd_auth_new_key(args, settings: Settings) -> Any:
     """A new random API key (or, with --stdin, the key read from standard input) and the
     API_KEYS entry that grants it a role. Only the digest goes into configuration; the key itself
@@ -555,12 +615,36 @@ def build_parser() -> argparse.ArgumentParser:
     c.set_defaults(fn=_cmd_model_show)
 
     event = top.add_parser("event").add_subparsers(dest="cmd", required=True)
-    c = event.add_parser("submit", help="run the adaptation pipeline for a drift event")
+    c = event.add_parser("submit", help="queue an adaptation job for a drift event")
     c.add_argument("--model-id", required=True)
     c.add_argument("--dataset")
     c.add_argument("--drifted-version")
     c.add_argument("--event-id")
     c.set_defaults(fn=_cmd_event_submit)
+
+    worker = top.add_parser("worker").add_subparsers(dest="cmd", required=True)
+    c = worker.add_parser("run", help="claim and run queued adaptation jobs")
+    c.add_argument("--classes", help="comma-separated worker classes (JOB_WORKER_CLASSES)")
+    c.add_argument("--once", action="store_true", help="stop when nothing is claimable")
+    c.add_argument("--max-jobs", type=int)
+    c.set_defaults(fn=_cmd_worker_run)
+    c = worker.add_parser("run-job", help="run one attempt of one queued job")
+    c.add_argument("--job-id", required=True)
+    c.set_defaults(fn=_cmd_worker_run_job)
+
+    jobs_ = top.add_parser("jobs").add_subparsers(dest="cmd", required=True)
+    c = jobs_.add_parser("list", help="adaptation jobs, newest first")
+    c.add_argument("--status")
+    c.add_argument("--model-id")
+    c.add_argument("--tenant")
+    c.add_argument("--quarantined", action="store_true")
+    c.add_argument("--limit", type=int)
+    c.set_defaults(fn=_cmd_jobs_list)
+    c = jobs_.add_parser("cancel", help="cancel a queued or running job")
+    c.add_argument("--job-id", required=True)
+    c.set_defaults(fn=_cmd_jobs_cancel)
+    c = jobs_.add_parser("reap", help="one reaper pass over the job queue")
+    c.set_defaults(fn=_cmd_jobs_reap)
 
     auth = top.add_parser("auth").add_subparsers(dest="cmd", required=True)
     c = auth.add_parser("new-key", help="make an API key and its API_KEYS settings entry")

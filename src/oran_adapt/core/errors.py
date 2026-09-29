@@ -190,6 +190,53 @@ class JobAbandonedError(AdaptationError):
     code = "JOB_ABANDONED"
 
 
+class JobNotFoundError(AdaptationError):
+    code = "JOB_NOT_FOUND"
+
+
+class JobCancelledError(AdaptationError):
+    """The job was cancelled on request. Raised at the job's next checkpoint (a stage report
+    or a supervisor tick) after the request, and recorded as the CANCELLED job's error."""
+
+    code = "JOB_CANCELLED"
+
+
+class JobLeaseLostError(AdaptationError):
+    """This worker no longer holds the job's lease: it stopped renewing it in time and the
+    reaper handed the job on. Everything the worker would still write is refused, so a job is
+    never run to an outcome twice."""
+
+    code = "JOB_LEASE_LOST"
+
+
+class JobDrainedError(AdaptationError):
+    """The worker was shutting down and the job did not finish within JOB_DRAIN_TIMEOUT_S: its
+    attempt was stopped and the job put back in the queue for another worker."""
+
+    code = "JOB_DRAINED"
+
+
+class JobQuarantinedError(AdaptationError):
+    """Recorded (never raised) on a poison job: JOB_POISON_THRESHOLD of its attempts ended
+    without an outcome (the worker died or lost its lease), so it is not run again."""
+
+    code = "JOB_QUARANTINED"
+
+
+class JobQueueUnavailableError(AdaptationError):
+    """The job queue's broker could not be reached. The job stays QUEUED in the database and
+    the reaper publishes it again."""
+
+    code = "JOB_QUEUE_UNAVAILABLE"
+
+
+class JobNotCancellableError(ConflictError):
+    """The job already ended, or is registering or promoting (past the point where stopping it
+    would leave the registry consistent)."""
+
+    code = "JOB_NOT_CANCELLABLE"
+
+
 class AuthenticationError(AdaptationError):
     """No valid credential was presented (HTTP 401)."""
 
@@ -231,6 +278,14 @@ class JobWorkerError(AdaptationError):
     unexpected failure, so the recorded job error is unchanged by the execution mode."""
 
     code = "INTERNAL_ERROR"
+
+
+class JobWorkerLostError(JobWorkerError):
+    """The job's worker process died without reporting anything (killed, out of memory). The
+    attempt had no outcome, so the job is retried; a job that keeps killing its workers is
+    quarantined (JOB_POISON_THRESHOLD)."""
+
+    code = "JOB_WORKER_LOST"
 
 
 def rebuild_error(code: str, message: str, context: dict[str, object]) -> AdaptationError:

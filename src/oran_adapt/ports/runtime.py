@@ -1,4 +1,4 @@
-"""Deployment, dataset, CDC source, job executor, notification sink and LLM ports."""
+"""Deployment, dataset, CDC source, job executor, job queue, notification sink and LLM ports."""
 
 from __future__ import annotations
 
@@ -122,6 +122,11 @@ class JobCall:
     The executor calls ``run(payload)``, which returns a JSON-safe dict or raises. Executors
     that run it in another process need both to pickle (``run`` a module-level function).
     ``on_abandoned`` fires once a timed-out attempt that could not be stopped has finished.
+
+    Supervision: while the attempt runs, the executor calls ``on_tick()`` in the calling
+    process every ``tick_s`` seconds. It returns None to go on, or the error to stop with (a
+    cancel request, a lost lease, a drain): the executor then stops the attempt as it would on
+    a timeout and raises that error.
     """
 
     job_id: str
@@ -129,6 +134,8 @@ class JobCall:
     run: Callable[[dict[str, Any]], dict[str, Any]]
     payload: dict[str, Any]
     on_abandoned: Callable[[], None] | None = None
+    tick_s: float | None = None
+    on_tick: Callable[[], Exception | None] | None = None
 
 
 @runtime_checkable
@@ -142,6 +149,41 @@ class JobExecutorPort(Protocol):
     def in_process(self) -> bool: ...
 
     def execute(self, call: JobCall) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class QueuedJob:
+    """A job ready to run, as announced to a JobQueuePort. The database row is the job; this is
+    only what a broker needs to route the wake-up: the worker class picks the queue, the
+    priority and the attempt number may shape the message."""
+
+    job_id: str
+    worker_class: str
+    tenant: str
+    priority: int
+    attempt: int
+
+
+@runtime_checkable
+class JobQueuePort(Protocol):
+    """Wakes a worker for a queued job (docs/adapters/job_queue.md).
+
+    The job queue itself is the ``adaptation_job`` table: a job is QUEUED there before
+    ``publish`` is called, and whichever worker claims it first (a conditional update that only
+    one can win) runs it, so a message delivered twice, late or never cannot run a job twice or
+    lose it; the reaper publishes again what stays unclaimed. ``publish`` hands ``job`` to the
+    broker and raises JobQueueUnavailableError when the broker cannot be reached. The worker a
+    message reaches runs ``oran_adapt.orchestrator.worker.run_job_by_id(job_id)``.
+
+    ``runs_inline`` is True only for the development adapter: the submitting call then runs
+    the job itself before it returns. ``ping`` checks the broker without publishing."""
+
+    @property
+    def runs_inline(self) -> bool: ...
+
+    def ping(self) -> None: ...
+
+    def publish(self, job: QueuedJob) -> None: ...
 
 
 @dataclass(frozen=True)

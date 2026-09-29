@@ -102,6 +102,13 @@ class JobResponse(BaseModel):
     duplicate: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # The job queue (Phase 6): who it runs for, where, how often it was claimed, and whether a
+    # cancel was requested or it was quarantined as a poison job.
+    tenant: str | None = None
+    worker_class: str | None = None
+    attempt: int = 0
+    cancel_requested: bool = False
+    quarantined: bool = False
 
 
 class ComponentHealth(BaseModel):
