@@ -3,14 +3,15 @@ the ``webhook``, ``bentoml`` and ``triton`` deployment adapters talk to over the
 
 It implements
 - the webhook deployment contract (docs/adapters/deployment.md): ``GET /health``,
-  ``GET /status?model=``, ``POST /deploy``; also under the ``/oran`` prefix the BentoML
-  service template exposes. A deploy is accepted at once and settles after a few status reads;
+  ``GET /status?model=``, ``POST /deploy``, and the traffic split extension ``POST /traffic``,
+  ``GET /traffic?model=``; also under the ``/oran`` prefix the BentoML service template
+  exposes. A deploy or a split is accepted at once and settles after a few status reads;
 - the KServe v2 / Triton model-repository extension in explicit model-control mode:
   ``GET /v2/health/live``, ``POST /v2/repository/index``,
   ``POST /v2/repository/models/<name>/load`` (reads ``<repository>/<name>/config.pbtxt`` and
   the staged version directory, like Triton) and ``.../unload``.
 
-``fail_next(model)`` makes the next deploy (webhook: reported as failed) or load (Triton: HTTP
+``fail_next(model)`` makes the next deploy or split (webhook: reported as failed) or load (Triton: HTTP
 400, the loaded version keeps serving) of ``model`` fail. It is a stub, not Triton or BentoML:
 results against it are "unverified against real systems".
 """
@@ -35,6 +36,7 @@ class ServingStub:
         self.token = token
         self.lock = threading.Lock()
         self.deployed: dict[str, dict[str, Any]] = {}  # webhook: model -> state
+        self.splits: dict[str, dict[str, Any]] = {}  # webhook: model -> traffic split
         self.triton: dict[str, dict[str, str]] = {}  # name -> {version: state}
         self.failing: set[str] = set()
         self.requests: list[tuple[str, str]] = []
@@ -107,6 +109,11 @@ class ServingStub:
                 return self._status(query.get("model", [""])[0])
             if method == "POST" and path == "/deploy":
                 return self._deploy(body)
+            if method == "POST" and path == "/traffic":
+                return self._set_traffic(body)
+            if method == "GET" and path == "/traffic":
+                split = self.splits.get(query.get("model", [""])[0])
+                return 200, split or {"stable": None, "candidate": None, "percent": 0}
         return 404, {"error": "not found"}
 
     # -- webhook contract --
@@ -137,6 +144,30 @@ class ServingStub:
         self.deployed[model] = {
             "version": body["version"], "source": body.get("source"), "ready": False,
             "failed": False, "detail": "rolling out", "polls": SETTLE_AFTER, "fail": fail,
+        }
+        return 202, {"accepted": True}
+
+    def _set_traffic(self, body: dict[str, Any]) -> tuple[int, Any]:
+        model, stable = body.get("model"), body.get("stable")
+        if not isinstance(model, str) or not isinstance(stable, dict):
+            return 400, {"error": "model and stable are required"}
+        candidate = body.get("candidate")
+        percent = int(body.get("percent") or 0)
+        if candidate is not None and not 0 < percent < 100:
+            return 400, {"error": "percent must be in 1..99 with a candidate"}
+        fail = model in self.failing
+        self.failing.discard(model)
+        # The stable version keeps (or starts) serving; the split settles like a deploy.
+        self.deployed[model] = {
+            "version": stable["version"], "source": stable.get("source"), "ready": False,
+            "failed": False, "detail": "splitting traffic", "polls": SETTLE_AFTER, "fail": fail,
+        }
+        if fail:
+            return 202, {"accepted": True}
+        self.splits[model] = {
+            "stable": stable["version"],
+            "candidate": None if candidate is None else candidate["version"],
+            "percent": percent if candidate is not None else 0,
         }
         return 202, {"accepted": True}
 

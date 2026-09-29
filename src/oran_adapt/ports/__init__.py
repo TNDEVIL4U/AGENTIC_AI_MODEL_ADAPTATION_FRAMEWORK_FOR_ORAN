@@ -11,6 +11,8 @@ from oran_adapt.ports.registry import (
     RegisteredModel,
 )
 from oran_adapt.ports.runtime import (
+    ArmStats,
+    ArmWindow,
     CdcSourcePort,
     DatasetPort,
     DeploymentPort,
@@ -23,7 +25,10 @@ from oran_adapt.ports.runtime import (
     NotificationPort,
     OutboundMessage,
     QueuedJob,
+    RolloutMetricsPort,
     SourceStat,
+    TrafficSplit,
+    TrafficSplitPort,
 )
 from oran_adapt.ports.security import AuthPort, PolicyPort, Principal, SecretsPort
 
@@ -39,6 +44,7 @@ PORTS: dict[str, type] = {
     "job_queue": JobQueuePort,
     "notification": NotificationPort,
     "llm": LLMPort,
+    "rollout_metrics": RolloutMetricsPort,
     "auth": AuthPort,
     "policy": PolicyPort,
     "secrets": SecretsPort,
@@ -47,6 +53,8 @@ PORTS: dict[str, type] = {
 __all__ = [
     "PORTS",
     "AdapterSpec",
+    "ArmStats",
+    "ArmWindow",
     "ArtifactStorePort",
     "AuthPort",
     "Capability",
@@ -68,6 +76,9 @@ __all__ = [
     "Principal",
     "QueuedJob",
     "RegisteredModel",
+    "RolloutMetricsPort",
     "SecretsPort",
     "SourceStat",
+    "TrafficSplit",
+    "TrafficSplitPort",
 ]

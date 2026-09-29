@@ -112,6 +112,28 @@ DEPLOYMENTS = Counter(
     "or failed (previous version restored).",
     ["backend", "outcome"],
 )
+TRAFFIC_SPLITS = Counter(
+    "traffic_splits_total",
+    "Traffic split changes (canary and A/B rollouts), by outcome: ok (read back) or failed.",
+    ["backend", "outcome"],
+)
+GATE_DECISIONS = Counter(
+    "gate_decisions_total",
+    "Validation gate verdicts, by verdict (ACCEPT, REJECT) and gate mode.",
+    ["verdict", "mode"],
+)
+ROLLOUTS_STARTED = Counter(
+    "rollouts_started_total", "Progressive rollouts started, by strategy.", ["strategy"]
+)
+ROLLOUTS_FINISHED = Counter(
+    "rollouts_finished_total",
+    "Progressive rollouts ended, by strategy and final state (PROMOTED, ROLLED_BACK, "
+    "EXPIRED, REJECTED).",
+    ["strategy", "state"],
+)
+ROLLOUTS_ACTIVE = Gauge(
+    "rollouts_active", "Rollouts not yet ended, by state (set on every tick).", ["state"]
+)
 JOB_TIMEOUTS = Counter(
     "job_timeouts_total",
     "Adaptation jobs recorded TIMED_OUT, by the stage their worker had reached when killed.",
@@ -176,6 +198,10 @@ _FORWARDED = (
     REGISTRATIONS,
     PROMOTIONS,
     DEPLOYMENTS,
+    TRAFFIC_SPLITS,
+    GATE_DECISIONS,
+    ROLLOUTS_STARTED,
+    ROLLOUTS_FINISHED,
     MODEL_REUSE,
     FINE_TUNE,
     RETRAIN,

@@ -6,8 +6,11 @@ event. Each member stays ignorant of the others - this module is the seam.
     (no training) -> decide() [Member 2] -> select_engine()/run_engine() [Member 3], falling
     back to adapt_via_llm() (sandboxed) when the engine registry has no built-in engine for the
     chosen (strategy, framework) -> validate_candidate() [Member 4] -> registry (MLflow):
-    register the candidate, then promote_version() moves the live alias to it, but only when
-    validation passed.
+    register the candidate, then deliver it, but only when the validation gate accepted it:
+    DELIVERY_STRATEGY=blue_green has promote_version() move the live alias at once; shadow,
+    canary, ab and manual start a rollout (delivery.controller) that the controller moves on
+    and the job ends DELIVERING. A model with a rollout in progress takes no new adaptation
+    (outcome ROLLOUT_IN_PROGRESS).
 
 Nothing here mutates the live model except through registry.promotion, which records the
 previous LIVE and undoes a half-finished move. Job persistence, idempotency, locking and
@@ -67,16 +70,26 @@ from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.datastore.access import DataAccess
 from oran_adapt.datastore.current_data import clean_records, persist_current_data
 from oran_adapt.datastore.versioning import snapshot_training_data
-from oran_adapt.db.models import ModelMetadata, ModelVersionEvaluation
+from oran_adapt.db.models import GateDecisionRecord, ModelMetadata, ModelVersionEvaluation
 from oran_adapt.decision.engine import decide
+from oran_adapt.delivery.controller import (
+    PROMOTED,
+    ROLLED_BACK,
+    Delivery,
+    active_rollout,
+    start_rollout,
+)
+from oran_adapt.delivery.controller import to_dict as rollout_dict
 from oran_adapt.llm.client import LlmClient
 from oran_adapt.orchestrator.context import current_job_id, report_stage
 from oran_adapt.orchestrator.schemas import JobResult
 from oran_adapt.ports import ModelRegistryPort
+from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.promotion import current_live, promote_version, verify_version_artifact
 from oran_adapt.registry.publishing import record_artifact_checksum, register_candidate
 from oran_adapt.sandbox.runner import SandboxLimits
 from oran_adapt.validation.engine import validate_candidate
+from oran_adapt.validation.schemas import ValidationReport
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +231,100 @@ def _record_evaluations(
     session.flush()
 
 
+def _record_gate(session: Session, model_id: str, current_version: str | None,
+                 report: ValidationReport) -> GateDecisionRecord | None:
+    """Persist the gate's decision (gate_decision row, audit, metric). The candidate version
+    is filled in once the candidate is registered."""
+    decision = report.gate
+    if decision is None:
+        return None
+    row = GateDecisionRecord(
+        model_id=model_id,
+        job_id=current_job_id(),
+        current_version=current_version,
+        verdict=decision.verdict,
+        metric=decision.metric,
+        policy_version=decision.policy_version,
+        policy_hash=decision.policy_hash,
+        decision=decision.model_dump(mode="json"),
+    )
+    session.add(row)
+    session.flush()
+    metrics.GATE_DECISIONS.labels(verdict=decision.verdict, mode=decision.mode).inc()
+    _audit(
+        session,
+        AuditAction.GATE_DECIDED,
+        model_id,
+        model_version=current_version,
+        decision=decision.verdict,
+        reason=" | ".join(decision.reasons),
+        metadata={
+            "gate_decision_id": row.id,
+            "policy_version": decision.policy_version,
+            "policy_hash": decision.policy_hash,
+            "metric": decision.metric,
+            "delta": decision.delta,
+            "ci": [decision.ci_low, decision.ci_high],
+            "threshold": decision.threshold,
+        },
+    )
+    return row
+
+
+def _deliver(
+    session: Session,
+    settings: Settings,
+    registry: ModelRegistryPort,
+    deployer: Deployer,
+    workdir: str,
+    *,
+    model_id: str,
+    live_version: str,
+    new_version: str,
+    gate_row: GateDecisionRecord | None,
+    result: JobResult,
+) -> JobResult:
+    """Start the DELIVERY_STRATEGY rollout of the registered candidate. The job ends
+    DELIVERING while the rollout runs; a rollout that ends at once (a one-step canary, a first
+    split that failed) is reported as REGISTERED or ROLLED_BACK like an inline promotion."""
+    strategy = settings.delivery_strategy
+    _stage(session, JobStatus.PROMOTING, f"starting a {strategy} rollout of {new_version}")
+    delivery = Delivery.from_settings(
+        settings, registry, deployer=deployer, workdir=os.path.join(workdir, "rollout")
+    )
+    rollout = start_rollout(
+        session,
+        delivery,
+        model_id=model_id,
+        strategy=strategy,
+        stable_version=live_version,
+        candidate_version=new_version,
+        job_id=current_job_id(),
+        gate_decision_id=gate_row.id if gate_row is not None else None,
+    )
+    shown = rollout_dict(rollout)
+    if rollout.state == PROMOTED:
+        return result.model_copy(update={
+            "outcome": "REGISTERED", "rollout": shown, "live_version": new_version,
+            "previous_live_version": live_version,
+            "reason": f"version {new_version} registered and promoted: {rollout.reason}",
+        })
+    if rollout.state == ROLLED_BACK:
+        metrics.ROLLBACK.labels("promotion_failure").inc()
+        return result.model_copy(update={
+            "outcome": "ROLLED_BACK", "rollout": shown,
+            "reason": f"version {new_version} registered but its rollout failed: "
+                      f"{rollout.reason}",
+        })
+    return result.model_copy(update={
+        "rollout": shown,
+        "reason": (
+            f"version {new_version} registered; {strategy} rollout {rollout.rollout_id} is "
+            f"{rollout.state} ({rollout.reason})"
+        ),
+    })
+
+
 def _promotion_key(suffix: str) -> str | None:
     job_id = current_job_id()
     return f"{job_id}:{suffix}" if job_id else None
@@ -262,6 +369,19 @@ def run_adaptation_job(
             reason=(
                 f"stale event: drift was reported on version {event.model_version} but LIVE is "
                 f"now version {live_version}"
+            ),
+        )
+
+    in_flight = active_rollout(session, event.model_id) if model_meta is not None else None
+    if in_flight is not None:
+        return JobResult(
+            model_id=event.model_id,
+            outcome="ROLLOUT_IN_PROGRESS",
+            live_version=live_version,
+            rollout=rollout_dict(in_flight),
+            reason=(
+                f"rollout {in_flight.rollout_id} of version {in_flight.candidate_version} is "
+                f"{in_flight.state}; the model takes no new adaptation until it ends"
             ),
         )
 
@@ -578,7 +698,9 @@ def run_adaptation_job(
         estimator_type=inspection.estimator_type,
         settings=settings,
         task_type=model_meta.task_type,
+        context=validation_frame,
     )
+    gate_row = _record_gate(session, event.model_id, live_version, report)
 
     _audit(
         session,
@@ -662,6 +784,8 @@ def run_adaptation_job(
         metadata={"artifact_sha256": candidate_sha, "engine": candidate.engine.value},
     )
     registry.set_alias(name, settings.candidate_alias, new_version)
+    if gate_row is not None:
+        gate_row.candidate_version = new_version
     # Data lineage: freeze what v<new> was trained on as its own data version, linked to it, so
     # the next drift event is compared against the live model's real baseline.
     snapshot = snapshot_training_data(
@@ -684,6 +808,29 @@ def run_adaptation_job(
             "data.training_hash": snapshot.content_hash or "",
         },
     )
+
+    if settings.delivery_strategy != "blue_green":
+        return _deliver(
+            session, settings, registry, deployer, workdir,
+            model_id=event.model_id, live_version=live_version, new_version=new_version,
+            gate_row=gate_row,
+            result=JobResult(
+                model_id=event.model_id,
+                outcome="DELIVERING",
+                strategy=decision.strategy,
+                decision=decision,
+                candidate=candidate,
+                validation=report,
+                registered_version=new_version,
+                training_data_version=snapshot.version,
+                live_version=live_version,
+                version_evaluations=evaluations,
+                current_data_id=current_data_id,
+                reuse_decision=reuse,
+                leakage=leakage,
+                reason="",
+            ),
+        )
 
     _stage(session, JobStatus.PROMOTING, f"moving LIVE from {live_version} to {new_version}")
     result = JobResult(

@@ -374,8 +374,10 @@ server together with its uvicorn worker. Set
 | `DECISION_SUPPORTED_FRAMEWORKS` | `["sklearn","xgboost","torch","pytorch"]` | Frameworks with a dedicated training engine |
 | `VALIDATION_MIN_ROWS` | `5` | Minimum held-out rows to score a candidate at all |
 | `VALIDATION_HOLDOUT_FRACTION` | `0.2` | Share of the newest drifted rows held back for validation and never trained on (at least `VALIDATION_MIN_ROWS`, always leaving one drifted row for training) |
-| `VALIDATION_ACCURACY_TOLERANCE` | `0.02` | Max accuracy drop allowed for classifiers to pass |
-| `VALIDATION_RMSE_TOLERANCE_RATIO` | `0.05` | Max RMSE increase (as a fraction of current RMSE) allowed for regressors to pass |
+| `GATE_POLICY` / `GATE_POLICY_FILE` | superiority, margin 0, 95 % | The validation gate's versioned policy: a paired-bootstrap interval of the improvement must clear the margin, and every guardrail (slices, calibration, latency, size) must pass. `config/policies/gate.toml` |
+| `DELIVERY_STRATEGY` | `shadow` | How an accepted candidate reaches traffic: `shadow`, `canary`, `blue_green`, `ab`, `manual` (see `docs/adapters/rollout_metrics.md`) |
+| `DELIVERY_POLICY` / `DELIVERY_POLICY_FILE` | see `core/policies.py` | Canary steps and holds, health rules, A/B test, approval deadline. `config/policies/delivery.toml` |
+| `ROLLOUT_METRICS_BACKEND` / `ROLLOUT_TICK_S` | `api` / `30` | Where rollouts read online metrics, and how often they are advanced |
 
 Full authoritative list: `src/oran_adapt/core/config.py`.
 

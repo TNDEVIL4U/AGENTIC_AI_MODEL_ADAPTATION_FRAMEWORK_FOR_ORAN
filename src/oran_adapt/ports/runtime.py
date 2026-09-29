@@ -1,9 +1,10 @@
-"""Deployment, dataset, CDC source, job executor, job queue, notification sink and LLM ports."""
+"""Deployment, traffic split, rollout metrics, dataset, CDC source, job executor, job queue, notification sink and LLM ports."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, BinaryIO, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -61,6 +62,64 @@ class DeploymentPort(Protocol):
     def restore(self, model: str, previous: DeploymentTarget | None) -> None:
         """Put ``previous`` back (None = undeploy) after a failed or rolled-back deployment."""
         ...
+
+
+@dataclass(frozen=True)
+class TrafficSplit:
+    """How a serving system splits one model's traffic, read back from the system: ``percent``
+    of requests go to ``candidate`` and the rest to ``stable``. ``candidate`` None (and
+    ``percent`` 0) means all traffic goes to ``stable``."""
+
+    model: str
+    stable: str | None
+    candidate: str | None
+    percent: int
+
+
+@runtime_checkable
+class TrafficSplitPort(Protocol):
+    """Deployment adapters with the ``traffic_split`` feature also implement this: canary and
+    A/B rollouts (delivery.controller) route a share of traffic to a candidate while ``stable``
+    keeps the rest. Like ``deploy``, ``set_traffic`` returns once the system accepted the
+    request; callers poll ``status``, then read ``traffic`` back. ``percent`` 0 with
+    ``candidate`` None removes the split (all traffic to ``stable``)."""
+
+    def set_traffic(self, model: str, *, stable: DeploymentTarget,
+                    candidate: DeploymentTarget | None, percent: int) -> None: ...
+
+    def traffic(self, model: str) -> TrafficSplit: ...
+
+
+@dataclass(frozen=True)
+class ArmWindow:
+    """One arm of a rollout over a time window: ``arm`` is "stable" or "candidate",
+    ``version`` the registry version it serves."""
+
+    rollout_id: str
+    model: str
+    arm: str
+    version: str
+    start: datetime
+    end: datetime
+
+
+@dataclass(frozen=True)
+class ArmStats:
+    """Online observations of one arm: per-metric samples (each a value the arm reported over
+    some requests) and how many requests they cover."""
+
+    samples: dict[str, list[float]]
+    count: int
+
+
+@runtime_checkable
+class RolloutMetricsPort(Protocol):
+    """Where a rollout's online health metrics come from (docs/adapters/rollout_metrics.md).
+    Raises RolloutMetricsUnavailableError when the source cannot be reached."""
+
+    def ping(self) -> None: ...
+
+    def observe(self, session: Session, window: ArmWindow) -> ArmStats: ...
 
 
 @dataclass(frozen=True)

@@ -288,6 +288,24 @@ class JobWorkerLostError(JobWorkerError):
     code = "JOB_WORKER_LOST"
 
 
+class RolloutNotFoundError(AdaptationError):
+    code = "ROLLOUT_NOT_FOUND"
+
+
+class RolloutStateError(ConflictError):
+    """The rollout is not in a state that allows the request (e.g. approving a rollout that is
+    not awaiting approval, or one that already ended)."""
+
+    code = "ROLLOUT_STATE_CONFLICT"
+
+
+class RolloutMetricsUnavailableError(AdaptationError):
+    """The rollout metrics source (Prometheus, ...) cannot be reached. The rollout stays where
+    it is and is ticked again later; it never advances on missing evidence."""
+
+    code = "ROLLOUT_METRICS_UNAVAILABLE"
+
+
 def rebuild_error(code: str, message: str, context: dict[str, object]) -> AdaptationError:
     """An AdaptationError sent across a process boundary as (code, message, context), rebuilt
     with its original class so ``except`` clauses and the recorded code behave the same."""

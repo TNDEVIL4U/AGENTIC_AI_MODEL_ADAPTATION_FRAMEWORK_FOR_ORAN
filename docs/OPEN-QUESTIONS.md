@@ -158,6 +158,29 @@ Defaults and assumptions, with the key that changes each:
 | No `arq` adapter; `rq` covers the Redis family. | An arq adapter would repeat the RQ one through the same port. | – |
 | `celery`, `rq` and `kubernetes` were tested against doubles only. **None is verified against a real broker or cluster, and the claim was not run on PostgreSQL.** | No broker, cluster or PostgreSQL in the local gate. | the adapter's keys |
 
+## Validation gate and progressive delivery
+
+Since Phase 7 a candidate replaces the incumbent only through the gate
+(`validation/gate.py`, policy `GATE_POLICY`), and reaches traffic through `DELIVERY_STRATEGY`
+(`delivery/controller.py`). Rollouts read online metrics through `RolloutMetricsPort`
+(`api`, `prometheus`); `oran_adapt.conformance.rollout_metrics` is the behaviour each source must
+show, and `docs/adapters/rollout_metrics.md` explains every key.
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| Superiority with margin 0 at 95 %: the paired-bootstrap interval of the improvement must lie above zero. An equal or marginally worse candidate is rejected. | Finding 6: a retrained model must be demonstrably better to replace the incumbent. | `GATE_POLICY` (`mode`, `margin`, `confidence`) |
+| Calibration, latency (3x with a 10 ms floor) and size (5x with a 1 MiB floor) guardrails on; no slice columns. | Slices are specific to each dataset; the others apply to every model. | `GATE_POLICY` (`slices`, `calibration`, `latency`, `size`) |
+| A first version (no incumbent) is judged on its own and accepted when it can be scored. | There is nothing to compare it with. | - |
+| `shadow` is the default strategy, then approval. | It needs no traffic split, so it works with every deployment backend, and nobody's traffic changes without a person deciding. | `DELIVERY_STRATEGY`, `DELIVERY_POLICY.shadow_then` |
+| Health: `error_rate` at most 0.01 worse than stable, `latency_p95_ms` at most 1.5x (optional), at least 100 requests per arm. | Conservative values for request/response serving; nothing is judged on a handful of requests. | `DELIVERY_POLICY` (`health`, `min_samples`) |
+| Canary 5/25/50/100 %, each step held 10 minutes; A/B 50 % for 1 h, Welch t-test at 95 %, inconclusive rolls back; approval waits 24 h; shadow waits 24 h. | Common practice; each is a policy field. | `DELIVERY_POLICY` |
+| A canary step that never collects `min_samples` waits indefinitely. | Rolling back for lack of traffic would punish quiet cells; an operator can reject. | - |
+| `shadow` and `manual` rollouts that may continue as a canary count as needing a traffic split at startup. | Refusing at startup is better than failing mid-rollout. | `DELIVERY_POLICY.shadow_then`, `approval_then` |
+| The `api` source is the default: the serving layer posts observations. | Works without a metrics system. | `ROLLOUT_METRICS_BACKEND` |
+| Only `registry-alias`, `webhook` and `kserve` split traffic. `registry-alias` records the split in the canary alias and a tag, which the serving layer must honour. **The splits on real serving systems and the `prometheus` source against a real Prometheus are unverified.** | No serving system or Prometheus in the local gate. | `DEPLOYMENT_CANARY_ALIAS`, `DEPLOYMENT_TRAFFIC_TAG`, `ROLLOUT_PROMETHEUS_*` |
+
 ## Not yet behind a port
 
 - **Sandbox backend** (`SANDBOX_BACKEND`, `subprocess` or `docker`): this is a fixed choice in

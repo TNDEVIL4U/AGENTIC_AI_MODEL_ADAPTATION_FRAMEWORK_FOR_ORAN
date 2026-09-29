@@ -398,10 +398,14 @@ class Worker:
         ``max_jobs``: at most that many). Returns how many jobs it ran."""
         ran = 0
         last_reap: float | None = None
+        last_tick: float | None = None
         while not self.draining:
             if last_reap is None or time.monotonic() - last_reap >= self.settings.job_reap_interval_s:
                 self.reap()
                 last_reap = time.monotonic()
+            if last_tick is None or time.monotonic() - last_tick >= self.settings.rollout_tick_s:
+                self.tick_rollouts()
+                last_tick = time.monotonic()
             claimed = claim(self.session_factory, self.settings, owner=self.owner,
                             classes=self.classes)
             if claimed is None:
@@ -421,6 +425,28 @@ class Worker:
         except SQLAlchemyError as exc:
             log_event(logger, f"reaper could not reach the database: {exc}",
                       level=logging.WARNING)
+            return {}
+
+    def tick_rollouts(self) -> dict[str, str]:
+        """One rollout controller pass (delivery.controller.tick_all). A failure is logged and
+        the next pass, ROLLOUT_TICK_S later, tries again."""
+        from oran_adapt.delivery.controller import (
+            Delivery,
+            list_rollouts,
+            set_active_gauge,
+            tick_all,
+        )
+
+        if self.registry is None:
+            return {}
+        try:
+            with session_scope(self.session_factory) as session:
+                if not list_rollouts(session, active=True, limit=1):
+                    set_active_gauge(session)
+                    return {}
+                return tick_all(session, Delivery.from_settings(self.settings, self.registry))
+        except (SQLAlchemyError, AdaptationError) as exc:
+            log_event(logger, f"rollout tick failed: {exc}", level=logging.WARNING)
             return {}
 
     def _queue(self) -> JobQueuePort:

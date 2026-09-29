@@ -1,0 +1,45 @@
+# Validation gate policy (core.policies.GatePolicy). Use with GATE_POLICY_FILE=config/policies/gate.toml.
+# Every gate decision records `version` and the SHA-256 of this policy: bump `version` on change.
+version = "1"
+# superiority: accept only when the whole confidence interval of the improvement is above margin.
+# non_inferiority: accept when it is above -margin (candidate at most `margin` worse).
+mode = "superiority"
+margin = 0.0
+margin_relative = false
+confidence = 0.95
+resamples = 1000
+seed = 0
+max_rows = 5000
+batch = 50
+pairwise_max_rows = 2000
+
+# Secondary metric -> largest allowed drop (oriented, metric units).
+[metric_guards]
+# f1 = 0.02
+
+[slices]
+# Held-out columns to check per value (e.g. cell id, slice id, band).
+columns = []
+max_drop = 0.05
+relative = false
+min_rows = 30
+require_columns = false
+
+[calibration]
+enabled = true
+bins = 10
+max_increase = 0.05
+# max_ece = 0.1
+
+[latency]
+enabled = true
+max_ratio = 3.0
+floor_ms = 10.0
+repeats = 3
+max_rows = 1000
+
+[size]
+enabled = true
+max_ratio = 5.0
+floor_bytes = 1048576
+# max_bytes = 536870912

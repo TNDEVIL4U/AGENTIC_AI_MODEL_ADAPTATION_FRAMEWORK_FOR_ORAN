@@ -394,6 +394,72 @@ class NotificationDelivery(Base):
     event: Mapped[NotificationEvent] = relationship(back_populates="deliveries")
 
 
+class GateDecisionRecord(Base):
+    """One decision of the validation gate (validation.gate): the verdict, the policy version
+    and hash it was made under, and the full GateDecision in ``decision``."""
+
+    __tablename__ = "gate_decision"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(200), index=True)
+    job_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    current_version: Mapped[str | None] = mapped_column(String(50))
+    candidate_version: Mapped[str | None] = mapped_column(String(50))
+    verdict: Mapped[str] = mapped_column(String(10), index=True)  # ACCEPT | REJECT
+    metric: Mapped[str] = mapped_column(String(50))
+    policy_version: Mapped[str] = mapped_column(String(50))
+    policy_hash: Mapped[str] = mapped_column(String(64))
+    decision: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = _ts()
+
+
+class Rollout(Base):
+    """A validated candidate on its way to traffic (delivery.controller). ``state`` moves
+    SHADOW / CANARY / AB / AWAITING_APPROVAL -> PROMOTED | ROLLED_BACK | EXPIRED | REJECTED;
+    ``history`` lists every transition with its reason. ``policy`` is the DeliveryPolicy the
+    rollout started under - later config changes do not alter a running rollout."""
+
+    __tablename__ = "rollout"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rollout_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    model_id: Mapped[str] = mapped_column(String(200), index=True)
+    job_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    strategy: Mapped[str] = mapped_column(String(20))
+    state: Mapped[str] = mapped_column(String(30), index=True)
+    stable_version: Mapped[str | None] = mapped_column(String(50))
+    candidate_version: Mapped[str] = mapped_column(String(50))
+    step: Mapped[int] = mapped_column(Integer, default=0)
+    percent: Mapped[int] = mapped_column(Integer, default=0)
+    policy: Mapped[dict] = mapped_column(JSON)
+    policy_hash: Mapped[str] = mapped_column(String(64))
+    gate_decision_id: Mapped[int | None] = mapped_column(Integer)
+    step_started_at: Mapped[datetime] = _ts()
+    # When the current state times out (shadow_max_s, ab_duration_s, approval_ttl_s).
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(200))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    history: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RolloutObservation(Base):
+    """Online metrics of one arm (stable | candidate) of a rollout over some requests, as
+    submitted to the API (the ``api`` rollout metrics adapter reads these)."""
+
+    __tablename__ = "rollout_observation"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rollout_id: Mapped[str] = mapped_column(String(64), index=True)
+    arm: Mapped[str] = mapped_column(String(20))
+    requests: Mapped[int] = mapped_column(Integer, default=1)
+    metrics: Mapped[dict] = mapped_column(JSON)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )
+
+
 @event.listens_for(AuditLog, "before_update")
 @event.listens_for(AuditLog, "before_delete")
 def _audit_log_is_append_only(_mapper, _connection, target: AuditLog) -> None:

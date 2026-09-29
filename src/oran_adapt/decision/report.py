@@ -156,8 +156,10 @@ def explain_decision(decision: Decision, package: DecisionPackage, settings: Set
         "drifted_feature_psi": settings.analysis_psi_reuse_threshold,
         "supported_frameworks": list(settings.decision_supported_frameworks),
         "validation_min_rows": settings.validation_min_rows,
-        "validation_accuracy_tolerance": settings.validation_accuracy_tolerance,
-        "validation_rmse_tolerance_ratio": settings.validation_rmse_tolerance_ratio,
+        "gate_policy_version": settings.gate_policy.version,
+        "gate_mode": settings.gate_policy.mode,
+        "gate_margin": settings.gate_policy.margin,
+        "gate_confidence": settings.gate_policy.confidence,
     }
     return decision.model_copy(
         update={

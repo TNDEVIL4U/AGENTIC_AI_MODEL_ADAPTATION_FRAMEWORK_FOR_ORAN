@@ -5,7 +5,11 @@ framework's small HTTP deployment contract (docs/adapters/deployment.md):
   answers 2xx once the request is accepted, 4xx when it is refused (the body says why);
 - ``GET {base}/status?model=<model>`` answers ``{"version", "ready", "failed", "detail"}``,
   read from what the server actually serves;
-- ``GET {base}/health`` answers 2xx when the server is up.
+- ``GET {base}/health`` answers 2xx when the server is up;
+- optional traffic split (feature ``traffic_split``, canary and A/B rollouts):
+  ``POST {base}/traffic`` with ``{"model", "stable": {"version", "source"}, "candidate":
+  {"version", "source"} | null, "percent"}`` and ``GET {base}/traffic?model=<model>`` answering
+  ``{"stable", "candidate", "percent"}`` read back from the router.
 
 ``bentoml`` is the same contract served by a BentoML service built from
 ``templates/bentoml-service`` (paths under ``/oran``).
@@ -20,7 +24,13 @@ import httpx
 
 from oran_adapt.adapters.deployment._common import HttpApi, StaticToken, parse_status, required
 from oran_adapt.core.errors import DeploymentError
-from oran_adapt.ports import AdapterSpec, Capability, DeploymentState, DeploymentTarget
+from oran_adapt.ports import (
+    AdapterSpec,
+    Capability,
+    DeploymentState,
+    DeploymentTarget,
+    TrafficSplit,
+)
 
 if TYPE_CHECKING:
     from oran_adapt.core.config import Settings
@@ -85,6 +95,48 @@ class WebhookDeployment:
         else:
             self._post(model, previous.version, previous.source)
 
+    def set_traffic(self, model: str, *, stable: DeploymentTarget,
+                    candidate: DeploymentTarget | None, percent: int) -> None:
+        body = {
+            "model": model,
+            "stable": {"version": stable.version, "source": stable.source},
+            "candidate": None if candidate is None
+            else {"version": candidate.version, "source": candidate.source},
+            "percent": percent if candidate is not None else 0,
+        }
+        response = self.api.call("POST", "/traffic", json=body)
+        if response.status_code >= 400:
+            raise DeploymentError(
+                f"{self.api.service} refused the traffic split (HTTP {response.status_code})",
+                model=model,
+                percent=percent,
+                cause=response.text[:500],
+            )
+
+    def traffic(self, model: str) -> TrafficSplit:
+        response = self.api.call("GET", "/traffic", params={"model": model})
+        if response.status_code >= 400:
+            raise DeploymentError(
+                f"{self.api.service} refused the traffic request (HTTP {response.status_code})",
+                model=model,
+                cause=response.text[:500],
+            )
+        try:
+            body = response.json()
+            candidate = body.get("candidate")
+            stable = body.get("stable")
+            return TrafficSplit(
+                model=model,
+                stable=None if stable is None else str(stable),
+                candidate=None if candidate is None else str(candidate),
+                percent=int(body.get("percent") or 0),
+            )
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise DeploymentError(
+                f"{self.api.service} answered an unreadable traffic split", model=model,
+                cause=str(exc),
+            ) from exc
+
 
 def _webhook(settings: Settings, registry: ModelRegistryPort) -> DeploymentPort:
     return WebhookDeployment.from_settings(
@@ -105,7 +157,7 @@ WEBHOOK = AdapterSpec(
         port="deployment",
         adapter="webhook",
         description="any serving system implementing the POST /deploy + GET /status contract",
-        features=frozenset({"undeploy"}),
+        features=frozenset({"undeploy", "traffic_split"}),
         config_keys=(
             "deployment_webhook_url", "deployment_webhook_token", "deployment_http_timeout_s",
         ),

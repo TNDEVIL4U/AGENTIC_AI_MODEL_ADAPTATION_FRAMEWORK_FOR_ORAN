@@ -88,7 +88,8 @@ any non-terminal except RECEIVED/VALIDATING → DATA_PREPARING (transient retry)
 Terminal states: `COMPLETED`, `FAILED`, `ROLLED_BACK`, `TIMED_OUT`. The legacy values
 `ANALYZING`, `MODEL_COMPARISON` and `DECISION_MADE` still load but are never entered. Every
 transition writes an `adaptation_event` row. There is no `CANCELLED` (added as a
-terminal state in Hardening Phase 6) and no `AWAITING_APPROVAL`.
+terminal state in Hardening Phase 6) and no `AWAITING_APPROVAL` (a rollout state since
+Hardening Phase 7, in the `rollout` table rather than the job).
 
 "Promotion" means moving the MLflow alias `LIVE_ALIAS` (default `live`) to a new version and
 tagging `oran.status`. Nothing is pushed to a serving layer (`registry/promotion.py`).
@@ -97,7 +98,11 @@ Validation gate (`validation/engine.py`): the primary metric is the **first key*
 metrics dict. A classifier passes when `candidate >= current - VALIDATION_ACCURACY_TOLERANCE`,
 and a regressor when `candidate_rmse <= current_rmse * (1 + VALIDATION_RMSE_TOLERANCE_RATIO)`.
 **A candidate that is somewhat worse can therefore pass** (finding 6). There is no statistical
-test and no guardrail metrics.
+test and no guardrail metrics. (Since Hardening Phase 7 both keys are gone: a versioned
+`GATE_POLICY` requires a paired-bootstrap interval of the improvement to clear a margin, with
+slice, calibration, latency and size guardrails; every decision is stored in `gate_decision`.
+An accepted candidate reaches traffic through `DELIVERY_STRATEGY`, as a shadow, canary, A/B or
+manually approved rollout with automatic rollback; see `docs/adapters/rollout_metrics.md`.)
 
 ## 4. Database schema (SQLAlchemy `db/models.py`, Alembic `migrations/versions/0001…0006`)
 
@@ -118,6 +123,10 @@ test and no guardrail metrics.
 | `current_data` | current_data_id, data_version_id, model_id, job_id, source_versions, schema, content_hash, quality |
 | `kpi_sample` | dataset_id, observed_at, payload: **the only CDC source table** |
 | `cdc_changelog`, `cdc_event`, `cdc_offset` | trigger changelog, normalised CDC events, consumer offsets |
+
+Since Hardening Phase 7, migration 0009 adds `gate_decision` (every gate verdict with its
+evidence and policy hash), `rollout` (strategy, state, arms, policy, history) and
+`rollout_observation` (online metrics posted per arm).
 
 Migration 0005 creates the `kpi_sample` triggers (SQLite and PostgreSQL variants). 0006 sets
 `REPLICA IDENTITY FULL` on PostgreSQL. Each migration has a `downgrade()`. The only test of the

@@ -230,7 +230,9 @@ def build_harness(backend: str, root: Path, stub: ServingStub) -> Harness:
     if backend == "registry-alias":
         registry = build_registry(_settings(root))
         flaky = FlakyAliases(registry)
-        return Harness(RegistryAliasDeployment(flaky, "serving"),  # type: ignore[arg-type]
+        return Harness(RegistryAliasDeployment(flaky, "serving",  # type: ignore[arg-type]
+                                               canary_alias="canary",
+                                               traffic_tag="oran.traffic_percent"),
                        _registry_provision(registry, root), flaky.fail_next)
     if backend in ("webhook", "bentoml"):
         suffix = "/oran" if backend == "bentoml" else ""

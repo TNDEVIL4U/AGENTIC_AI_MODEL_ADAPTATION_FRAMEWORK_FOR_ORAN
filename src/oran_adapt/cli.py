@@ -444,6 +444,51 @@ def _cmd_jobs_reap(args, settings: Settings) -> Any:
     return reap(_session_factory(settings), settings, build_job_queue(settings))
 
 
+def _delivery(settings: Settings):
+    from oran_adapt.delivery.controller import Delivery
+
+    return Delivery.from_settings(settings, _registry(settings))
+
+
+def _cmd_rollout_tick(args, settings: Settings) -> Any:
+    """One controller pass over every active rollout (what the worker does every
+    ROLLOUT_TICK_S); with --rollout-id, just that one."""
+    from oran_adapt.db.base import session_scope
+    from oran_adapt.delivery import controller
+
+    with session_scope(_session_factory(settings)) as session:
+        if args.rollout_id:
+            return {args.rollout_id: controller.tick(session, _delivery(settings),
+                                                     args.rollout_id)}
+        return controller.tick_all(session, _delivery(settings))
+
+
+def _cmd_rollout_list(args, settings: Settings) -> Any:
+    from oran_adapt.db.base import session_scope
+    from oran_adapt.delivery import controller
+
+    with session_scope(_session_factory(settings)) as session:
+        rows = controller.list_rollouts(
+            session, model_id=args.model_id, state=args.state,
+            active=True if args.active else None,
+            limit=args.limit or settings.api_pagination_default_limit,
+        )
+        return [controller.to_dict(r) for r in rows]
+
+
+def _cmd_rollout_decide(args, settings: Settings) -> Any:
+    import getpass
+
+    from oran_adapt.db.base import session_scope
+    from oran_adapt.delivery import controller
+
+    act = controller.approve if args.cmd == "approve" else controller.reject
+    with session_scope(_session_factory(settings)) as session:
+        row = act(session, _delivery(settings), args.rollout_id,
+                  actor=f"cli:{getpass.getuser()}", reason=args.reason)
+        return controller.to_dict(row)
+
+
 def _cmd_auth_new_key(args, settings: Settings) -> Any:
     """A new random API key (or, with --stdin, the key read from standard input) and the
     API_KEYS entry that grants it a role. Only the digest goes into configuration; the key itself
@@ -645,6 +690,24 @@ def build_parser() -> argparse.ArgumentParser:
     c.set_defaults(fn=_cmd_jobs_cancel)
     c = jobs_.add_parser("reap", help="one reaper pass over the job queue")
     c.set_defaults(fn=_cmd_jobs_reap)
+
+    rollout = top.add_parser("rollout").add_subparsers(dest="cmd", required=True)
+    c = rollout.add_parser("tick", help="advance active rollouts once (the worker does this "
+                           "every ROLLOUT_TICK_S)")
+    c.add_argument("--rollout-id")
+    c.set_defaults(fn=_cmd_rollout_tick)
+    c = rollout.add_parser("list", help="progressive rollouts, newest first")
+    c.add_argument("--model-id")
+    c.add_argument("--state")
+    c.add_argument("--active", action="store_true")
+    c.add_argument("--limit", type=int)
+    c.set_defaults(fn=_cmd_rollout_list)
+    for name, text in (("approve", "approve a rollout awaiting approval"),
+                       ("reject", "stop an active rollout; traffic returns to stable")):
+        c = rollout.add_parser(name, help=text)
+        c.add_argument("--rollout-id", required=True)
+        c.add_argument("--reason", default="")
+        c.set_defaults(fn=_cmd_rollout_decide)
 
     auth = top.add_parser("auth").add_subparsers(dest="cmd", required=True)
     c = auth.add_parser("new-key", help="make an API key and its API_KEYS settings entry")

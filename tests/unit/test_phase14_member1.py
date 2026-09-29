@@ -523,7 +523,9 @@ def test_promotion_refuses_a_version_whose_artifact_changed(
     )
     registry.set_version_tags("cell_e", "2", {"artifact.sha256": "0" * 64})
     deployer = Deployer(
-        RegistryAliasDeployment(registry, migrated_settings.live_alias),
+        RegistryAliasDeployment(registry, migrated_settings.live_alias,
+                                canary_alias=migrated_settings.deployment_canary_alias,
+                                traffic_tag=migrated_settings.deployment_traffic_tag),
         backend="registry-alias", timeout_s=5, poll_s=0.01,
     )
     with session_scope(session_factory) as session, pytest.raises(ArtifactIntegrityError):

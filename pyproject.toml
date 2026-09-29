@@ -96,6 +96,10 @@ fsspec = "oran_adapt.adapters.datasets:FSSPEC"
 s3 = "oran_adapt.adapters.datasets_cloud:S3"
 gcs = "oran_adapt.adapters.datasets_cloud:GCS"
 
+[project.entry-points."oran_adapt.rollout_metrics"]
+api = "oran_adapt.adapters.rollout_metrics:API"
+prometheus = "oran_adapt.adapters.rollout_metrics:PROMETHEUS"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "pytest-xdist>=3.8", "ruff"]
 # CDC_MODE=kafka (production CDC from Debezium). Not needed for the polling fallback.

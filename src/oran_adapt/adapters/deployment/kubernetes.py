@@ -10,6 +10,11 @@ so a status left over from the previous version is never mistaken for the new on
 Writes are read-modify-write with the object's ``resourceVersion``: a concurrent writer makes
 the API answer 409, which fails the rollout (and restores the previous version) rather than
 overwriting someone else's change.
+
+``kserve`` also splits traffic (feature ``traffic_split``, canary and A/B rollouts) with the
+InferenceService's own ``spec.predictor.canaryTrafficPercent``: the candidate is the latest
+revision and gets that share, the previous ready revision keeps the rest. The stable version is
+recorded in the annotation ``oran.io/stable-version``.
 """
 
 from __future__ import annotations
@@ -31,7 +36,13 @@ from oran_adapt.adapters.deployment._common import (
     required,
 )
 from oran_adapt.core.errors import ConfigurationError, DeploymentError
-from oran_adapt.ports import AdapterSpec, Capability, DeploymentState, DeploymentTarget
+from oran_adapt.ports import (
+    AdapterSpec,
+    Capability,
+    DeploymentState,
+    DeploymentTarget,
+    TrafficSplit,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -41,6 +52,7 @@ if TYPE_CHECKING:
 
 VERSION_ANNOTATION = "oran.io/model-version"
 MODEL_ANNOTATION = "oran.io/model"
+STABLE_ANNOTATION = "oran.io/stable-version"
 MANAGED_BY = {"app.kubernetes.io/managed-by": "oran-adapt"}
 # KServe's status.modelStatus.transitionStatus values that mean the new spec will not load.
 _KSERVE_FAILED = ("BlockedByFailedLoad", "InvalidSpec")
@@ -175,6 +187,12 @@ class _CustomResourceDeployment(_KubeObjectDeployment, ABC):
         )
 
     def deploy(self, target: DeploymentTarget) -> None:
+        self._upsert(target)
+
+    def _upsert(self, target: DeploymentTarget,
+                mutate: Callable[[dict[str, Any]], None] | None = None) -> None:
+        """Create or update the object to serve ``target``; ``mutate`` then adjusts it (the
+        traffic split) before it is written."""
         uri = render(self.uri_template, target, self.name(target.model))
         current = self._get(target.model)
         obj = copy.deepcopy(current) if current is not None else {
@@ -190,7 +208,10 @@ class _CustomResourceDeployment(_KubeObjectDeployment, ABC):
         annotations = _annotations(obj)
         annotations[MODEL_ANNOTATION] = target.model
         annotations[VERSION_ANNOTATION] = target.version
+        annotations.pop(STABLE_ANNOTATION, None)
         self._spec(obj, uri)
+        if mutate is not None:
+            mutate(obj)
         if current is None:
             response = self.api.call("POST", self._collection(), json=obj)
             self._check(response, "create", target.model)
@@ -219,13 +240,40 @@ class KServeDeployment(_CustomResourceDeployment):
         self.model_format = model_format
 
     def _spec(self, obj: dict[str, Any], storage_uri: str) -> None:
-        model = obj["spec"].setdefault("predictor", {}).setdefault("model", {})
+        predictor = obj["spec"].setdefault("predictor", {})
+        # A plain deploy serves the new version to all traffic: no canary left over.
+        predictor.pop("canaryTrafficPercent", None)
+        model = predictor.setdefault("model", {})
         model["modelFormat"] = {"name": self.model_format}
         model["storageUri"] = storage_uri
 
     def _failed(self, obj: dict[str, Any]) -> bool:
         transition = obj.get("status", {}).get("modelStatus", {}).get("transitionStatus")
         return transition in _KSERVE_FAILED
+
+    def set_traffic(self, model: str, *, stable: DeploymentTarget,
+                    candidate: DeploymentTarget | None, percent: int) -> None:
+        if candidate is None or percent == 0:
+            self._upsert(stable)
+            return
+
+        def split(obj: dict[str, Any]) -> None:
+            obj["spec"]["predictor"]["canaryTrafficPercent"] = percent
+            _annotations(obj)[STABLE_ANNOTATION] = stable.version
+
+        self._upsert(candidate, split)
+
+    def traffic(self, model: str) -> TrafficSplit:
+        obj = self._get(model)
+        if obj is None:
+            return TrafficSplit(model=model, stable=None, candidate=None, percent=0)
+        annotations = obj["metadata"].get("annotations") or {}
+        version = annotations.get(VERSION_ANNOTATION)
+        percent = obj.get("spec", {}).get("predictor", {}).get("canaryTrafficPercent")
+        if percent is None or annotations.get(STABLE_ANNOTATION) is None:
+            return TrafficSplit(model=model, stable=version, candidate=None, percent=0)
+        return TrafficSplit(model=model, stable=annotations[STABLE_ANNOTATION],
+                            candidate=version, percent=int(percent))
 
 
 class SeldonDeployment(_CustomResourceDeployment):
@@ -384,7 +432,7 @@ KSERVE = AdapterSpec(
         port="deployment",
         adapter="kserve",
         description="a KServe InferenceService per model (serving.kserve.io/v1beta1)",
-        features=frozenset({"undeploy", "kubernetes"}),
+        features=frozenset({"undeploy", "kubernetes", "traffic_split"}),
         config_keys=(*_K8S_KEYS, "kserve_storage_uri_template", "kserve_model_format"),
         required_keys=("k8s_api_url", "kserve_storage_uri_template"),
     ),

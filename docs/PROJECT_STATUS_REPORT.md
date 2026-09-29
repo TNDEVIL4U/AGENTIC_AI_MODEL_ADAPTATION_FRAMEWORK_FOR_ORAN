@@ -169,8 +169,8 @@ These are **defaults, not hardcoded** — each can be changed without editing co
 | `DECISION_FULL_RETRAIN_PSI_THRESHOLD` | 0.5 | PSI at/above this rules out fine-tuning |
 | `VALIDATION_MIN_ROWS` | 5 | Minimum rows to validate at all |
 | `VALIDATION_HOLDOUT_FRACTION` | 0.2 | Share of the newest drifted rows held back for validation |
-| `VALIDATION_ACCURACY_TOLERANCE` | 0.02 | Allowed accuracy drop for classifiers |
-| `VALIDATION_RMSE_TOLERANCE_RATIO` | 0.05 | Allowed relative RMSE rise for regressors |
+| `GATE_POLICY` / `GATE_POLICY_FILE` | superiority, 95 % | Statistical validation gate and guardrails (Hardening Phase 7) |
+| `DELIVERY_STRATEGY` / `DELIVERY_POLICY` | shadow / see `core/policies.py` | Progressive delivery of accepted candidates (Hardening Phase 7) |
 | `TORCH_FINE_TUNE_EPOCHS` / `TORCH_FULL_RETRAIN_EPOCHS` | 5 / 300 | Torch training budgets |
 | `TORCH_LEARNING_RATE` | 0.01 | Adam learning rate for both torch engines |
 | `JOB_MAX_RETRIES` / `JOB_RETRY_BACKOFF_S` / `JOB_TIMEOUT_S` | 2 / 1.0 / 600 | Job hardening |

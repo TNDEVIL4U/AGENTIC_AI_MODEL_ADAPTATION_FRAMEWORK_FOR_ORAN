@@ -27,6 +27,9 @@ WRITE_POLICY = {
     ("POST", "/api/v1/models/{model_id}/rollback"): PROMOTE,
     ("POST", "/api/v1/deliveries/redrive"): ADMIN,
     ("POST", "/api/v1/deliveries/{delivery_id}/redrive"): ADMIN,
+    ("POST", "/api/v1/rollouts/{rollout_id}/approve"): PROMOTE,
+    ("POST", "/api/v1/rollouts/{rollout_id}/reject"): PROMOTE,
+    ("POST", "/api/v1/rollouts/{rollout_id}/observations"): SUBMIT,
 }
 
 # Read routes that need more than READ.

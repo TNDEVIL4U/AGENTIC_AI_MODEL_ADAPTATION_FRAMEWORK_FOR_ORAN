@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from oran_adapt.api.app import create_app
 from oran_adapt.core.config import Settings
+from oran_adapt.core.policies import GatePolicy
 from oran_adapt.db.migrate import upgrade_to_head
 
 
@@ -53,6 +54,11 @@ def settings(tmp_path, database_url) -> Settings:
         # A submitted job runs in the submitting call, so tests see its outcome at once; the
         # Phase 6 tests (test_phase6_execution) drive the queue and workers themselves.
         job_queue_backend="inline",
+        # Pre-Phase 7 behaviour for the tests that exercise the pipeline, not delivery: LIVE moves
+        # at once, and a candidate as good as the incumbent passes (non-inferiority within 5 %).
+        # test_phase7_gate_delivery covers the superiority gate and the rollout strategies.
+        delivery_strategy="blue_green",
+        gate_policy=GatePolicy(mode="non_inferiority", margin=0.05, margin_relative=True),
     )
 
 

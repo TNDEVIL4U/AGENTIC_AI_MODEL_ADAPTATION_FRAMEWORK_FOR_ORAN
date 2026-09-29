@@ -19,7 +19,13 @@ from oran_adapt.api.security import DATA, Promoter, require
 from oran_adapt.core.errors import ModelBusyError, ModelNotFoundError
 from oran_adapt.datastore import model_data_links
 from oran_adapt.db.base import session_scope
-from oran_adapt.db.models import ModelLock, ModelMetadata, ModelPromotion, ModelVersionEvaluation
+from oran_adapt.db.models import (
+    GateDecisionRecord,
+    ModelLock,
+    ModelMetadata,
+    ModelPromotion,
+    ModelVersionEvaluation,
+)
 from oran_adapt.orchestrator.locks import add_lock, release_lock, take_over_expired_lock
 from oran_adapt.registry.onboarding import attach_existing_model
 from oran_adapt.registry.promotion import rollback_model
@@ -180,6 +186,34 @@ def get_model_promotions(model_id: str, request: Request) -> list[dict]:
                 "actor": r.actor,
                 "job_id": r.job_id,
                 "artifact_sha256": r.artifact_sha256,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ]
+
+
+@router.get("/{model_id}/gate-decisions")
+def get_gate_decisions(model_id: str, request: Request) -> list[dict]:
+    """Every validation gate decision for the model, newest first, with the policy version and
+    hash it was made under and the full evidence (interval, guardrails, reasons)."""
+    with session_scope(request.app.state.session_factory) as session:
+        _require_model(session, model_id)
+        rows = session.execute(
+            select(GateDecisionRecord)
+            .where(GateDecisionRecord.model_id == model_id)
+            .order_by(desc(GateDecisionRecord.id))
+        ).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "job_id": r.job_id,
+                "current_version": r.current_version,
+                "candidate_version": r.candidate_version,
+                "verdict": r.verdict,
+                "metric": r.metric,
+                "policy_version": r.policy_version,
+                "policy_hash": r.policy_hash,
+                "decision": r.decision,
                 "created_at": r.created_at.isoformat(),
             }
             for r in rows

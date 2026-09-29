@@ -88,6 +88,26 @@ addressing resolve `model://<model>/<version>` through their own registry client
 `BENTOML_TOKEN` is set, every request carries `Authorization: Bearer <token>`, and a server that
 answers 401/403 fails the rollout.
 
+## Traffic split (canary and A/B rollouts)
+
+Adapters with the `traffic_split` feature also implement `TrafficSplitPort`
+(`set_traffic(model, stable=, candidate=, percent=)` and `traffic(model)`), so progressive
+delivery (`docs/adapters/rollout_metrics.md`) can send `percent` of a model's requests to a
+candidate while the stable version keeps the rest. Like `deploy`, `set_traffic` only asks;
+`Deployer.split` then polls `status` and reads `traffic()` back, and a split that does not read
+back as asked raises `DeploymentError` (the rollout then re-decides from evidence on its next
+tick). `percent` 0 with `candidate` null removes the split.
+
+| Adapter | How the split is expressed | Read back from |
+|---|---|---|
+| `registry-alias` | the candidate gets alias `DEPLOYMENT_CANARY_ALIAS` and version tag `DEPLOYMENT_TRAFFIC_TAG=<percent>`; the stable version keeps `DEPLOYMENT_ALIAS`. Serving processes send that share to `model://<name>@<canary alias>` | the two aliases and the tag |
+| `webhook` | `POST {base}/traffic` with `{"model", "stable": {"version", "source"}, "candidate": {"version", "source"} \| null, "percent"}` | `GET {base}/traffic?model=<model>` answering `{"stable", "candidate", "percent"}` from the router |
+| `kserve` | `spec.predictor.canaryTrafficPercent` on the InferenceService, the candidate as the latest revision; annotation `oran.io/stable-version` names the stable one | the object's annotation and field |
+
+`DELIVERY_STRATEGY=canary` or `ab` (or a shadow / manual rollout continuing as a canary) with a
+backend lacking the feature fails at startup with a `ConfigurationError` naming the backends
+that have it. `blue_green` needs no split: it switches all traffic at once with read-back.
+
 ## Configuration
 
 Common: `DEPLOYMENT_BACKEND` (default `registry-alias`), `DEPLOYMENT_TIMEOUT_S` (600),

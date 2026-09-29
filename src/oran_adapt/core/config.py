@@ -31,6 +31,7 @@ from oran_adapt.core.config_sources import (
 )
 from oran_adapt.core.errors import ConfigurationError
 from oran_adapt.core.frameworks import ADAPTABLE_FRAMEWORKS
+from oran_adapt.core.policies import DeliveryPolicy, GatePolicy, load_policy_file
 
 # Adapter selector key -> port. Each selected adapter's Capability.required_keys must be set.
 ADAPTER_SELECTORS: dict[str, str] = {
@@ -47,6 +48,7 @@ ADAPTER_SELECTORS: dict[str, str] = {
     "notification_backend": "notification",
     "dataset_backends": "dataset",
     "secrets_backend": "secrets",
+    "rollout_metrics_backend": "rollout_metrics",
 }
 # Selector values that mean "this port is switched off" rather than naming an adapter.
 DISABLED = {
@@ -173,6 +175,10 @@ class Settings(BaseSettings):
     # "registry-alias": the alias that marks the served version; None means LIVE_ALIAS itself
     # (serving reads the live alias, so promotion and deployment are one move).
     deployment_alias: str | None = None
+    # "registry-alias" traffic split: the alias that marks the canary/A-B candidate, and the
+    # version tag that holds its traffic percentage (serving systems route by both).
+    deployment_canary_alias: str = Field("canary", min_length=1)
+    deployment_traffic_tag: str = Field("oran.traffic_percent", min_length=1)
     # "webhook": POST <url>/deploy and GET <url>/status (docs/adapters/deployment.md).
     deployment_webhook_url: str | None = None
     deployment_webhook_token: SecretStr | None = None
@@ -386,18 +392,39 @@ class Settings(BaseSettings):
     # Confidence reported for a rule-based decision that carries no score of its own.
     decision_default_confidence: float = Field(0.5, ge=0, le=1)
 
-    # Member 4 (validation) pass/fail gate. A candidate needs at least validation_min_rows rows
-    # of held-out data to be scored at all. A classifier candidate passes when its accuracy is no
-    # more than validation_accuracy_tolerance below V_current's; a regressor candidate passes
-    # when its RMSE is no more than validation_rmse_tolerance_ratio (a fraction of V_current's
-    # RMSE, since RMSE has no fixed scale) higher than V_current's.
-    # The hold-out is the newest validation_holdout_fraction of the drifted rows (at least
-    # validation_min_rows of them, always leaving one drifted row to train on). Those rows are
-    # never trained on, so both models are scored on data neither has seen.
+    # Member 4 (validation). A candidate needs at least validation_min_rows rows of held-out
+    # data to be scored at all. The hold-out is the newest validation_holdout_fraction of the
+    # drifted rows (at least validation_min_rows of them, always leaving one drifted row to train
+    # on). Those rows are never trained on, so both models are scored on data neither has seen.
     validation_min_rows: int = Field(5, ge=1)
     validation_holdout_fraction: float = Field(0.2, gt=0, lt=1)
-    validation_accuracy_tolerance: float = Field(0.02, ge=0, le=1)
-    validation_rmse_tolerance_ratio: float = Field(0.05, ge=0)
+    # The gate (validation.gate): a statistical test against the incumbent plus guardrails,
+    # all thresholds in this versioned policy (core.policies.GatePolicy). GATE_POLICY_FILE, when
+    # set, replaces GATE_POLICY with the TOML/JSON file's contents (config/policies/*).
+    gate_policy: GatePolicy = Field(default_factory=GatePolicy)
+    gate_policy_file: str | None = None
+    # Progressive delivery (delivery.controller): how a validated candidate reaches traffic.
+    # shadow | canary | blue_green | ab | manual. canary and ab (and shadow/manual handing over
+    # to canary) need a deployment adapter with the "traffic_split" feature; startup refuses the
+    # combination otherwise. blue_green switches all traffic at once with read-back.
+    delivery_strategy: Literal["shadow", "canary", "blue_green", "ab", "manual"] = "shadow"
+    delivery_policy: DeliveryPolicy = Field(default_factory=DeliveryPolicy)
+    delivery_policy_file: str | None = None
+    # Where the rollout controller reads each arm's online metrics (oran_adapt.rollout_metrics):
+    # "api" (observations POSTed to /api/v1/rollouts/{id}/observations) or "prometheus".
+    rollout_metrics_backend: str = "api"
+    # How often a worker advances active rollouts (also: oran-adapt rollout tick).
+    rollout_tick_s: float = Field(30.0, gt=0)
+    # "prometheus": PromQL range queries per metric name. Templates may use {model}, {version},
+    # {arm} (stable|candidate) and {rollout_id}; each series' samples over the rollout window
+    # become that metric's samples. The requests query (same placeholders plus {window_s})
+    # counts an arm's observations.
+    rollout_prometheus_url: str | None = None
+    rollout_prometheus_token: SecretStr | None = None
+    rollout_prometheus_queries: dict[str, str] = Field(default_factory=dict)
+    rollout_prometheus_requests_query: str | None = None
+    rollout_prometheus_step_s: float = Field(60.0, gt=0)
+    rollout_prometheus_timeout_s: float = Field(10.0, gt=0)
 
     # Leakage checks run on the training rows before any engine fits (adaptation.leakage).
     # Training rows that are held-out rows, copies of them, or newer than the oldest held-out
@@ -635,6 +662,22 @@ class Settings(BaseSettings):
 
             parse_keys(self.notification_signing_keys.get_secret_value(),
                        self.notification_signing_min_key_bytes)
+        return self
+
+    @model_validator(mode="after")
+    def _policy_files_loaded(self) -> Settings:
+        if self.gate_policy_file:
+            self.gate_policy = load_policy_file(self.gate_policy_file, GatePolicy,
+                                                "gate_policy_file")
+        if self.delivery_policy_file:
+            self.delivery_policy = load_policy_file(self.delivery_policy_file, DeliveryPolicy,
+                                                    "delivery_policy_file")
+        aliases = {self.live_alias, self.candidate_alias, self.deployment_alias}
+        if self.deployment_canary_alias in aliases:
+            raise ConfigurationError(
+                "DEPLOYMENT_CANARY_ALIAS must differ from LIVE_ALIAS, CANDIDATE_ALIAS and "
+                "DEPLOYMENT_ALIAS", key="deployment_canary_alias",
+            )
         return self
 
     @model_validator(mode="after")

@@ -75,8 +75,8 @@ Hardening Phase 1 has to decide, for each one, whether it stays a schema default
 | C10 | `CDC_KAFKA_TOPIC` | `oran.public.kpi_sample` | table-bound topic | `cdc.sources[].topic` |
 | C11 | `CDC_CONSUMER_GROUP` | `oran-adapt-cdc` | name | `cdc.consumer_group` |
 | C12 | `MLFLOW_SKOPS_TRUSTED_TYPES` | two sklearn types | vendor-specific | `handlers.sklearn.trusted_types` |
-| C13 | `VALIDATION_ACCURACY_TOLERANCE` / `VALIDATION_RMSE_TOLERANCE_RATIO` | `0.02` / `0.05` | tolerance lets a worse model pass | replaced by `policy.gate.min_margin` + CI (Hardening Phase 7) |
-| C14 | all threshold / budget keys (`ANALYSIS_*`, `REUSE_*`, `DECISION_*`, `VALIDATION_*`, `TORCH_*`, `JOB_*`) | see `.env.example` | fine as schema defaults | move thresholds to policy files (Hardening Phase 7) |
+| C13 | `VALIDATION_ACCURACY_TOLERANCE` / `VALIDATION_RMSE_TOLERANCE_RATIO` | `0.02` / `0.05` | tolerance lets a worse model pass | **closed in Hardening Phase 7**: both keys removed; the versioned `GATE_POLICY` (margin, confidence interval, guardrails) replaces them |
+| C14 | all threshold / budget keys (`ANALYSIS_*`, `REUSE_*`, `DECISION_*`, `VALIDATION_*`, `TORCH_*`, `JOB_*`) | see `.env.example` | fine as schema defaults | validation and delivery thresholds moved to policy files in Hardening Phase 7 (`config/policies/`); the rest stay schema defaults |
 
 ## D. Infrastructure files
 
@@ -217,11 +217,28 @@ schema defaults. What is still a literal, and why:
 | `api/routes_adaptation.py` | `limit` at most 1000 jobs per page | a bound on one response, as on the other list routes |
 | `docker-compose.yml` (worker) | `stop_grace_period: 45s` | must exceed `JOB_DRAIN_TIMEOUT_S` (30 s); it belongs with D4 (compose values) |
 
+## Hardening Phase 7 status
+
+C13 is closed: `VALIDATION_ACCURACY_TOLERANCE` and `VALIDATION_RMSE_TOLERANCE_RATIO` are removed.
+Every threshold of the validation gate and of progressive delivery is a field of the versioned
+`GatePolicy` / `DeliveryPolicy` (`core/policies.py`), set inline (`GATE_POLICY`,
+`DELIVERY_POLICY`) or from a TOML/JSON file (`config/policies/gate.toml`, `delivery.toml`); the
+Prometheus source takes its URL, queries, step and timeout from `ROLLOUT_PROMETHEUS_*`. C14
+stays open for the `ANALYSIS_*`, `REUSE_*`, `DECISION_*`, `TORCH_*` and `JOB_*` schema
+defaults. What is still a literal, and why:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `delivery/controller.py` | rollout ids from `uuid4().hex`; lock holder `rollout:<id>`; idempotency key `rollout:<id>:promote` | identifiers, not tunables |
+| `delivery/controller.py` | the strategy names and rollout states (`SHADOW`, `CANARY`, `AB`, `AWAITING_APPROVAL`, ...) | the state machine's vocabulary, stored in the database |
+| `api/routes_rollouts.py` | at most 50 metrics per observation; `limit` at most 1000 rollouts per page | bounds on one request and one response, as on the other routes |
+| `validation/gate.py` | the metric per task type (accuracy, RMSE, ...) and its direction | the definition of the task type; `metric_guards` adds others |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 |
-|---|---|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 |
+|---|---|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |

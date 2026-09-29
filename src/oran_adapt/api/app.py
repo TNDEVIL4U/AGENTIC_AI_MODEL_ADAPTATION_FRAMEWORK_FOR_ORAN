@@ -22,6 +22,7 @@ from oran_adapt.api.routes_data import router as data_router
 from oran_adapt.api.routes_health import router as health_router
 from oran_adapt.api.routes_models import router as models_router
 from oran_adapt.api.routes_notifications import router as notifications_router
+from oran_adapt.api.routes_rollouts import router as rollouts_router
 from oran_adapt.api.security import READ, require
 from oran_adapt.bootstrap import (
     build_auth,
@@ -33,6 +34,7 @@ from oran_adapt.bootstrap import (
     build_notifiers,
     build_policy,
     build_registry,
+    build_rollout_metrics,
 )
 from oran_adapt.core import correlation, metrics
 from oran_adapt.core.config import Settings, get_settings
@@ -182,6 +184,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.policy = build_policy(settings)
     app.state.notifiers = build_notifiers(settings)
     app.state.data_access = build_data_access(settings)
+    app.state.rollout_metrics = build_rollout_metrics(settings)
     app.state.dispatcher = (
         DispatcherThread(
             Dispatcher(app.state.session_factory, app.state.notifiers, settings)
@@ -221,6 +224,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(models_router, prefix="/api/v1", dependencies=authenticated)
     app.include_router(config_router, prefix="/api/v1", dependencies=authenticated)
     app.include_router(notifications_router, prefix="/api/v1", dependencies=authenticated)
+    app.include_router(rollouts_router, prefix="/api/v1", dependencies=authenticated)
     return app
 
 
@@ -232,11 +236,13 @@ def _status_for(exc: AdaptationError) -> int:
         "JOB_NOT_FOUND": 404,
         "DATASET_NOT_FOUND": 404,
         "DELIVERY_NOT_FOUND": 404,
+        "ROLLOUT_NOT_FOUND": 404,
         "CONFLICT": 409,
         "DATA_VERSION_CONFLICT": 409,
         "MODEL_BUSY": 409,
         "INVALID_STATE_TRANSITION": 409,
         "JOB_NOT_CANCELLABLE": 409,
+        "ROLLOUT_STATE_CONFLICT": 409,
         "ARTIFACT_INTEGRITY_FAILED": 422,
         "INVALID_REFERENCE": 422,
         "DATA_SOURCE_NOT_ALLOWED": 422,
@@ -248,5 +254,6 @@ def _status_for(exc: AdaptationError) -> int:
         "DEPLOYMENT_UNAVAILABLE": 503,
         "DATABASE_UNAVAILABLE": 503,
         "JOB_QUEUE_UNAVAILABLE": 503,
+        "ROLLOUT_METRICS_UNAVAILABLE": 503,
         "JOB_TIMEOUT": 504,
     }.get(exc.code, 500)

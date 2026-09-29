@@ -9,6 +9,9 @@ says whether that restore held.
 
 Promotion (``registry.promotion``) calls ``rollout`` after moving the live alias, and undoes
 both when either fails, so LIVE and what serves traffic never disagree after a failed move.
+
+``split`` (adapters with the ``traffic_split`` feature) routes a share of traffic to a
+candidate for canary and A/B rollouts, and likewise reads the split back from the system.
 """
 
 from __future__ import annotations
@@ -16,12 +19,18 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from oran_adapt.core import metrics
 from oran_adapt.core.errors import AdaptationError, DeploymentError
 from oran_adapt.core.logging import log_event
-from oran_adapt.ports import DeploymentPort, DeploymentState, DeploymentTarget
+from oran_adapt.ports import (
+    DeploymentPort,
+    DeploymentState,
+    DeploymentTarget,
+    TrafficSplit,
+    TrafficSplitPort,
+)
 
 if TYPE_CHECKING:
     from oran_adapt.core.config import Settings
@@ -39,8 +48,10 @@ class Deployer:
         poll_s: float,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        features: frozenset[str] = frozenset(),
     ) -> None:
         self.port = port
+        self.features = features
         self.backend = backend
         self.timeout_s = timeout_s
         self.poll_s = poll_s
@@ -48,13 +59,71 @@ class Deployer:
         self._sleep = sleep
 
     @classmethod
-    def from_settings(cls, port: DeploymentPort, settings: Settings) -> Deployer:
+    def from_settings(cls, port: DeploymentPort, settings: Settings,
+                      features: frozenset[str] = frozenset()) -> Deployer:
         return cls(
             port,
             backend=settings.deployment_backend,
             timeout_s=settings.deployment_timeout_s,
             poll_s=settings.deployment_poll_s,
+            features=features,
         )
+
+    @property
+    def splits_traffic(self) -> bool:
+        """Whether the adapter declares the ``traffic_split`` feature and implements it."""
+        return "traffic_split" in self.features and isinstance(self.port, TrafficSplitPort)
+
+    def _splitter(self, model: str) -> TrafficSplitPort:
+        if not self.splits_traffic:
+            raise DeploymentError(
+                f"deployment backend {self.backend} cannot split traffic", model=model
+            )
+        return cast("TrafficSplitPort", self.port)
+
+    def traffic(self, model: str) -> TrafficSplit:
+        return self._splitter(model).traffic(model)
+
+    def split(self, model: str, *, stable: DeploymentTarget,
+              candidate: DeploymentTarget | None, percent: int) -> TrafficSplit:
+        """Send ``percent`` of traffic to ``candidate`` (None / 0: everything to ``stable``)
+        and read the split back: the system settles without failure and reports exactly this
+        split within DEPLOYMENT_TIMEOUT_S, else DeploymentError. With the split removed the
+        system must also read back as serving ``stable``."""
+        port = self._splitter(model)
+        if candidate is None or percent == 0:
+            candidate, percent = None, 0
+        want = None if candidate is None else candidate.version
+        port.set_traffic(model, stable=stable, candidate=candidate, percent=percent)
+        deadline = self._clock() + self.timeout_s
+        while True:
+            state = self.port.status(model)
+            if state.failed:
+                metrics.TRAFFIC_SPLITS.labels(backend=self.backend, outcome="failed").inc()
+                raise DeploymentError(
+                    "the serving system reported a failed traffic split", model=model,
+                    candidate=want, percent=percent, detail=state.detail,
+                )
+            split = port.traffic(model)
+            settled = (state.ready and split.stable == stable.version
+                       and split.candidate == want and split.percent == percent
+                       and (want is not None or state.version == stable.version))
+            if settled:
+                metrics.TRAFFIC_SPLITS.labels(backend=self.backend, outcome="ok").inc()
+                log_event(logger, "traffic split read back", backend=self.backend, model=model,
+                          stable=stable.version, candidate=want, percent=percent)
+                return split
+            if self._clock() >= deadline:
+                metrics.TRAFFIC_SPLITS.labels(backend=self.backend, outcome="failed").inc()
+                raise DeploymentError(
+                    f"the traffic split did not read back within {self.timeout_s:g}s "
+                    "(DEPLOYMENT_TIMEOUT_S)",
+                    model=model, stable=stable.version, candidate=want, percent=percent,
+                    read_back={"stable": split.stable, "candidate": split.candidate,
+                               "percent": split.percent},
+                    serving=state.version,
+                )
+            self._sleep(self.poll_s)
 
     def serving(self, model: str) -> str | None:
         """The version the serving system reports for ``model`` (None: nothing deployed)."""

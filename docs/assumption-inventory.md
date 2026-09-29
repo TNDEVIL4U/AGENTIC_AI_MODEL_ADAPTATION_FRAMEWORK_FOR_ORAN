@@ -25,6 +25,13 @@ the hardening finding (#1–#10) it feeds and the phase expected to remove it.
 
 ## 3. Assumes the `live` alias is deployment (findings #2 and #6, Hardening Phases 3 and 7)
 
+**Closed in Hardening Phases 3 and 7** (`docs/PHASE3_REPORT.md`, `docs/PHASE7_REPORT.md`):
+promotion rolls out to a serving system through `DeploymentPort` and reads it back (Phase 3).
+The gate requires a statistically significant improvement with guardrails and records every
+decision under a versioned policy. A candidate then reaches traffic as a shadow, canary, A/B or
+manually approved rollout, which rolls back automatically on online health evidence (Phase 7).
+The table below is the baseline as audited.
+
 | Where | Assumption |
 |---|---|
 | `registry/promotion.py:97-370` | "promote" = `set_alias(LIVE_ALIAS)` plus a status tag. Nothing reaches a serving layer and nothing is verified afterwards |

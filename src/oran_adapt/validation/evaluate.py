@@ -80,6 +80,62 @@ def _scores(model: object, X: pd.DataFrame, y: pd.Series, task: TaskType):
     return None
 
 
+def predict(
+    model: object,
+    X: pd.DataFrame,
+    y: pd.Series | None,
+    *,
+    framework: str,
+    estimator_type: str,
+    task: TaskType,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """The model's predictions on ``X`` and, when its task ranks on one, its score (see
+    ``_scores``). Raises ValidationFailedError if the model cannot predict at all."""
+    try:
+        if framework.lower() in TORCH_FRAMEWORKS:
+            return np.asarray(_predict_torch(model, X, estimator_type)), None
+        predictions = np.asarray(_predict_sklearn_like(model, X))
+        score = _scores(model, X, y, task) if y is not None else None
+        return predictions, None if score is None else np.asarray(score)
+    except Exception as exc:
+        raise ValidationFailedError(
+            f"model failed to produce predictions on the validation set: {type(model).__name__}",
+            cause=str(exc),
+        ) from exc
+
+
+def score_predictions(
+    task: TaskType,
+    X: pd.DataFrame,
+    y: pd.Series | None,
+    predictions: np.ndarray,
+    score: np.ndarray | None,
+    *,
+    estimator_type: str,
+    y_train: pd.Series | None = None,
+) -> dict[str, float]:
+    """The task's metric set for given predictions, primary metric first (evaluate_model)."""
+    scores = compute_metrics(task, y, predictions, y_score=score, X=X, y_train=y_train)
+    primary = primary_metric(task)
+    if task in (TaskType.CLASSIFICATION, TaskType.REGRESSION, TaskType.FORECASTING):
+        # Evidently's value wins for the metric it computes (accuracy / rmse).
+        scores = {**scores, **_evidently_score(y, predictions, estimator_type)}
+    if primary not in scores:
+        raise ValidationFailedError(
+            f"{primary} is undefined for this {task.value.lower()} model on the given data",
+            n_rows=len(X),
+        )
+    return {primary: scores[primary], **{k: v for k, v in scores.items() if k != primary}}
+
+
+def task_of(task_type: str | None, estimator_type: str) -> TaskType:
+    """resolve_task, with an unscorable task reported as a validation failure."""
+    try:
+        return resolve_task(task_type, estimator_type)
+    except ValueError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+
+
 def evaluate_model(
     model: object,
     X: pd.DataFrame,
@@ -98,31 +154,10 @@ def evaluate_model(
     validation failure, distinct from a merely worse score), if its task isn't scorable, or if
     the primary metric is undefined on this data.
     """
-    try:
-        task = resolve_task(task_type, estimator_type)
-    except ValueError as exc:
-        raise ValidationFailedError(str(exc)) from exc
-    try:
-        if framework.lower() in TORCH_FRAMEWORKS:
-            predictions = _predict_torch(model, X, estimator_type)
-            score = None
-        else:
-            predictions = _predict_sklearn_like(model, X)
-            score = _scores(model, X, y, task) if y is not None else None
-    except Exception as exc:
-        raise ValidationFailedError(
-            f"model failed to produce predictions on the validation set: {type(model).__name__}",
-            cause=str(exc),
-        ) from exc
-
-    scores = compute_metrics(task, y, predictions, y_score=score, X=X, y_train=y_train)
-    primary = primary_metric(task)
-    if task in (TaskType.CLASSIFICATION, TaskType.REGRESSION, TaskType.FORECASTING):
-        # Evidently's value wins for the metric it computes (accuracy / rmse).
-        scores = {**scores, **_evidently_score(y, predictions, estimator_type)}
-    if primary not in scores:
-        raise ValidationFailedError(
-            f"{primary} is undefined for this {task.value.lower()} model on the given data",
-            n_rows=len(X),
-        )
-    return {primary: scores[primary], **{k: v for k, v in scores.items() if k != primary}}
+    task = task_of(task_type, estimator_type)
+    predictions, score = predict(
+        model, X, y, framework=framework, estimator_type=estimator_type, task=task
+    )
+    return score_predictions(
+        task, X, y, predictions, score, estimator_type=estimator_type, y_train=y_train
+    )
