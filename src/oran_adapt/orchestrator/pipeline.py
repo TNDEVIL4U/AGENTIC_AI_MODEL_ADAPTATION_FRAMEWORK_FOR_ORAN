@@ -41,7 +41,7 @@ from oran_adapt.analysis.engine import analyze
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import ReuseDecision, VersionEvaluation
 from oran_adapt.analysis.version_eval import evaluate_versions
-from oran_adapt.bootstrap import build_model_handler
+from oran_adapt.bootstrap import build_deployer, build_model_handler
 from oran_adapt.core import metrics
 from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
@@ -237,6 +237,7 @@ def run_adaptation_job(
     existing version reused, a rejected candidate, a registered candidate - comes back as a
     JobResult, never an exception."""
     handler = build_model_handler(settings)
+    deployer = build_deployer(settings, registry)
     model_meta = session.execute(
         select(ModelMetadata).where(ModelMetadata.model_id == event.model_id)
     ).scalar_one_or_none()
@@ -376,6 +377,7 @@ def run_adaptation_job(
             promotion = promote_version(
                 session,
                 registry,
+                deployer=deployer,
                 model_id=event.model_id,
                 version=reuse.selected_version,
                 kind=PromotionKind.REUSE,
@@ -699,6 +701,7 @@ def run_adaptation_job(
         promotion = promote_version(
             session,
             registry,
+            deployer=deployer,
             model_id=event.model_id,
             version=new_version,
             kind=PromotionKind.PROMOTE_CANDIDATE,

@@ -138,7 +138,7 @@ class SecretsSource(PydanticBaseSettingsSource):
         # Only the keys the secrets adapter reads; the rest of the settings are not known yet.
         known: dict[str, Any] = {"secrets_backend": backend, "secrets_dir": self._setting("secrets_dir")}
         partial = self.settings_cls.model_construct(**known)
-        store = spec.factory(partial)  # type: ignore[arg-type]
+        store = spec.factory(partial)
         found: dict[str, Any] = {}
         for name, field in self.settings_cls.model_fields.items():
             if is_secret_field(field) and name not in self.current_state:

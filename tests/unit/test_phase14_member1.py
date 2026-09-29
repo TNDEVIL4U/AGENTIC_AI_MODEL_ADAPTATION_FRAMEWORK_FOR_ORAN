@@ -20,6 +20,7 @@ from sklearn.linear_model import LogisticRegression
 from sqlalchemy import inspect as sa_inspect
 
 import oran_adapt.orchestrator.pipeline as pipeline_module
+from oran_adapt.adapters.deployment.alias import RegistryAliasDeployment
 from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import VersionEvaluation
@@ -54,6 +55,7 @@ from oran_adapt.db.models import (
     ModelVersionEvaluation,
 )
 from oran_adapt.orchestrator.jobs import submit_adaptation_job
+from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.promotion import promote_version
 
 FEATURES = ["prb_util", "rsrp"]
@@ -518,9 +520,13 @@ def test_promotion_refuses_a_version_whose_artifact_changed(
         session_factory, registry, migrated_settings, model_id="cell-e", name="cell_e"
     )
     registry.set_version_tags("cell_e", "2", {"artifact.sha256": "0" * 64})
+    deployer = Deployer(
+        RegistryAliasDeployment(registry, migrated_settings.live_alias),
+        backend="registry-alias", timeout_s=5, poll_s=0.01,
+    )
     with session_scope(session_factory) as session, pytest.raises(ArtifactIntegrityError):
         promote_version(
-            session, registry, model_id="cell-e", version="2", kind=PromotionKind.ROLLBACK,
+            session, registry, deployer=deployer, model_id="cell-e", version="2", kind=PromotionKind.ROLLBACK,
             live_alias=migrated_settings.live_alias, workdir=str(tmp_path / "w"),
         )
     assert registry.get_version_by_alias("cell_e", migrated_settings.live_alias) == "3"
@@ -528,7 +534,7 @@ def test_promotion_refuses_a_version_whose_artifact_changed(
     # Promoting what is already live is a recorded no-op.
     with session_scope(session_factory) as session:
         same = promote_version(
-            session, registry, model_id="cell-e", version="3", kind=PromotionKind.ROLLBACK,
+            session, registry, deployer=deployer, model_id="cell-e", version="3", kind=PromotionKind.ROLLBACK,
             live_alias=migrated_settings.live_alias, workdir=str(tmp_path / "w"),
         )
     assert same.status == "NO_CHANGE"

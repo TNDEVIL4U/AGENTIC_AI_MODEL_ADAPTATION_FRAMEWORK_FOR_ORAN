@@ -10,10 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
-
-if TYPE_CHECKING:
-    from oran_adapt.core.config import Settings
+from typing import Any, Generic, TypeVar
 
 T_co = TypeVar("T_co", covariant=True)
 
@@ -54,7 +51,10 @@ class Capability:
 
 @dataclass(frozen=True)
 class AdapterSpec(Generic[T_co]):
-    """An entry point's target: the descriptor plus a factory taking the validated settings."""
+    """An entry point's target: the descriptor plus a factory taking the validated settings.
+
+    Deployment adapters' factories also take the resolved model registry as a second argument
+    (``factory(settings, registry)``), because a serving system is fed from the registry."""
 
     capability: Capability
-    factory: Callable[[Settings], T_co]
+    factory: Callable[..., T_co]

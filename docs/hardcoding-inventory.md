@@ -161,11 +161,19 @@ Phase 9.
   implements (conformance check `aliases`), so they are no longer MLflow semantics. Moving them
   under deployment targets is Hardening Phase 3.
 
+## Hardening Phase 3 status
+
+**Closed:**
+
+| # | Now |
+|---|---|
+| C7 | What serves traffic is the deployment port's business (`DEPLOYMENT_BACKEND`), not an alias convention. `LIVE_ALIAS` / `CANDIDATE_ALIAS` remain the registry's record of which version was promoted. "Serving reads the live alias" is now just the default adapter, `registry-alias`, whose alias is its own key (`DEPLOYMENT_ALIAS`, falling back to `LIVE_ALIAS`, refused if it equals `CANDIDATE_ALIAS`). There is one deployment target per installation, not a list of `deployment.targets[]`. Several targets at once would be a new adapter (a fan-out like the registry `mirror`); none was asked for |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 |
-|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 |
-| D (infrastructure) | 8 | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 |
+|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 |
+| D (infrastructure) | 8 | 8 | 8 | 8 |

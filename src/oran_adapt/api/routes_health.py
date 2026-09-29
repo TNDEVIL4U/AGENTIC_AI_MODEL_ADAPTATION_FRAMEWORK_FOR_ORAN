@@ -23,10 +23,11 @@ def health() -> HealthResponse:
 @router.get("/ready", response_model=ReadyResponse)
 @router.get("/readiness", response_model=ReadyResponse)
 def ready(request: Request, response: Response) -> ReadyResponse:
-    """Readiness: PostgreSQL and MLflow must both be reachable."""
+    """Readiness: the database, the model registry and the serving system must be reachable."""
     checks = {
         "database": lambda: check_database(request.app.state.engine),
         "mlflow": request.app.state.registry.ping,
+        "deployment": request.app.state.deployer.port.ping,
     }
     components: list[ComponentHealth] = []
     for name, check in checks.items():

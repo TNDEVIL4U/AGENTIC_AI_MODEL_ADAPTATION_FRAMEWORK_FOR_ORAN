@@ -90,6 +90,12 @@ REGISTRATIONS = Counter("model_registrations_total", "Candidate model versions r
 PROMOTIONS = Counter(
     "model_promotions_total", "Live-alias moves applied, by kind (promotion, reuse, rollback).", ["kind"]
 )
+DEPLOYMENTS = Counter(
+    "model_deployments_total",
+    "Rollouts to the serving system (DEPLOYMENT_BACKEND), by outcome: ok (read back as serving) "
+    "or failed (previous version restored).",
+    ["backend", "outcome"],
+)
 JOB_TIMEOUTS = Counter(
     "job_timeouts_total",
     "Adaptation jobs recorded TIMED_OUT, by the stage their worker had reached when killed.",
@@ -104,6 +110,7 @@ _FORWARDED = (
     STRATEGY_SELECTED,
     REGISTRATIONS,
     PROMOTIONS,
+    DEPLOYMENTS,
     MODEL_REUSE,
     FINE_TUNE,
     RETRAIN,

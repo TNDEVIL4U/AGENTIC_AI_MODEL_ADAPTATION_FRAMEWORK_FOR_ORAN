@@ -11,15 +11,55 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
+@dataclass(frozen=True)
+class DeploymentTarget:
+    """One registered model version to put into service.
+
+    ``source`` is the registry's reference to the artifact (``ModelVersion.source``: an MLflow
+    URI, a model package ARN, a Vertex model resource), None when the registry has none.
+    ``artifact_dir`` is a local, checksum-verified copy of the artifact when the caller has one
+    (adapters that stage files into a model repository need it), None otherwise."""
+
+    model: str
+    version: str
+    source: str | None = None
+    artifact_dir: str | None = None
+
+
+@dataclass(frozen=True)
+class DeploymentState:
+    """What the serving system reports for one model, read back from the system itself.
+
+    ``version`` is the version it serves or is moving to (None: nothing deployed). ``ready``
+    means the system has settled at ``version``: every replica serves it. ``failed`` means the
+    system gave up on the last request (a failed rollout); ``detail`` says why, for operators.
+    """
+
+    model: str
+    version: str | None
+    ready: bool
+    failed: bool = False
+    detail: str = ""
+
+
 @runtime_checkable
 class DeploymentPort(Protocol):
-    """Where a model version serves traffic. ``current`` is None when nothing is deployed."""
+    """Where a model version serves traffic (docs/adapters/deployment.md).
 
-    def current(self, model: str) -> str | None: ...
+    ``deploy`` and ``restore`` return once the serving system has accepted the request, not
+    once it is serving: callers poll ``status`` until it reads back ready at the version asked
+    for (``oran_adapt.registry.deployment.Deployer``). From the moment ``deploy`` returns,
+    ``status`` must not report the old version as settled. Adapters raise
+    DeploymentUnavailableError when the system cannot be reached, DeploymentError when it
+    refuses the request, and ModelNotFoundError when the registry holds no such version."""
 
-    def deploy(self, model: str, version: str) -> None: ...
+    def ping(self) -> None: ...
 
-    def restore(self, model: str, previous: str | None) -> None:
+    def status(self, model: str) -> DeploymentState: ...
+
+    def deploy(self, target: DeploymentTarget) -> None: ...
+
+    def restore(self, model: str, previous: DeploymentTarget | None) -> None:
         """Put ``previous`` back (None = undeploy) after a failed or rolled-back deployment."""
         ...
 

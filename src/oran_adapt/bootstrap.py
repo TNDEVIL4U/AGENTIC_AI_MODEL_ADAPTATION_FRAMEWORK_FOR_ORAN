@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from oran_adapt import plugins
 from oran_adapt.llm.client import InstrumentedLlmClient
+from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.handlers import ModelHandlers
 
 if TYPE_CHECKING:
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
         ArtifactStorePort,
         AuthPort,
         CdcSourcePort,
+        DeploymentPort,
         JobExecutorPort,
         LLMPort,
         ModelHandlerPort,
@@ -44,6 +46,7 @@ def _make(port: str, settings: Settings, config_key: str) -> Any:
 class Container:
     settings: Settings
     registry: ModelRegistryPort
+    deployer: Deployer
     model_handler: ModelHandlerPort
     llm: LLMPort | None
     job_executor: JobExecutorPort
@@ -56,6 +59,20 @@ class Container:
 def build_registry(settings: Settings) -> ModelRegistryPort:
     registry: ModelRegistryPort = _make("registry", settings, "registry_backend")
     return registry
+
+
+def build_deployment(settings: Settings, registry: ModelRegistryPort) -> DeploymentPort:
+    """The serving system DEPLOYMENT_BACKEND names. Deployment adapters are built from the
+    settings and the registry (the default, registry-alias, serves by moving a registry alias;
+    the cloud adapters serve versions of their own registry)."""
+    spec = plugins.resolve("deployment", settings.deployment_backend,
+                           config_key="deployment_backend")
+    deployment = cast("DeploymentPort", spec.factory(settings, registry))
+    return deployment
+
+
+def build_deployer(settings: Settings, registry: ModelRegistryPort) -> Deployer:
+    return Deployer.from_settings(build_deployment(settings, registry), settings)
 
 
 def build_model_handler(settings: Settings) -> ModelHandlerPort:
@@ -110,9 +127,11 @@ def build_policy(settings: Settings) -> PolicyPort:
 
 
 def build_container(settings: Settings) -> Container:
+    registry = build_registry(settings)
     return Container(
         settings=settings,
-        registry=build_registry(settings),
+        registry=registry,
+        deployer=build_deployer(settings, registry),
         model_handler=build_model_handler(settings),
         llm=build_llm(settings),
         job_executor=build_job_executor(settings),

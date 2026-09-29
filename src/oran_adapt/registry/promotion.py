@@ -2,11 +2,14 @@
 rolling back. This is the only module that changes LIVE.
 
 Every move is recorded as a ModelPromotion row whose ``from_version`` is what LIVE pointed at
-before, so any move can be undone. A move is all-or-nothing across the database and MLflow: the
-row is flushed first, then the alias is set and read back, then the version status tags are
-updated and the transaction commits. If any step fails, the alias is put back to the previous
-version (or removed, if there was none) and the database transaction is rolled back, so LIVE
-never ends up pointing somewhere the history does not explain.
+before, so any move can be undone. A move is all-or-nothing across the database, the registry
+and the serving system: the row is flushed first, then the alias is set and read back, then the
+version is rolled out to the serving system (DEPLOYMENT_BACKEND) and read back from it
+(``registry.deployment.Deployer``), then the version status tags are updated and the
+transaction commits. If any step fails, the serving system and the alias are put back to the
+previous version (or cleared, if there was none) and the database transaction is rolled back,
+so LIVE never ends up pointing somewhere the history does not explain, and what serves traffic
+never differs from LIVE after a failed move.
 
 Integrity: before a version goes live its downloaded artifact is hashed and compared with the
 ``artifact.sha256`` tag written when it was registered. A mismatch refuses the move. A version
@@ -30,13 +33,15 @@ from oran_adapt.core.errors import (
     AdaptationError,
     ArtifactError,
     ConflictError,
+    DeploymentError,
     ModelNotFoundError,
     PromotionError,
 )
 from oran_adapt.core.integrity import check_size, sha256_path, verify_checksum
 from oran_adapt.core.logging import log_event
 from oran_adapt.db.models import ModelMetadata, ModelPromotion
-from oran_adapt.ports import ModelHandlerPort, ModelRegistryPort
+from oran_adapt.ports import DeploymentTarget, ModelHandlerPort, ModelRegistryPort
+from oran_adapt.registry.deployment import Deployer
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +120,20 @@ def verify_version_artifact(
     return local, digest
 
 
+def _serving_target(
+    registry: ModelRegistryPort, deployer: Deployer, name: str
+) -> DeploymentTarget | None:
+    """What the serving system serves now, as a target a failed rollout can restore."""
+    serving = deployer.serving(name)
+    if serving is None:
+        return None
+    try:
+        source = registry.get_version(name, serving).source
+    except ModelNotFoundError:
+        source = None  # served, but no longer (or never) in the registry: restore by version
+    return DeploymentTarget(model=name, version=serving, source=source)
+
+
 def _restore_alias(registry: ModelRegistryPort, name: str, alias: str, previous: str | None) -> None:
     try:
         if previous is None:
@@ -136,6 +155,7 @@ def promote_version(
     session: Session,
     registry: ModelRegistryPort,
     *,
+    deployer: Deployer,
     model_id: str,
     version: str,
     kind: PromotionKind,
@@ -150,9 +170,11 @@ def promote_version(
     """Point ``live_alias`` at ``version``. Idempotent: promoting the version that is already
     live changes nothing (status NO_CHANGE), and a repeated ``idempotency_key`` returns the first
     result. ``expected_live`` makes the move conditional on LIVE still being that version.
+    ``deployer`` rolls the version out to the serving system and reads it back.
 
     Raises ArtifactIntegrityError on a checksum mismatch, ConflictError when ``expected_live``
-    no longer holds, PromotionError when the alias move itself failed (LIVE restored)."""
+    no longer holds, PromotionError when the alias move or the rollout failed (LIVE and the
+    serving system restored)."""
     if idempotency_key:
         earlier = session.execute(
             select(ModelPromotion).where(ModelPromotion.idempotency_key == idempotency_key)
@@ -187,7 +209,13 @@ def promote_version(
         session.commit()
         return _result(row)
 
-    _, digest = verify_version_artifact(registry, name, version, workdir)
+    local, digest = verify_version_artifact(registry, name, version, workdir)
+    target = DeploymentTarget(
+        model=name,
+        version=version,
+        source=registry.get_version(name, version).source,
+        artifact_dir=local,
+    )
 
     row = ModelPromotion(
         model_id=model_id,
@@ -201,10 +229,12 @@ def promote_version(
         idempotency_key=idempotency_key,
         artifact_sha256=digest,
     )
-    alias_moved = False
+    alias_moved = rollout_started = deployed = False
+    serving_before: DeploymentTarget | None = None
     try:
         session.add(row)
         session.flush()
+        serving_before = _serving_target(registry, deployer, name)
         registry.set_alias(name, live_alias, version)
         alias_moved = True
         now_live = registry.get_version_by_alias(name, live_alias)
@@ -214,6 +244,9 @@ def promote_version(
                 expected=version,
                 actual=now_live,
             )
+        rollout_started = True
+        deployer.rollout(target, serving_before)
+        deployed = True
         status_tag = registry.artifact_policy.status_tag
         registry.set_version_tags(name, version, {status_tag: ModelVersionStatus.LIVE.value})
         if previous is not None:
@@ -227,6 +260,9 @@ def promote_version(
         session.commit()
     except Exception as exc:
         session.rollback()
+        # A DeploymentError from rollout has already restored the serving system.
+        if deployed or (rollout_started and not isinstance(exc, DeploymentError)):
+            deployer.revert(name, serving_before)
         if alias_moved:
             _restore_alias(registry, name, live_alias, previous)
         _audit_failed_move(
@@ -310,6 +346,7 @@ def rollback_model(
     registry: ModelRegistryPort,
     handler: ModelHandlerPort,
     *,
+    deployer: Deployer,
     model_id: str,
     live_alias: str,
     workdir: str,
@@ -352,6 +389,7 @@ def rollback_model(
     return promote_version(
         session,
         registry,
+        deployer=deployer,
         model_id=model_id,
         version=target_version,
         kind=PromotionKind.ROLLBACK,

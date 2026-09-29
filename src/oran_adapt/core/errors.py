@@ -104,6 +104,20 @@ class PromotionError(AdaptationError):
     code = "PROMOTION_FAILED"
 
 
+class DeploymentError(AdaptationError):
+    """A serving system refused a deployment, or did not read back as serving the version asked
+    for within DEPLOYMENT_TIMEOUT_S. ``restored`` in the context says whether the previous
+    version was put back and read back."""
+
+    code = "DEPLOYMENT_FAILED"
+
+
+class DeploymentUnavailableError(AdaptationError):
+    """The serving system (or its control plane) cannot be reached."""
+
+    code = "DEPLOYMENT_UNAVAILABLE"
+
+
 class CdcUnavailableError(AdaptationError):
     """The CDC source (Kafka, or its client library) cannot be reached. Nothing was consumed
     and no offset moved, so the next run picks up where the last one stopped."""

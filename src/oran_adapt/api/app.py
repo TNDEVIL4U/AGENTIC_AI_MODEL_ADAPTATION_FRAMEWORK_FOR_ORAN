@@ -22,6 +22,7 @@ from oran_adapt.api.routes_models import router as models_router
 from oran_adapt.api.security import READ, require
 from oran_adapt.bootstrap import (
     build_auth,
+    build_deployer,
     build_llm,
     build_model_handler,
     build_policy,
@@ -149,6 +150,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = create_db_engine(settings.database_url)
     app.state.session_factory = make_session_factory(app.state.engine)
     app.state.registry = build_registry(settings)
+    app.state.deployer = build_deployer(settings, app.state.registry)
     app.state.model_handler = build_model_handler(settings)
     app.state.llm_client = build_llm(settings)
     app.state.auth = build_auth(settings)
@@ -201,6 +203,7 @@ def _status_for(exc: AdaptationError) -> int:
         "ARTIFACT_INTEGRITY_FAILED": 422,
         "INVALID_REFERENCE": 422,
         "MLFLOW_UNAVAILABLE": 503,
+        "DEPLOYMENT_UNAVAILABLE": 503,
         "DATABASE_UNAVAILABLE": 503,
         "JOB_TIMEOUT": 504,
     }.get(exc.code, 500)

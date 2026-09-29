@@ -20,6 +20,7 @@ is the record of *why* each default was chosen.
 | `auth` | `AUTH_BACKEND` | `api-key` | none yet | Is there an identity provider (OIDC, mTLS) the API must trust? |
 | `policy` | `POLICY_BACKEND` | `static-rbac` (roles from `POLICY_ROLES`) | none yet | Does authorization come from an external policy engine (OPA)? |
 | `model_handler` | `MODEL_FORMAT` (saving; loading uses whichever installed handler recognises the artifact) | `mlflow-flavors` | `native` (skops / UBJSON / torch files with a manifest; no MLflow needed) | Must serving read MLflow's model format, or the frameworks' own files? |
+| `deployment` | `DEPLOYMENT_BACKEND` | `registry-alias` (serving loads `model://<name>@<LIVE_ALIAS>`, the pre-Phase-3 behaviour) | `webhook`, `bentoml`, `gitops`, `triton`, `kserve`, `seldon`, `k8s`, `sagemaker`, `vertex` | What serves models in the RIC: a model server (Triton, BentoML), Kubernetes (KServe, Seldon, plain Deployments), GitOps, or a cloud endpoint? See "Deployment adapters" below. |
 
 ## Single-adapter ports
 
@@ -39,7 +40,8 @@ them yet: the code they describe still calls the datastore and the registry dire
 | Port | Today | Scheduled |
 |---|---|---|
 | `dataset` | `adaptation.data.load_data_version_frame` reads the local datastore | Hardening Phase 5 (data access by reference) |
-| `deployment` | "deployed" means the registry's LIVE alias (`LIVE_ALIAS`) | Hardening Phase 3 (deployment and serving propagation) |
+
+`deployment` left this list in Phase 3 and now has ten adapters.
 
 ## Registry adapters
 
@@ -63,6 +65,28 @@ Defaults and assumptions, with the key that changes each:
 | `ENVIRONMENT=production` requires `DATABASE_URL`, `ARTIFACT_WORKDIR` and the selected adapters' `production_keys`: `MLFLOW_TRACKING_URI` for `mlflow`; `REGISTRY_FS_ROOT` and `ARTIFACT_STORE_ROOT` for `filesystem` on the filesystem store. A `mirror`'s primary and replica are not expanded: set their storage keys explicitly. | Production must not write to a development path by default. | `ENVIRONMENT` |
 | An adapter shipped outside this repository cannot add fields to the core `Settings`. It reads its own prefixed keys with its own settings class, validated when it is built at startup (see `templates/registry-adapter`), so the core's config lint does not see them. | `Settings` is a closed, typed schema. | the adapter's own env prefix |
 | A `native` torch artifact is a pickle (`torch.save` of the module), so loading it runs code from the artifact; load only artifacts from a registry you trust. | torch has no safe whole-module format. | `MODEL_FORMAT` |
+
+## Deployment adapters
+
+Phase 3 put serving behind `DeploymentPort`. Every promotion and rollback rolls the version out
+and reads it back from the serving system (`registry.deployment.Deployer`); when that fails, the
+previous version is restored in the registry alias and in the serving system alike.
+`oran_adapt.conformance.deployment` is the behaviour each adapter must show, and
+`docs/adapters/deployment.md` explains the rules, the webhook contract and each adapter's keys.
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| The default stays `registry-alias` on `LIVE_ALIAS`: "deployed" means "live", as before Phase 3. | No serving system has been named; existing installations must not change behaviour. | `DEPLOYMENT_BACKEND`, `DEPLOYMENT_ALIAS` |
+| A rollout must read back within 10 minutes, polled every 5 s; then the previous version is restored. | Cold starts on Kubernetes and cloud endpoints take minutes; a model server load takes seconds. | `DEPLOYMENT_TIMEOUT_S`, `DEPLOYMENT_POLL_S` |
+| A serving system that settles at a version other than the one asked for (for example SageMaker's own automatic rollback) counts as a failed rollout. | Only the requested version counts as deployed. | none |
+| If the restore after a failed rollout does not read back either, the error says so (`restored: false`) and nothing retries on its own. | A second automatic move could make things worse; an operator decides. | none |
+| `gitops` commits only the manifest path in a checkout owned by the adapter, and reads status from the serving system (`GITOPS_STATUS_URL`), never from git. | A commit is not a deployment. | `GITOPS_*` |
+| `triton` stages artifacts into a repository directory the server also sees (shared volume), and runs in explicit model-control mode. The framework does not convert models to a Triton layout. | Triton loads only from its model repository. | `TRITON_REPOSITORY`, `TRITON_BASE_CONFIG` |
+| The Kubernetes adapters use plain REST with a bearer token (no Kubernetes SDK) and trust readiness only once `observedGeneration` has caught up. | Keeps the dependency surface small; stale status must not pass as the new version. | `K8S_*`, `KSERVE_*`, `SELDON_*` |
+| `sagemaker` and `vertex` deploy only versions of their own cloud registry, so they require `REGISTRY_BACKEND` (or a mirror's primary) to match. | The endpoint needs a model package or Vertex model to serve. | `REGISTRY_BACKEND` |
+| `webhook`, `bentoml` and `triton` were tested only against the stdlib stub in `tests/unit/serving_stub.py`; `gitops` against a real git repository and a controller emulator; `kserve`, `seldon`, `k8s`, `sagemaker` and `vertex` only against the API emulators in `tests/unit/deployment_emulators.py`. **None is verified against the real system**; `templates/bentoml-service` has never run under BentoML. The live conformance run is a heavy test that needs a real endpoint. | No cluster, cloud account or model server in the local gate. | the adapter's keys |
 
 ## Not yet behind a port
 

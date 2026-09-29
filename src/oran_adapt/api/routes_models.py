@@ -218,6 +218,7 @@ def rollback(
                 session,
                 state.registry,
                 state.model_handler,
+                deployer=state.deployer,
                 model_id=model_id,
                 live_alias=settings.live_alias,
                 workdir=os.path.join(settings.artifact_workdir, holder),

@@ -43,7 +43,7 @@ def test_ready_ok_when_db_and_mlflow_reachable(client) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ready"] is True
-    assert {c["name"] for c in body["components"]} == {"database", "mlflow"}
+    assert {c["name"] for c in body["components"]} == {"database", "mlflow", "deployment"}
 
 
 def test_ready_reports_503_when_database_down(migrated_settings) -> None:

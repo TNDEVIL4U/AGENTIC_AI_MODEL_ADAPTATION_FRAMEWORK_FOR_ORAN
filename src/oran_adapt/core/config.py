@@ -35,6 +35,7 @@ from oran_adapt.core.frameworks import ADAPTABLE_FRAMEWORKS
 # Adapter selector key -> port. Each selected adapter's Capability.required_keys must be set.
 ADAPTER_SELECTORS: dict[str, str] = {
     "registry_backend": "registry",
+    "deployment_backend": "deployment",
     "model_format": "model_handler",
     "artifact_store_backend": "artifact_store",
     "llm_provider": "llm",
@@ -138,6 +139,79 @@ class Settings(BaseSettings):
     # Attempts at a conditional (generation-matched) write of a version's tag file when another
     # writer changed it in between.
     vertex_tag_update_attempts: int = Field(5, ge=1)
+    # Deployment adapter (oran_adapt.deployment): where a promoted version serves traffic. Every
+    # promotion and rollback rolls the version out and reads it back from the serving system,
+    # polling every DEPLOYMENT_POLL_S for at most DEPLOYMENT_TIMEOUT_S, and restores the
+    # previous version when that fails.
+    deployment_backend: str = "registry-alias"
+    deployment_timeout_s: float = Field(600.0, gt=0)
+    deployment_poll_s: float = Field(5.0, gt=0)
+    # Per-request timeout of the HTTP-based deployment adapters.
+    deployment_http_timeout_s: float = Field(30.0, gt=0)
+    # "registry-alias": the alias that marks the served version; None means LIVE_ALIAS itself
+    # (serving reads the live alias, so promotion and deployment are one move).
+    deployment_alias: str | None = None
+    # "webhook": POST <url>/deploy and GET <url>/status (docs/adapters/deployment.md).
+    deployment_webhook_url: str | None = None
+    deployment_webhook_token: SecretStr | None = None
+    # "bentoml": a BentoML service built from templates/bentoml-service (same contract, /oran).
+    bentoml_url: str | None = None
+    bentoml_token: SecretStr | None = None
+    # "gitops": commit a manifest per model to a git checkout (and push); the serving system,
+    # synced from git by Argo CD / Flux, is read back through GITOPS_STATUS_URL (webhook status
+    # contract). The manifest path takes {model} and {name}.
+    gitops_repo_dir: str | None = None
+    gitops_manifest_path: str = "deployments/{name}.json"
+    # A file whose text is the manifest, with $model, $name, $version and $source substituted;
+    # None writes a JSON document with those fields.
+    gitops_manifest_template: str | None = None
+    gitops_push: bool = False
+    gitops_remote: str = "origin"
+    gitops_branch: str | None = None  # None: the checkout's current branch
+    gitops_status_url: str | None = None
+    gitops_status_token: SecretStr | None = None
+    gitops_author_name: str = "oran-adapt"
+    gitops_author_email: str = "oran-adapt@localhost"
+    gitops_git_timeout_s: float = Field(60.0, gt=0)
+    # Kubernetes API (adapters "kserve", "seldon", "k8s"). The token is K8S_TOKEN, or read from
+    # K8S_TOKEN_FILE on every request (projected service-account tokens rotate); with neither,
+    # requests carry no credentials (kubectl proxy).
+    k8s_api_url: str | None = None
+    k8s_namespace: str = "default"
+    k8s_token: SecretStr | None = None
+    k8s_token_file: str | None = None
+    k8s_ca_file: str | None = None  # None: the system trust store
+    # Kubernetes object names are the model name made DNS-1123-safe, after this prefix.
+    k8s_name_prefix: str = ""
+    # "kserve": an InferenceService per model; storageUri from this template.
+    kserve_storage_uri_template: str | None = None
+    kserve_model_format: str = "mlflow"
+    # "seldon": a Seldon Core v2 Model per model; storageUri from this template.
+    seldon_storage_uri_template: str | None = None
+    seldon_requirements: list[str] = ["mlflow"]
+    # "k8s": an existing Deployment per model; the version is set as an env var of the pod
+    # template (K8S_MODEL_ENV = K8S_MODEL_URI_TEMPLATE) and read back from the rollout status.
+    k8s_model_env: str = "MODEL_URI"
+    k8s_model_uri_template: str = "model://{model}/{version}"
+    k8s_container: str | None = None  # None: the pod's only container
+    # "triton": NVIDIA Triton (or any server with the KServe v2 repository extension) in
+    # explicit model-control mode; artifacts are staged into TRITON_REPOSITORY/<name>/<version>.
+    triton_url: str | None = None
+    triton_repository: str | None = None
+    # A config.pbtxt to start each model's config from (backend, inputs...); the version
+    # policy is appended. None leaves the rest to Triton's auto-complete.
+    triton_base_config: str | None = None
+    # "sagemaker": a real-time endpoint per model, serving model packages of the sagemaker
+    # registry (region and endpoint override as above).
+    sagemaker_deploy_role_arn: str | None = None
+    sagemaker_instance_type: str = "ml.m5.large"
+    sagemaker_instance_count: int = Field(1, ge=1)
+    sagemaker_endpoint_prefix: str = ""
+    # "vertex": a Vertex AI endpoint per model, serving versions of the vertex registry.
+    vertex_machine_type: str = "n1-standard-2"
+    vertex_min_replicas: int = Field(1, ge=1)
+    vertex_max_replicas: int = Field(1, ge=1)
+    vertex_endpoint_prefix: str = ""
     # MLflow client HTTP behaviour, applied to MLFLOW_HTTP_REQUEST_* unless those are set.
     mlflow_http_max_retries: int = Field(1, ge=0)
     mlflow_http_backoff_factor: float = Field(0.0, ge=0)
