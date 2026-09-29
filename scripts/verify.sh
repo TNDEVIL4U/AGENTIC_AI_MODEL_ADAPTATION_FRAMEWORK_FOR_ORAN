@@ -43,7 +43,7 @@ case "$phase" in
     1) scope="core api ports adapters plugins" ;;        # hexagonal core and configuration
     2) scope="registry adapters ports bootstrap" ;;       # model registry abstraction
     3) scope="registry orchestrator adapters ports" ;;    # deployment and serving propagation
-    4) scope="orchestrator adapters api" ;;               # outbound notifications
+    4) scope="orchestrator adapters api notifications" ;; # outbound notifications
     5) scope="datastore cdc analysis adaptation" ;;       # data access by reference
     6) scope="orchestrator api" ;;                        # real execution layer
     7) scope="validation registry orchestrator" ;;        # validation gate, progressive delivery

@@ -13,7 +13,7 @@ is the record of *why* each default was chosen.
 | `llm` | `LLM_PROVIDER` | `none` (deterministic path, no LLM) | `anthropic`, `gemini` | Which LLM provider, if any, is the operator allowed to call from the RIC environment? |
 | `cdc_source` | `CDC_MODE` | `disabled` | `polling` (DB trigger + outbox table), `kafka` | Is a Kafka/Debezium pipeline available, or only the database itself? |
 | `job_executor` | `JOB_EXECUTION_MODE` | `process` (hard timeout, isolated) | `thread` (tests, debugging) | Will jobs move to a queue or cluster executor (Celery, Kubernetes Jobs)? |
-| `notification` | `NOTIFICATION_BACKEND` | `log` | `webhook` | Which channel does the operations team watch? |
+| `notification` | `NOTIFICATION_BACKEND` (comma-separated: several sinks at once, or `none`) | `log` | `webhook`, `slack`, `pagerduty`, `email`, `kafka`, `sqs`, `sns`, `pubsub`, `nats` | Which channel does the operations team watch, and which system consumes job events? See "Notification adapters" below. |
 | `secrets` | `SECRETS_BACKEND` | `env` | `file` (mounted secret files, e.g. Kubernetes/Docker secrets) | Is a secrets manager (Vault, a cloud KMS) mandated? |
 | `registry` | `REGISTRY_BACKEND` | `mlflow` (standing decision: MLflow with `--serve-artifacts`) | `filesystem`, `mirror`, `sagemaker`, `vertex` | Will the deployment keep MLflow, or register models in a cloud registry (SageMaker, Vertex)? See "Registry adapters" below. |
 | `artifact_store` | `ARTIFACT_STORE_BACKEND` (used by the `filesystem` registry only) | `filesystem` (`ARTIFACT_STORE_ROOT`) | `fsspec` (`ARTIFACT_STORE_URL`: `s3://`, `gs://`, `az://`, ... with the matching fsspec driver) | Is there a shared volume, or must artifacts go to an object store? |
@@ -87,6 +87,31 @@ Defaults and assumptions, with the key that changes each:
 | The Kubernetes adapters use plain REST with a bearer token (no Kubernetes SDK) and trust readiness only once `observedGeneration` has caught up. | Keeps the dependency surface small; stale status must not pass as the new version. | `K8S_*`, `KSERVE_*`, `SELDON_*` |
 | `sagemaker` and `vertex` deploy only versions of their own cloud registry, so they require `REGISTRY_BACKEND` (or a mirror's primary) to match. | The endpoint needs a model package or Vertex model to serve. | `REGISTRY_BACKEND` |
 | `webhook`, `bentoml` and `triton` were tested only against the stdlib stub in `tests/unit/serving_stub.py`; `gitops` against a real git repository and a controller emulator; `kserve`, `seldon`, `k8s`, `sagemaker` and `vertex` only against the API emulators in `tests/unit/deployment_emulators.py`. **None is verified against the real system**; `templates/bentoml-service` has never run under BentoML. The live conformance run is a heavy test that needs a real endpoint. | No cluster, cloud account or model server in the local gate. | the adapter's keys |
+
+## Notification adapters
+
+Phase 4 made every job state transition an event in a durable outbox, written in the
+transition's own transaction, and delivered at least once to each sink `NOTIFICATION_BACKEND`
+names: signed (Standard Webhooks HMAC, with key rotation), retried with backoff, behind a
+per-sink circuit breaker, and dead-lettered for `GET /api/v1/deliveries` and redrive.
+`oran_adapt.conformance.notification` is the behaviour each sink must show, and
+`docs/adapters/notification.md` explains the envelope, signature verification and each
+adapter's keys.
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| The default sink stays `log`: events are written and logged, nothing leaves the host. | No channel has been named; existing installations must not start calling out. | `NOTIFICATION_BACKEND` |
+| The dispatcher runs inside the API process. | One process to operate; a separate `oran-adapt notifications dispatch` process is supported for larger installations. | `NOTIFICATION_DISPATCH_ENABLED` |
+| Delivery is at least once, never exactly once; receivers deduplicate on the event id (`webhook-id`). | Exactly once is impossible across a crash between "sent" and "recorded". | none |
+| 8 attempts, backoff 2 s doubling to 10 min with +/-20% jitter, then dead-letter. | About half an hour of retries rides out a receiver restart without flooding it. | `NOTIFICATION_MAX_ATTEMPTS`, `NOTIFICATION_BACKOFF_*` |
+| 5 consecutive failures open a sink's circuit for 60 s. | A dead sink must not burn every delivery's attempts, nor slow the other sinks. | `NOTIFICATION_BREAKER_*` |
+| A claimed delivery is re-claimable after 60 s. | Longer than the 10 s sink timeout, so a slow send is never sent twice concurrently. | `NOTIFICATION_LEASE_S`, `NOTIFICATION_TIMEOUT_S` |
+| PagerDuty gets only failures, timeouts and rollbacks; every other sink gets every transition. | Paging on each intermediate state would train people to ignore pages. | `NOTIFICATION_SINK_EVENTS` |
+| Production refuses a `webhook` sink without signing keys; other sinks rely on their own authentication (routing keys, broker credentials, IAM). | An unsigned webhook can be forged by anyone who finds the URL. | `NOTIFICATION_SIGNING_KEYS` |
+| Only job state transitions are events. Promotions and manual rollbacks (`POST /models/{id}/rollback`) outside a job are not yet. | The finding asked for job transitions; model-level events need their own type names. | none (a later phase) |
+| `webhook`, `slack`, `pagerduty` and `pubsub` were tested only against a local HTTP receiver, `nats` against a local server speaking the NATS protocol, and `email`, `kafka`, `sqs` and `sns` against client doubles in `tests/unit/notification_doubles.py`. **None is verified against the real service.** | No broker, cloud account, Slack workspace or PagerDuty service in the local gate. | the adapter's keys |
 
 ## Not yet behind a port
 

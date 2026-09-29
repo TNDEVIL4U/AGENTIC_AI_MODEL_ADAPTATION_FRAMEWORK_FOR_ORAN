@@ -38,8 +38,13 @@ VENDOR_SDKS = frozenset(
 # SDK -> the adapter packages / modules (relative to oran_adapt) that alone may import it.
 SDK_HOMES: dict[str, tuple[str, ...]] = {
     "mlflow": ("adapters/registry/mlflow",),
-    "boto3": ("adapters/registry/sagemaker.py", "adapters/deployment/sagemaker.py"),
-    "botocore": ("adapters/registry/sagemaker.py",),
+    "boto3": (
+        "adapters/registry/sagemaker.py",
+        "adapters/deployment/sagemaker.py",
+        "adapters/notify_brokers.py",
+    ),
+    "botocore": ("adapters/registry/sagemaker.py", "adapters/notify_brokers.py"),
+    "confluent_kafka": ("adapters/kafka_cdc.py", "adapters/notify_brokers.py"),
     "google.auth": ("adapters/registry/vertex.py",),
 }
 

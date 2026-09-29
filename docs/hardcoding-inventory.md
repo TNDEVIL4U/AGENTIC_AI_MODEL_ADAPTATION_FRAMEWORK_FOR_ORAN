@@ -169,11 +169,27 @@ Phase 9.
 |---|---|
 | C7 | What serves traffic is the deployment port's business (`DEPLOYMENT_BACKEND`), not an alias convention. `LIVE_ALIAS` / `CANDIDATE_ALIAS` remain the registry's record of which version was promoted. "Serving reads the live alias" is now just the default adapter, `registry-alias`, whose alias is its own key (`DEPLOYMENT_ALIAS`, falling back to `LIVE_ALIAS`, refused if it equals `CANDIDATE_ALIAS`). There is one deployment target per installation, not a list of `deployment.targets[]`. Several targets at once would be a new adapter (a fan-out like the registry `mirror`); none was asked for |
 
+## Hardening Phase 4 status
+
+No baseline item was open in this area: there were no outbound notifications to hardcode. The
+new code (`notifications/`, `adapters/notify*.py`) takes every sink address, credential,
+timeout, retry, backoff, breaker, lease, batch and event-routing value from `NOTIFICATION_*`
+keys (`docs/adapters/notification.md`, "Configuration"). What is still a literal, and why:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `adapters/notify_brokers.py` (`NatsSink`) | port `4222` when `NOTIFICATION_NATS_URL` has none | the NATS protocol's registered default port; set a port in the URL to change it |
+| `adapters/notify.py` (`PagerDutySink.payload`) | summary cut to 1024 characters | PagerDuty Events API v2 limit on `payload.summary` |
+| `adapters/notify.py` (`is_retryable_status`) | 5xx, 408, 425, 429 retryable | HTTP semantics of "try again later" |
+| `notifications/dispatcher.py` | `leased_by` cut to 100 characters; `last_error` to 2000 | the `leased_by` column width; a bound on stored error text |
+| `adapters/notify_email.py` | subject cut to 200 characters | mail clients truncate long subjects; the full text is in the body |
+| `notifications/service.py` | at most 100 delivery ids in one redrive audit row | a bound on the audit row's size (the count is always recorded) |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 |
-|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 |
-| D (infrastructure) | 8 | 8 | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 |
+|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 |

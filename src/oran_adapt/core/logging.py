@@ -10,7 +10,7 @@ from oran_adapt.core.correlation import CorrelationIdFilter
 
 CONTEXT_FIELDS = (
     "correlation_id", "adaptation_job_id", "model_id", "model_version", "strategy",
-    "component", "status", "error",
+    "component", "status", "error", "event_id", "event_type", "sink", "delivery_id",
 )
 
 

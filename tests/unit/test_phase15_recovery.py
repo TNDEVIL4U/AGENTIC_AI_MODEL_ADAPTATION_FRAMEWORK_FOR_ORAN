@@ -75,7 +75,8 @@ def test_after_a_restart_the_orphaned_job_is_failed_and_the_model_runs_again(
 
     # A worker of the crashed job that is somehow still alive cannot move it any further.
     with pytest.raises(InvalidTransitionError):
-        _transition(session_factory, "crashed-job", to_status=JobStatus.COMPLETED)
+        _transition(session_factory, "crashed-job", settings=migrated_settings,
+                    to_status=JobStatus.COMPLETED)
 
     job = client.get("/api/v1/adaptation/jobs/crashed-job")
     assert job.status_code == 200 and job.json()["status"] == JobStatus.FAILED

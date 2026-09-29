@@ -15,6 +15,9 @@ the same database / MLflow registry the API uses (configured through the usual s
     python -m oran_adapt.cli cdc run --mode polling --once
     python -m oran_adapt.cli cdc materialize --dataset kpi
     python -m oran_adapt.cli data current --model-id m1
+    python -m oran_adapt.cli notifications dispatch
+    python -m oran_adapt.cli notifications list --status DEAD
+    python -m oran_adapt.cli notifications redrive --sink webhook
 
 ``--model-file`` is loaded with joblib (i.e. unpickled): only pass files you trust.
 """
@@ -153,6 +156,61 @@ def _cmd_cdc_materialize(args, settings: Settings) -> Any:
         if info is None:
             return {"dataset_id": args.dataset, "materialized": False, "reason": "no pending events"}
         return {"materialized": True, **info.as_dict()}
+
+
+def _cmd_notifications_dispatch(args, settings: Settings) -> Any:
+    """Deliver the outbox from this process (beside, or instead of, the API's dispatcher)."""
+    import threading
+
+    from oran_adapt.bootstrap import build_notifiers
+    from oran_adapt.notifications.dispatcher import Dispatcher
+
+    sinks = build_notifiers(settings)
+    if not sinks:
+        raise ConfigurationError(
+            "NOTIFICATION_BACKEND=none: there is no sink to deliver to",
+            key="NOTIFICATION_BACKEND",
+        )
+    dispatcher = Dispatcher(_session_factory(settings), sinks, settings)
+    if args.once:
+        return {"worker_id": dispatcher.worker_id,
+                "processed": dispatcher.drain(max_rounds=args.max_rounds)}
+    stop = threading.Event()
+    try:
+        dispatcher.run_forever(stop)
+    except KeyboardInterrupt:
+        stop.set()
+    return {"worker_id": dispatcher.worker_id, "stopped": True}
+
+
+def _cmd_notifications_list(args, settings: Settings) -> Any:
+    from oran_adapt.db.base import session_scope
+    from oran_adapt.notifications.service import get_delivery, list_deliveries
+
+    with session_scope(_session_factory(settings)) as session:
+        if args.id is not None:
+            return get_delivery(session, args.id)
+        return list_deliveries(
+            session, limit=args.limit or settings.api_pagination_default_limit,
+            status=args.status, sink=args.sink, event_type=args.event_type,
+            subject=args.subject,
+        )
+
+
+def _cmd_notifications_redrive(args, settings: Settings) -> Any:
+    import getpass
+
+    from oran_adapt.db.base import session_scope
+    from oran_adapt.notifications.service import redrive, redrive_dead
+
+    actor = f"cli:{getpass.getuser()}"
+    with session_scope(_session_factory(settings)) as session:
+        if args.id is not None:
+            return redrive(session, args.id, actor=actor)
+        return redrive_dead(
+            session, actor=actor, limit=args.limit or settings.api_pagination_default_limit,
+            sink=args.sink, event_type=args.event_type, subject=args.subject,
+        )
 
 
 def _cmd_model_onboard(args, settings: Settings) -> Any:
@@ -341,6 +399,26 @@ def build_parser() -> argparse.ArgumentParser:
     c = cdc.add_parser("materialize", help="fold pending CDC events into a new data version")
     c.add_argument("--dataset", required=True)
     c.set_defaults(fn=_cmd_cdc_materialize)
+
+    notes = top.add_parser("notifications").add_subparsers(dest="cmd", required=True)
+    c = notes.add_parser("dispatch", help="deliver the notification outbox to the sinks")
+    c.add_argument("--once", action="store_true", help="drain what is due now and exit")
+    c.add_argument("--max-rounds", type=int, default=100,
+                   help="with --once: stop after this many polls")
+    c.set_defaults(fn=_cmd_notifications_dispatch)
+    for name, fn, text in (
+        ("list", _cmd_notifications_list, "show deliveries (newest first) or one by --id"),
+        ("redrive", _cmd_notifications_redrive, "re-queue DEAD deliveries (one by --id)"),
+    ):
+        c = notes.add_parser(name, help=text)
+        c.add_argument("--id", type=int)
+        c.add_argument("--sink")
+        c.add_argument("--event-type")
+        c.add_argument("--subject", help="the job id")
+        c.add_argument("--limit", type=int)
+        if name == "list":
+            c.add_argument("--status", choices=["PENDING", "DELIVERED", "DEAD"])
+        c.set_defaults(fn=fn)
 
     model = top.add_parser("model").add_subparsers(dest="cmd", required=True)
     c = model.add_parser("onboard", help="register a trusted local joblib model + training data")

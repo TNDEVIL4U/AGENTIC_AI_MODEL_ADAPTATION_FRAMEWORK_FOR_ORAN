@@ -47,7 +47,10 @@ ADAPTER_SELECTORS: dict[str, str] = {
     "secrets_backend": "secrets",
 }
 # Selector values that mean "this port is switched off" rather than naming an adapter.
-DISABLED = {"llm_provider": "none", "cdc_mode": "disabled"}
+DISABLED = {"llm_provider": "none", "cdc_mode": "disabled", "notification_backend": "none"}
+# Selectors that take a comma-separated list of adapters, all of them in use at once (every
+# notification sink named receives every event its filter lets through).
+MULTI_SELECTORS = frozenset({"notification_backend"})
 # Keys a production deployment must set explicitly (a default would point at a local file).
 # Each selected adapter adds its own storage keys (Capability.production_keys).
 PRODUCTION_REQUIRED = ("database_url", "artifact_workdir")
@@ -56,6 +59,17 @@ PRODUCTION_REQUIRED = ("database_url", "artifact_workdir")
 SUBORDINATE_SELECTORS = frozenset({"artifact_store_backend"})
 
 _ALL_ROLES = ["ADMIN", "OPERATOR", "ML_ENGINEER", "READ_ONLY"]
+
+
+def selected_adapters(settings: Any, selector: str) -> list[str]:
+    """The adapter names ``selector`` selects: none when it holds its DISABLED value, every
+    comma-separated name for a MULTI_SELECTORS key, otherwise the one name it holds."""
+    value = str(getattr(settings, selector))
+    if DISABLED.get(selector) == value:
+        return []
+    if selector in MULTI_SELECTORS:
+        return list(dict.fromkeys(n.strip() for n in value.split(",") if n.strip()))
+    return [value]
 
 
 class Settings(BaseSettings):
@@ -382,10 +396,76 @@ class Settings(BaseSettings):
         }
     )
 
-    # Notifications on job outcomes (oran_adapt.notification).
-    notification_backend: str = "log"
+    # Outbound notifications (oran_adapt.notifications, docs/adapters/notification.md). Every
+    # job state transition is written to a durable outbox in the transaction that makes it; a
+    # dispatcher delivers it to each sink NOTIFICATION_BACKEND names (comma-separated, or
+    # "none"), at least once, retrying with exponential backoff and dead-lettering after
+    # notification_max_attempts. GET /api/v1/deliveries lists deliveries; redrive re-queues.
+    notification_backend: str = Field("log", min_length=1)
+    # Event types each sink receives (sink -> short types such as "job.failed"); a sink not
+    # listed receives every event.
+    notification_sink_events: dict[str, list[str]] = Field(
+        default_factory=lambda: {"pagerduty": ["job.failed", "job.timed_out", "job.rolled_back"]}
+    )
+    notification_source: str = Field("oran-adapt", min_length=1)  # CloudEvents "source"
+    notification_event_type_prefix: str = "oran.adapt."  # CloudEvents "type" = prefix + type
+    # Run the dispatcher inside the API process; off when a separate
+    # `oran-adapt notifications dispatch` process delivers instead.
+    notification_dispatch_enabled: bool = True
+    notification_dispatch_interval_s: float = Field(1.0, gt=0)  # idle wait between polls
+    notification_dispatch_batch: int = Field(50, ge=1)  # deliveries claimed per poll
+    # A claimed delivery becomes claimable again once its lease runs out (its dispatcher died
+    # mid-send); keep it longer than any sink call can take.
+    notification_lease_s: float = Field(60.0, gt=0)
+    notification_max_attempts: int = Field(8, ge=1)  # then the delivery is dead-lettered
+    notification_backoff_initial_s: float = Field(2.0, gt=0)
+    notification_backoff_max_s: float = Field(600.0, gt=0)
+    notification_backoff_jitter: float = Field(0.2, ge=0, le=1)  # +/- this fraction
+    # Consecutive failures that open a sink's circuit; while open its deliveries wait
+    # notification_breaker_reset_s, then one trial delivery decides whether it closes.
+    notification_breaker_failures: int = Field(5, ge=1)
+    notification_breaker_reset_s: float = Field(60.0, gt=0)
+    notification_timeout_s: float = Field(10.0, gt=0)  # per sink call
+    # HMAC-SHA256 signing keys (Standard Webhooks), comma-separated "whsec_<base64>" or raw
+    # secrets. Every key signs each message, so rotating is: add the new key, let receivers
+    # accept it, remove the old one. Required in production for the webhook sink.
+    notification_signing_keys: SecretStr | None = None
+    notification_signing_min_key_bytes: int = Field(32, ge=16)
+    # webhook: a signed CloudEvents JSON POST.
     notification_webhook_url: str | None = None
-    notification_webhook_timeout_s: float = Field(5.0, gt=0)
+    # slack: an incoming-webhook URL (the URL is the credential).
+    notification_slack_webhook_url: SecretStr | None = None
+    # pagerduty: Events API v2.
+    notification_pagerduty_routing_key: SecretStr | None = None
+    notification_pagerduty_url: str = Field(
+        "https://events.pagerduty.com/v2/enqueue", min_length=1
+    )
+    notification_pagerduty_severity: Literal["critical", "error", "warning", "info"] = "error"
+    # email: SMTP submission.
+    notification_smtp_host: str | None = None
+    notification_smtp_port: int = Field(587, ge=1, le=65535)
+    notification_smtp_starttls: bool = True
+    notification_smtp_username: str | None = None
+    notification_smtp_password: SecretStr | None = None
+    notification_email_from: str | None = None
+    notification_email_to: list[str] = Field(default_factory=list)
+    # kafka: one record per event, keyed by the job id (brokers: KAFKA_BOOTSTRAP_SERVERS).
+    notification_kafka_topic: str | None = None
+    # sqs / sns (region and endpoint shared; credentials from the AWS default chain).
+    notification_sqs_queue_url: str | None = None
+    notification_sns_topic_arn: str | None = None
+    notification_aws_region: str | None = None
+    notification_aws_endpoint_url: str | None = None
+    # pubsub: Google Pub/Sub REST publish; credentials "adc" (application default) or "none"
+    # (an emulator).
+    notification_pubsub_project: str | None = None
+    notification_pubsub_topic: str | None = None
+    notification_pubsub_endpoint: str = Field("https://pubsub.googleapis.com", min_length=1)
+    notification_pubsub_credentials: Literal["adc", "none"] = "adc"
+    # nats: core NATS publish; "{event_type}" in the subject is replaced by the event's type.
+    notification_nats_url: str | None = None  # nats://host:4222 or tls://host:4222
+    notification_nats_subject: str = Field("oran.adapt.{event_type}", min_length=1)
+    notification_nats_token: SecretStr | None = None
 
     # Where secret-typed keys (API keys of providers) come from besides the environment
     # (oran_adapt.secrets): "env" or "file" (one file per secret in secrets_dir).
@@ -419,10 +499,25 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _signing_keys_valid(self) -> Settings:
+        if self.notification_signing_keys is not None:
+            from oran_adapt.notifications.signing import parse_keys
+
+            parse_keys(self.notification_signing_keys.get_secret_value(),
+                       self.notification_signing_min_key_bytes)
+        return self
+
+    @model_validator(mode="after")
     def _production_explicit(self) -> Settings:
         if self.environment == "production":
             required = [*PRODUCTION_REQUIRED, *self._adapter_production_keys()]
-            missing = [k for k in dict.fromkeys(required) if k not in self.model_fields_set]
+            fields = type(self).model_fields
+            missing = [
+                k
+                for k in dict.fromkeys(required)
+                if k not in self.model_fields_set
+                and not (self._secrets_external and is_secret_field(fields[k]))
+            ]
             if missing:
                 raise ConfigurationError(
                     "ENVIRONMENT=production requires "
@@ -437,20 +532,20 @@ class Settings(BaseSettings):
         """The production_keys of every adapter in use, in selector order."""
         from oran_adapt import plugins
 
-        specs = {
-            selector: plugins.resolve(port, getattr(self, selector), config_key=selector)
+        specs = [
+            (selector, plugins.resolve(port, name, config_key=selector))
             for selector, port in ADAPTER_SELECTORS.items()
-            if DISABLED.get(selector) != getattr(self, selector)
-        }
+            for name in selected_adapters(self, selector)
+        ]
         referenced = {
             key
-            for selector, spec in specs.items()
+            for selector, spec in specs
             if selector not in SUBORDINATE_SELECTORS
             for key in spec.capability.config_keys
         }
         return [
             key
-            for selector, spec in specs.items()
+            for selector, spec in specs
             if selector not in SUBORDINATE_SELECTORS or selector in referenced
             for key in spec.capability.production_keys
         ]
@@ -460,10 +555,12 @@ class Settings(BaseSettings):
         """Every selected adapter exists and has its required keys set."""
         from oran_adapt import plugins
 
-        for selector, port in ADAPTER_SELECTORS.items():
-            name = getattr(self, selector)
-            if DISABLED.get(selector) == name:
-                continue
+        selected = [
+            (selector, port, name)
+            for selector, port in ADAPTER_SELECTORS.items()
+            for name in selected_adapters(self, selector)
+        ]
+        for selector, port, name in selected:
             spec = plugins.resolve(port, name, config_key=selector)
             for key in spec.capability.required_keys:
                 if self._secrets_external and is_secret_field(type(self).model_fields[key]):

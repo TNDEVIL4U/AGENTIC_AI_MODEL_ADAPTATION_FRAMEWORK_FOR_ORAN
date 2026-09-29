@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from oran_adapt import plugins
+from oran_adapt.core.config import selected_adapters
 from oran_adapt.llm.client import InstrumentedLlmClient
 from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.handlers import ModelHandlers
@@ -52,7 +53,7 @@ class Container:
     job_executor: JobExecutorPort
     auth: AuthPort
     policy: PolicyPort
-    notifier: NotificationPort
+    notifiers: dict[str, NotificationPort]
     secrets: SecretsPort
 
 
@@ -116,6 +117,18 @@ def build_cdc_source(settings: Settings) -> CdcSourcePort:
     return source
 
 
+def build_notifiers(settings: Settings) -> dict[str, NotificationPort]:
+    """Every notification sink NOTIFICATION_BACKEND names (none for "none"), by name."""
+    return {
+        name: cast(
+            "NotificationPort",
+            plugins.resolve("notification", name, config_key="notification_backend")
+            .factory(settings),
+        )
+        for name in selected_adapters(settings, "notification_backend")
+    }
+
+
 def build_auth(settings: Settings) -> AuthPort:
     auth: AuthPort = _make("auth", settings, "auth_backend")
     return auth
@@ -137,6 +150,6 @@ def build_container(settings: Settings) -> Container:
         job_executor=build_job_executor(settings),
         auth=build_auth(settings),
         policy=build_policy(settings),
-        notifier=_make("notification", settings, "notification_backend"),
+        notifiers=build_notifiers(settings),
         secrets=_make("secrets", settings, "secrets_backend"),
     )

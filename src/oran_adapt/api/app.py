@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -19,12 +21,14 @@ from oran_adapt.api.routes_data import current_router as current_data_router
 from oran_adapt.api.routes_data import router as data_router
 from oran_adapt.api.routes_health import router as health_router
 from oran_adapt.api.routes_models import router as models_router
+from oran_adapt.api.routes_notifications import router as notifications_router
 from oran_adapt.api.security import READ, require
 from oran_adapt.bootstrap import (
     build_auth,
     build_deployer,
     build_llm,
     build_model_handler,
+    build_notifiers,
     build_policy,
     build_registry,
 )
@@ -33,6 +37,7 @@ from oran_adapt.core.config import Settings, get_settings
 from oran_adapt.core.errors import AdaptationError
 from oran_adapt.core.logging import configure_logging
 from oran_adapt.db.base import create_db_engine, make_session_factory
+from oran_adapt.notifications.dispatcher import Dispatcher, DispatcherThread
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +150,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level, settings.log_json)
 
-    app = FastAPI(title="O-RAN Model Adaptation Framework", version=__version__)
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # The outbox dispatcher runs beside the API while NOTIFICATION_DISPATCH_ENABLED; with
+        # several replicas each runs one, and the claim protocol keeps them from double-sending.
+        thread = app.state.dispatcher
+        if thread is not None:
+            thread.start()
+        try:
+            yield
+        finally:
+            if thread is not None:
+                thread.stop(
+                    settings.notification_timeout_s + settings.notification_dispatch_interval_s
+                )
+
+    app = FastAPI(
+        title="O-RAN Model Adaptation Framework", version=__version__, lifespan=_lifespan
+    )
     app.state.settings = settings
     app.state.engine = create_db_engine(settings.database_url)
     app.state.session_factory = make_session_factory(app.state.engine)
@@ -155,6 +177,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.llm_client = build_llm(settings)
     app.state.auth = build_auth(settings)
     app.state.policy = build_policy(settings)
+    app.state.notifiers = build_notifiers(settings)
+    app.state.dispatcher = (
+        DispatcherThread(
+            Dispatcher(app.state.session_factory, app.state.notifiers, settings)
+        )
+        if settings.notification_dispatch_enabled and app.state.notifiers
+        else None
+    )
     # Added first so it runs innermost: an oversized request still gets a correlation id and
     # is counted in the HTTP metrics by RequestContextMiddleware.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.api_max_request_bytes)
@@ -186,6 +216,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(current_data_router, prefix="/api/v1", dependencies=authenticated)
     app.include_router(models_router, prefix="/api/v1", dependencies=authenticated)
     app.include_router(config_router, prefix="/api/v1", dependencies=authenticated)
+    app.include_router(notifications_router, prefix="/api/v1", dependencies=authenticated)
     return app
 
 
@@ -196,6 +227,7 @@ def _status_for(exc: AdaptationError) -> int:
         "MODEL_NOT_FOUND": 404,
         "JOB_NOT_FOUND": 404,
         "DATASET_NOT_FOUND": 404,
+        "DELIVERY_NOT_FOUND": 404,
         "CONFLICT": 409,
         "DATA_VERSION_CONFLICT": 409,
         "MODEL_BUSY": 409,

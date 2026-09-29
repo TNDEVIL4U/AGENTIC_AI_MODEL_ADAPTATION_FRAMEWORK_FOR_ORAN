@@ -168,6 +168,30 @@ class PermissionDeniedError(AdaptationError):
     code = "FORBIDDEN"
 
 
+class NotificationDeliveryError(AdaptationError):
+    """A notification sink did not take a message. ``retryable`` in the context says whether
+    sending it again later may succeed (the receiver was down, timed out, answered 5xx or 429)
+    or not (it rejected the message: bad signature, bad request). Raised by sink adapters to
+    the dispatcher only, never into the job that produced the event."""
+
+    code = "NOTIFICATION_DELIVERY_FAILED"
+
+    def __init__(self, message: str, *, retryable: bool, **context: object) -> None:
+        super().__init__(message, retryable=retryable, **context)
+        self.retryable = retryable
+
+
+class DeliveryNotFoundError(AdaptationError):
+    code = "DELIVERY_NOT_FOUND"
+
+
+class SignatureVerificationError(AdaptationError):
+    """A notification's signature headers are missing, stale, or match none of the keys
+    (oran_adapt.notifications.signing.verify): the receiver must reject the message."""
+
+    code = "INVALID_SIGNATURE"
+
+
 class JobWorkerError(AdaptationError):
     """A job worker died or crashed without reporting an AdaptationError. Same code as any other
     unexpected failure, so the recorded job error is unchanged by the execution mode."""

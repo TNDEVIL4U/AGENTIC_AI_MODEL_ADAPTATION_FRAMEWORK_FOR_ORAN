@@ -57,6 +57,14 @@ static-rbac = "oran_adapt.adapters.access:STATIC_RBAC"
 [project.entry-points."oran_adapt.notification"]
 log = "oran_adapt.adapters.notify:LOG"
 webhook = "oran_adapt.adapters.notify:WEBHOOK"
+slack = "oran_adapt.adapters.notify:SLACK"
+pagerduty = "oran_adapt.adapters.notify:PAGERDUTY"
+email = "oran_adapt.adapters.notify_email:EMAIL"
+kafka = "oran_adapt.adapters.notify_brokers:KAFKA"
+sqs = "oran_adapt.adapters.notify_brokers:SQS"
+sns = "oran_adapt.adapters.notify_brokers:SNS"
+pubsub = "oran_adapt.adapters.notify_brokers:PUBSUB"
+nats = "oran_adapt.adapters.notify_brokers:NATS"
 
 [project.entry-points."oran_adapt.secrets"]
 env = "oran_adapt.adapters.secrets:ENV"
@@ -84,6 +92,10 @@ object-store = ["fsspec>=2023.1"]
 sagemaker = ["boto3>=1.28"]
 # REGISTRY_BACKEND=vertex (Application Default Credentials).
 vertex = ["google-auth>=2.20"]
+# NOTIFICATION_BACKEND=sqs / sns.
+aws = ["boto3>=1.28"]
+# NOTIFICATION_BACKEND=pubsub with NOTIFICATION_PUBSUB_CREDENTIALS=adc.
+pubsub = ["google-auth>=2.20"]
 # scripts/security_check.py: static security scan, dependency audit, type check, SBOM.
 security = ["bandit[toml]>=1.8", "pip-audit>=2.9", "mypy>=1.15", "cyclonedx-bom>=6"]
 

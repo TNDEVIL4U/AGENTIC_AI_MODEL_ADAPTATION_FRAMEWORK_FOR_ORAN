@@ -316,6 +316,49 @@ class CdcOffset(Base):
     )
 
 
+class NotificationEvent(Base):
+    """The outbox (oran_adapt.notifications): one row per event, written in the transaction
+    that made the change it reports, so an event exists if and only if its change committed.
+    ``envelope`` is the CloudEvents JSON sent to every sink; ``event_id`` is its ``id``."""
+
+    __tablename__ = "notification_event"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(100), index=True)
+    subject: Mapped[str] = mapped_column(String(200), index=True)  # the job id
+    model_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    envelope: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = _ts()
+    deliveries: Mapped[list[NotificationDelivery]] = relationship(back_populates="event")
+
+
+class NotificationDelivery(Base):
+    """One event's delivery to one sink. PENDING until the sink takes it (DELIVERED) or it runs
+    out of attempts or is refused for good (DEAD, until redriven). A dispatcher claims a row by
+    setting ``lease_until``; a row whose lease has run out is claimable again."""
+
+    __tablename__ = "notification_delivery"
+    __table_args__ = (UniqueConstraint("event_id", "sink"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("notification_event.event_id"), index=True
+    )
+    sink: Mapped[str] = mapped_column(String(50), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    leased_by: Mapped[str | None] = mapped_column(String(100))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_status_code: Mapped[int | None] = mapped_column(Integer)
+    redrive_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts()
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dead_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    event: Mapped[NotificationEvent] = relationship(back_populates="deliveries")
+
+
 @event.listens_for(AuditLog, "before_update")
 @event.listens_for(AuditLog, "before_delete")
 def _audit_log_is_append_only(_mapper, _connection, target: AuditLog) -> None:

@@ -19,8 +19,8 @@ from oran_adapt.ports.runtime import (
     JobCall,
     JobExecutorPort,
     LLMPort,
-    Notification,
     NotificationPort,
+    OutboundMessage,
 )
 from oran_adapt.ports.security import AuthPort, PolicyPort, Principal, SecretsPort
 
@@ -57,8 +57,8 @@ __all__ = [
     "ModelHandlerPort",
     "ModelRegistryPort",
     "ModelVersion",
-    "Notification",
     "NotificationPort",
+    "OutboundMessage",
     "PolicyPort",
     "Principal",
     "RegisteredModel",

@@ -10,6 +10,8 @@ action is the policy's business (POLICY_ROLES for ``static-rbac``):
     POST /datasets, /datasets/{id}/versions, /models/attach,
          /datasets/{id}/cdc/materialize                           data
     POST /models/{id}/rollback                                    promote (moves LIVE)
+    GET /config/effective, POST /deliveries/{id}/redrive,
+        /deliveries/redrive                                       admin
 
 With ``auth_enabled=False`` (local development and tests) every caller is an ADMIN named
 "anonymous" and no policy check runs."""
@@ -62,3 +64,4 @@ def require(action: str) -> Callable[[Request], Principal]:
 Submitter = Annotated[Principal, Depends(require(SUBMIT))]
 DataEditor = Annotated[Principal, Depends(require(DATA))]
 Promoter = Annotated[Principal, Depends(require(PROMOTE))]
+Admin = Annotated[Principal, Depends(require(ADMIN))]

@@ -23,6 +23,8 @@ WRITE_POLICY = {
     ("POST", "/api/v1/datasets/{dataset_id}/cdc/materialize"): DATA,
     ("POST", "/api/v1/models/attach"): DATA,
     ("POST", "/api/v1/models/{model_id}/rollback"): PROMOTE,
+    ("POST", "/api/v1/deliveries/redrive"): ADMIN,
+    ("POST", "/api/v1/deliveries/{delivery_id}/redrive"): ADMIN,
 }
 
 # Read routes that need more than READ.

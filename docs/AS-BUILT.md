@@ -29,7 +29,9 @@ own earlier "Phase 1–15" commit labels are a different, older numbering.
   model is refused with `MODEL_BUSY` (409), and nothing is recorded.
 - CDC consumer: a separate long-running CLI process (`oran-adapt cdc run --mode kafka|polling`).
 - There is no broker, no work queue, no separate worker service and no outbound notifications.
-  Callers poll `GET /jobs/{id}`, or simply wait on the blocking POST.
+  Callers poll `GET /jobs/{id}`, or simply wait on the blocking POST. (Since Hardening Phase 4
+  every job transition is also delivered to the configured notification sinks through a
+  durable outbox: `docs/adapters/notification.md`.)
 
 ## 2. HTTP API (prefix `/api/v1`)
 

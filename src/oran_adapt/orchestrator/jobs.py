@@ -75,6 +75,7 @@ from oran_adapt.core.state_machine import check_transition
 from oran_adapt.db.base import create_db_engine, make_session_factory, session_scope
 from oran_adapt.db.models import AdaptationEvent, AdaptationJob, ModelLock
 from oran_adapt.llm.client import LlmClient
+from oran_adapt.notifications.events import record_job_transition
 from oran_adapt.orchestrator.context import JobContext, current_job
 from oran_adapt.orchestrator.locks import add_lock, release_lock, take_over_expired_lock
 from oran_adapt.orchestrator.pipeline import run_adaptation_job
@@ -107,6 +108,7 @@ def _transition(
     session_factory,
     job_id: str,
     *,
+    settings: Settings,
     to_status: JobStatus,
     message: str = "",
     error: dict | None = None,
@@ -115,7 +117,8 @@ def _transition(
 ) -> JobResponse:
     """Load the job in its own short transaction, record the state change as both the row's
     current status and an immutable `AdaptationEvent`, and commit - so a job's persisted status
-    always reflects the last step that actually finished, even if the process dies right after."""
+    always reflects the last step that actually finished, even if the process dies right after.
+    The transition's notification event is written to the outbox in the same transaction."""
     with session_scope(session_factory) as session:
         job = session.execute(select(AdaptationJob).where(AdaptationJob.job_id == job_id)).scalar_one()
         check_transition(job.status, to_status)
@@ -127,6 +130,11 @@ def _transition(
                 to_status=to_status,
                 message=message,
             )
+        )
+        record_job_transition(
+            session, settings, job_id=job_id, model_id=job.model_id, from_status=job.status,
+            to_status=to_status, message=message, error=error,
+            strategy=strategy if strategy is not None else job.strategy,
         )
         job.status = to_status
         if error is not None:
@@ -141,7 +149,9 @@ def _transition(
     return response
 
 
-def _fail_abandoned_job(session, old_job_id: str, taken_over_by: str) -> None:
+def _fail_abandoned_job(
+    session, settings: Settings, old_job_id: str, taken_over_by: str
+) -> None:
     """The lock of ``old_job_id`` expired and ``taken_over_by`` now holds it, so the process that
     ran the old job died (a crash or a service restart). Record the old job FAILED in the
     takeover's transaction so it never stays in a running state; should its worker still be
@@ -169,6 +179,11 @@ def _fail_abandoned_job(session, old_job_id: str, taken_over_by: str) -> None:
             to_status=JobStatus.FAILED,
             message=error["message"],
         )
+    )
+    record_job_transition(
+        session, settings, job_id=old_job_id, model_id=old.model_id,
+        from_status=last_stage.value, to_status=JobStatus.FAILED, message=error["message"],
+        error=error, strategy=old.strategy,
     )
     old.status = JobStatus.FAILED
     old.error = error
@@ -199,7 +214,7 @@ def _attempt(payload: dict) -> dict:
     job_id = payload["job_id"]
 
     def _on_stage(status: JobStatus, message: str) -> None:
-        _transition(factory, job_id, to_status=status, message=message)
+        _transition(factory, job_id, settings=settings, to_status=status, message=message)
 
     try:
         current_job.set(JobContext(job_id=job_id, on_stage=_on_stage))
@@ -289,6 +304,7 @@ def _run_with_retries(
             _transition(
                 session_factory,
                 job_id,
+                settings=settings,
                 to_status=JobStatus.DATA_PREPARING,
                 message=f"retry {attempt}/{settings.job_max_retries} after {exc.code}: {exc.message}",
             )
@@ -339,7 +355,7 @@ def submit_adaptation_job(
             )
             if take_over_expired_lock(session, event.model_id, job_id, settings.model_lock_ttl_s):
                 if previous_holder and previous_holder != job_id:
-                    _fail_abandoned_job(session, previous_holder, job_id)
+                    _fail_abandoned_job(session, settings, previous_holder, job_id)
             else:
                 add_lock(session, event.model_id, job_id, settings.model_lock_ttl_s)
                 session.flush()
@@ -366,6 +382,10 @@ def submit_adaptation_job(
                 to_status=JobStatus.RECEIVED,
                 message="job received",
             )
+        )
+        record_job_transition(
+            session, settings, job_id=job_id, model_id=event.model_id, from_status=None,
+            to_status=JobStatus.RECEIVED, message="job received",
         )
         record_audit(
             session,
@@ -441,7 +461,9 @@ def _count_outcome(response: JobResponse) -> None:
         metrics.ADAPTATION_FAILURE.labels((response.error or {}).get("code", "UNKNOWN")).inc()
 
 
-def _record_timeout(session_factory, job_id: str, exc: JobTimeoutError) -> JobResponse:
+def _record_timeout(
+    session_factory, settings: Settings, job_id: str, exc: JobTimeoutError
+) -> JobResponse:
     with session_scope(session_factory) as session:
         last_stage = session.execute(
             select(AdaptationJob.status).where(AdaptationJob.job_id == job_id)
@@ -456,7 +478,8 @@ def _record_timeout(session_factory, job_id: str, exc: JobTimeoutError) -> JobRe
             level=logging.WARNING, adaptation_job_id=job_id,
         )
     return _transition(
-        session_factory, job_id, to_status=JobStatus.TIMED_OUT, message=str(exc), error=error
+        session_factory, job_id, settings=settings, to_status=JobStatus.TIMED_OUT,
+        message=str(exc), error=error,
     )
 
 
@@ -473,10 +496,12 @@ def _execute_inner(
 ) -> JobResponse:
     try:
         _transition(
-            session_factory, job_id, to_status=JobStatus.VALIDATING, message="event accepted"
+            session_factory, job_id, settings=settings, to_status=JobStatus.VALIDATING,
+            message="event accepted",
         )
         _transition(
-            session_factory, job_id, to_status=JobStatus.DATA_PREPARING, message="pipeline started"
+            session_factory, job_id, settings=settings, to_status=JobStatus.DATA_PREPARING,
+            message="pipeline started",
         )
         result = _run_with_retries(
             event,
@@ -489,7 +514,7 @@ def _execute_inner(
             on_abandoned=on_abandoned,
         )
     except JobTimeoutError as exc:
-        return _record_timeout(session_factory, job_id, exc)
+        return _record_timeout(session_factory, settings, job_id, exc)
     except Exception as exc:  # noqa: BLE001 - deliberate: no pipeline failure escapes un-recorded
         error = (
             exc.to_dict()
@@ -497,13 +522,15 @@ def _execute_inner(
             else {"code": "INTERNAL_ERROR", "message": str(exc)}
         )
         return _transition(
-            session_factory, job_id, to_status=JobStatus.FAILED, message=str(exc), error=error
+            session_factory, job_id, settings=settings, to_status=JobStatus.FAILED,
+            message=str(exc), error=error,
         )
 
     final = JobStatus.ROLLED_BACK if result.outcome == "ROLLED_BACK" else JobStatus.COMPLETED
     return _transition(
         session_factory,
         job_id,
+        settings=settings,
         to_status=final,
         message=result.reason,
         result=result.model_dump(mode="json"),

@@ -62,8 +62,24 @@ CDC_PROCESSING_LAG = Gauge(
 )
 LLM_REQUESTS = Counter("llm_requests_total", "Calls made to the LLM provider.", ["provider"])
 LLM_FAILURES = Counter("llm_failures_total", "LLM calls that failed.", ["provider"])
-NOTIFICATION_FAILURES = Counter(
-    "notifications_failed_total", "Notifications a backend failed to deliver.", ["backend"]
+# Notification sink labels come from NOTIFICATION_BACKEND, a short configured list.
+NOTIFICATION_EVENTS = Counter(
+    "notification_events_total", "Events written to the notification outbox.", ["event_type"]
+)
+NOTIFICATION_DELIVERIES = Counter(
+    "notification_deliveries_total",
+    "Notification delivery attempts by sink and outcome (delivered, retry, dead).",
+    ["sink", "outcome"],
+)
+NOTIFICATION_DELIVERY_DURATION = Histogram(
+    "notification_delivery_duration_seconds", "Time a sink took to take a message.", ["sink"],
+    buckets=_EVAL_BUCKETS,
+)
+NOTIFICATION_BACKLOG = Gauge(
+    "notification_backlog", "Deliveries waiting (PENDING) or dead-lettered (DEAD).", ["status"]
+)
+NOTIFICATION_CIRCUIT_OPEN = Gauge(
+    "notification_circuit_open", "1 while a sink's circuit breaker is open.", ["sink"]
 )
 SANDBOX_FAILURES = Counter(
     "sandbox_failures_total",

@@ -47,6 +47,9 @@ def settings(tmp_path, database_url) -> Settings:
         log_json=False,
         # Most tests exercise behaviour, not access control; test_phase14_stage_b turns it on.
         auth_enabled=False,
+        # No background dispatcher thread in every app a test starts; the notification tests
+        # (test_phase4_notifications) turn it on or drive the dispatcher themselves.
+        notification_dispatch_enabled=False,
     )
 
 

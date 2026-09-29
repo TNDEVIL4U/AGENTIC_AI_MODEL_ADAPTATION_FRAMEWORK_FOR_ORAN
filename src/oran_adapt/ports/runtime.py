@@ -1,4 +1,4 @@
-"""Deployment, dataset, CDC source, job executor, notification and LLM ports."""
+"""Deployment, dataset, CDC source, job executor, notification sink and LLM ports."""
 
 from __future__ import annotations
 
@@ -117,18 +117,37 @@ class JobExecutorPort(Protocol):
 
 
 @dataclass(frozen=True)
-class Notification:
-    event: str
+class OutboundMessage:
+    """One event on its way to one sink (docs/adapters/notification.md).
+
+    ``envelope`` is the CloudEvents 1.0 JSON event (``id``, ``type``, ``source``, ``subject``,
+    ``time``, ``data``); ``body`` is its canonical serialization, byte for byte what
+    ``headers`` signs. ``headers`` carries ``webhook-id`` (the event id, stable across retries,
+    for receiver-side deduplication), ``webhook-timestamp`` and ``webhook-signature`` (HMAC,
+    oran_adapt.notifications.signing) when signing keys are configured. ``event_type`` is the
+    short type (``job.failed``) the sink filters use."""
+
+    event_id: str
+    event_type: str
     subject: str
-    detail: dict[str, Any]
+    envelope: dict[str, Any]
+    body: bytes
+    headers: dict[str, str]
+    attempt: int = 1
 
 
 @runtime_checkable
 class NotificationPort(Protocol):
-    """Fire-and-forget operator notifications. Delivery failures are logged and counted by the
-    adapter, never raised into the job that triggered them."""
+    """A notification sink: where the outbox dispatcher (oran_adapt.notifications) delivers
+    events. ``send`` returns once the sink has accepted the message and raises
+    NotificationDeliveryError otherwise, with ``retryable`` saying whether to try again; no
+    vendor exception crosses the port. Delivery is at least once: a message may be sent again
+    after a crash, always with the same ``event_id``. ``ping`` checks the sink is reachable
+    without sending anything, raising NotificationDeliveryError when it is not."""
 
-    def notify(self, notification: Notification) -> None: ...
+    def ping(self) -> None: ...
+
+    def send(self, message: OutboundMessage) -> None: ...
 
 
 @runtime_checkable
