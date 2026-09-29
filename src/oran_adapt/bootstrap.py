@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from oran_adapt import plugins
 from oran_adapt.core.config import selected_adapters
+from oran_adapt.datastore.access import DataAccess
 from oran_adapt.llm.client import InstrumentedLlmClient
 from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.handlers import ModelHandlers
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
         ArtifactStorePort,
         AuthPort,
         CdcSourcePort,
+        DatasetPort,
         DeploymentPort,
         JobExecutorPort,
         LLMPort,
@@ -55,6 +57,7 @@ class Container:
     policy: PolicyPort
     notifiers: dict[str, NotificationPort]
     secrets: SecretsPort
+    data_access: DataAccess
 
 
 def build_registry(settings: Settings) -> ModelRegistryPort:
@@ -129,6 +132,19 @@ def build_notifiers(settings: Settings) -> dict[str, NotificationPort]:
     }
 
 
+def build_data_access(settings: Settings) -> DataAccess:
+    """Row access for every data version, reading referenced objects through each dataset
+    adapter DATASET_BACKENDS names (none by default: only database-stored rows)."""
+    backends = [
+        cast(
+            "DatasetPort",
+            plugins.resolve("dataset", name, config_key="dataset_backends").factory(settings),
+        )
+        for name in selected_adapters(settings, "dataset_backends")
+    ]
+    return DataAccess.from_settings(settings, backends)
+
+
 def build_auth(settings: Settings) -> AuthPort:
     auth: AuthPort = _make("auth", settings, "auth_backend")
     return auth
@@ -152,4 +168,5 @@ def build_container(settings: Settings) -> Container:
         policy=build_policy(settings),
         notifiers=build_notifiers(settings),
         secrets=_make("secrets", settings, "secrets_backend"),
+        data_access=build_data_access(settings),
     )

@@ -42,8 +42,13 @@ SDK_HOMES: dict[str, tuple[str, ...]] = {
         "adapters/registry/sagemaker.py",
         "adapters/deployment/sagemaker.py",
         "adapters/notify_brokers.py",
+        "adapters/datasets_cloud.py",
     ),
-    "botocore": ("adapters/registry/sagemaker.py", "adapters/notify_brokers.py"),
+    "botocore": (
+        "adapters/registry/sagemaker.py",
+        "adapters/notify_brokers.py",
+        "adapters/datasets_cloud.py",
+    ),
     "confluent_kafka": ("adapters/kafka_cdc.py", "adapters/notify_brokers.py"),
     "google.auth": ("adapters/registry/vertex.py",),
 }

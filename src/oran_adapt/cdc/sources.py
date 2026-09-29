@@ -17,7 +17,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from oran_adapt.cdc.events import CdcEvent, from_changelog_row
+from oran_adapt.cdc.events import DEFAULT_MAPPING, CdcEvent, CdcRowMapping, from_changelog_row
 from oran_adapt.cdc.store import get_offset
 from oran_adapt.db.models import CdcChangelog
 from oran_adapt.ports import CdcSourcePort
@@ -26,9 +26,12 @@ CdcSource = CdcSourcePort
 
 
 class PollingCdcSource:
-    def __init__(self, table: str, schema_ref: str) -> None:
+    def __init__(
+        self, table: str, schema_ref: str, mapping: CdcRowMapping = DEFAULT_MAPPING
+    ) -> None:
         self.table = table
         self.schema_ref = schema_ref
+        self.mapping = mapping
         self.name = f"polling:{table}"
 
     def fetch(self, session: Session, limit: int) -> tuple[list[CdcEvent], str | None]:
@@ -42,7 +45,7 @@ class PollingCdcSource:
         events = [
             from_changelog_row(
                 r.seq, r.table_name, r.operation, r.pk, r.old_row, r.new_row, r.tx_id,
-                r.changed_at, schema_ref=self.schema_ref,
+                r.changed_at, schema_ref=self.schema_ref, mapping=self.mapping,
             )
             for r in rows
         ]

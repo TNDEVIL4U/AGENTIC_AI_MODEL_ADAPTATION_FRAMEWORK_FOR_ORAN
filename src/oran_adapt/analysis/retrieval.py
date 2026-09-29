@@ -1,7 +1,9 @@
 """Member 1 - retrieval: pull the model, historical baseline and drifted data for analysis.
 
 PostgreSQL owns datasets/data versions/lineage (see db.models); this module is the only place
-that turns a DriftEvent into the concrete data slices analysis needs. It raises when the model
+that turns a DriftEvent into the concrete data slices analysis needs. Rows are read through
+datastore.access, so a version stored by reference is read from its object, and a version
+larger than DATASET_ANALYSIS_MAX_ROWS is analyzed on an even sample of that many rows. It raises when the model
 itself is unknown (a precondition the pipeline cannot proceed without) but returns ``None``
 slices when the *data* is merely missing, because "no comparable data yet" is a legitimate
 business outcome (INSUFFICIENT_DATA), not a system failure.
@@ -18,8 +20,8 @@ from sqlalchemy.orm import Session
 from oran_adapt.core.enums import AssociationRole
 from oran_adapt.core.errors import ModelNotFoundError
 from oran_adapt.core.schemas import DriftEvent
+from oran_adapt.datastore.access import DataAccess
 from oran_adapt.db.models import (
-    DataRecord,
     DatasetMetadata,
     DataVersion,
     ModelDataAssociation,
@@ -30,7 +32,8 @@ from oran_adapt.db.models import (
 
 @dataclass
 class DataSlice:
-    """One dataset version, fully materialized as timestamped feature rows."""
+    """One dataset version as timestamped feature rows: all of them, or an even sample of
+    DATASET_ANALYSIS_MAX_ROWS when the version is larger (``sampled``)."""
 
     data_version_id: int
     version: str
@@ -39,6 +42,8 @@ class DataSlice:
     data_start: datetime | None
     data_end: datetime | None
     records: list[dict]  # each row: {"observed_at": datetime, **feature_payload}
+    total_rows: int | None = None  # rows in the whole version (row_count counts ``records``)
+    sampled: bool = False
 
 
 @dataclass
@@ -49,19 +54,14 @@ class RetrievedContext:
     recent_performance: list[PerformanceRecord] = field(default_factory=list)
 
 
-def _load_slice(session: Session, data_version: DataVersion | None) -> DataSlice | None:
+def _load_slice(
+    session: Session, data_version: DataVersion | None, access: DataAccess
+) -> DataSlice | None:
     if data_version is None:
         return None
-    rows = (
-        session.execute(
-            select(DataRecord)
-            .where(DataRecord.data_version_id == data_version.id)
-            .order_by(DataRecord.observed_at)
-        )
-        .scalars()
-        .all()
-    )
+    rows = access.sample(session, data_version)
     records = [{"observed_at": r.observed_at, **r.payload} for r in rows]
+    total = data_version.row_count if data_version.row_count is not None else len(records)
     return DataSlice(
         data_version_id=data_version.id,
         version=data_version.version,
@@ -70,6 +70,8 @@ def _load_slice(session: Session, data_version: DataVersion | None) -> DataSlice
         data_start=data_version.data_start,
         data_end=data_version.data_end,
         records=records,
+        total_rows=total,
+        sampled=len(records) < total,
     )
 
 
@@ -153,9 +155,12 @@ def retrieve_context(
     *,
     performance_limit: int,
     live_version: str | None = None,
+    access: DataAccess | None = None,
 ) -> RetrievedContext:
     """Assemble everything downstream analysis needs, or raise if the model is unknown.
-    ``performance_limit`` (ANALYSIS_PERFORMANCE_HISTORY_LIMIT) caps the performance records."""
+    ``performance_limit`` (ANALYSIS_PERFORMANCE_HISTORY_LIMIT) caps the performance records;
+    ``access`` reads the rows (database rows only when not given)."""
+    access = access or DataAccess()
     model = (
         session.execute(select(ModelMetadata).where(ModelMetadata.model_id == event.model_id))
         .scalars()
@@ -180,8 +185,8 @@ def retrieve_context(
     return RetrievedContext(
         model=model,
         historical=_load_slice(
-            session, _historical_version(session, event.model_id, live_version)
+            session, _historical_version(session, event.model_id, live_version), access
         ),
-        drifted=_load_slice(session, _drifted_version(session, event.model_id, event)),
+        drifted=_load_slice(session, _drifted_version(session, event.model_id, event), access),
         recent_performance=list(performance),
     )

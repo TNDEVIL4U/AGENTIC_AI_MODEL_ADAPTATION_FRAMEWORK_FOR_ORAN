@@ -82,6 +82,13 @@ triton = "oran_adapt.adapters.deployment.triton:SPEC"
 sagemaker = "oran_adapt.adapters.deployment.sagemaker:SPEC"
 vertex = "oran_adapt.adapters.deployment.vertex:SPEC"
 
+[project.entry-points."oran_adapt.dataset"]
+file = "oran_adapt.adapters.datasets:FILE"
+http = "oran_adapt.adapters.datasets:HTTP"
+fsspec = "oran_adapt.adapters.datasets:FSSPEC"
+s3 = "oran_adapt.adapters.datasets_cloud:S3"
+gcs = "oran_adapt.adapters.datasets_cloud:GCS"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "pytest-xdist>=3.8", "ruff"]
 # CDC_MODE=kafka (production CDC from Debezium). Not needed for the polling fallback.
@@ -92,8 +99,12 @@ object-store = ["fsspec>=2023.1"]
 sagemaker = ["boto3>=1.28"]
 # REGISTRY_BACKEND=vertex (Application Default Credentials).
 vertex = ["google-auth>=2.20"]
-# NOTIFICATION_BACKEND=sqs / sns.
+# NOTIFICATION_BACKEND=sqs / sns, DATASET_BACKENDS=s3.
 aws = ["boto3>=1.28"]
+# DATASET_BACKENDS=fsspec; add the filesystem driver for the URIs (sftp: paramiko, abfs: adlfs).
+fsspec = ["fsspec>=2023.1"]
+# Parquet data versions registered by reference (DATASET_BACKENDS).
+parquet = ["pyarrow>=14"]
 # NOTIFICATION_BACKEND=pubsub with NOTIFICATION_PUBSUB_CREDENTIALS=adc.
 pubsub = ["google-auth>=2.20"]
 # scripts/security_check.py: static security scan, dependency audit, type check, SBOM.

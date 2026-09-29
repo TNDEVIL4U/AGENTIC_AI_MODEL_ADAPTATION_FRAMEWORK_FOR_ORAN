@@ -36,6 +36,11 @@ the hardening finding (#1–#10) it feeds and the phase expected to remove it.
 
 ## 4. Assumes data arrives as JSON rows (finding #4, Hardening Phase 5)
 
+**Closed in Hardening Phase 5** (`docs/PHASE5_REPORT.md`): a version can be a reference to an
+object read in batches through `DatasetPort` adapters, with a memory ceiling, sampling for
+analysis, streamed hashing and any time column; CDC follows any table through a column
+mapping. The table below is the baseline as audited.
+
 | Where | Assumption |
 |---|---|
 | `api/routes_data.py:40-43,68-92` | `VersionCreate.records: list[dict]` inline in the body, capped only by `API_MAX_REQUEST_BYTES` |

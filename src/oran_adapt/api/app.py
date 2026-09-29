@@ -25,6 +25,7 @@ from oran_adapt.api.routes_notifications import router as notifications_router
 from oran_adapt.api.security import READ, require
 from oran_adapt.bootstrap import (
     build_auth,
+    build_data_access,
     build_deployer,
     build_llm,
     build_model_handler,
@@ -178,6 +179,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.auth = build_auth(settings)
     app.state.policy = build_policy(settings)
     app.state.notifiers = build_notifiers(settings)
+    app.state.data_access = build_data_access(settings)
     app.state.dispatcher = (
         DispatcherThread(
             Dispatcher(app.state.session_factory, app.state.notifiers, settings)
@@ -234,6 +236,11 @@ def _status_for(exc: AdaptationError) -> int:
         "INVALID_STATE_TRANSITION": 409,
         "ARTIFACT_INTEGRITY_FAILED": 422,
         "INVALID_REFERENCE": 422,
+        "DATA_SOURCE_NOT_ALLOWED": 422,
+        "DATA_FORMAT_INVALID": 422,
+        "DATA_SOURCE_CHANGED": 409,
+        "DATA_TOO_LARGE": 413,
+        "DATA_SOURCE_UNAVAILABLE": 503,
         "MLFLOW_UNAVAILABLE": 503,
         "DEPLOYMENT_UNAVAILABLE": 503,
         "DATABASE_UNAVAILABLE": 503,

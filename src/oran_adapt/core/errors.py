@@ -54,6 +54,40 @@ class ArtifactError(AdaptationError):
     code = "ARTIFACT_ERROR"
 
 
+class DataSourceNotAllowedError(AdaptationError):
+    """A data reference names a scheme with no enabled dataset adapter, or a location outside
+    the adapter's allow-list (DATASET_FILE_ROOTS, DATASET_HTTP_ALLOWED_HOSTS, ...)."""
+
+    code = "DATA_SOURCE_NOT_ALLOWED"
+
+
+class DataSourceUnavailableError(AdaptationError):
+    """The storage a data reference points at could not be reached (network, timeout, 5xx)."""
+
+    code = "DATA_SOURCE_UNAVAILABLE"
+
+
+class DataSourceChangedError(ConflictError):
+    """The object behind a by-reference data version is no longer the one registered: its
+    fingerprint or content hash differs. A data version is immutable, so it is not read."""
+
+    code = "DATA_SOURCE_CHANGED"
+
+
+class DataFormatError(ArtifactError):
+    """Referenced data could not be parsed in its declared format, or its columns change
+    type in a way no single column type holds."""
+
+    code = "DATA_FORMAT_INVALID"
+
+
+class DataTooLargeError(AdaptationError):
+    """Materializing the data would pass a memory ceiling (DATASET_MAX_ROWS,
+    DATASET_MAX_SOURCE_BYTES). Refused before anything is read, never an out-of-memory crash."""
+
+    code = "DATA_TOO_LARGE"
+
+
 class UnsupportedAdaptationError(AdaptationError):
     code = "ADAPTATION_UNSUPPORTED"
 

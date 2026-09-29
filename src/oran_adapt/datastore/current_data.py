@@ -28,8 +28,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from oran_adapt.core.enums import DataKind
+from oran_adapt.datastore.access import Row
 from oran_adapt.datastore.versioning import content_hash, ingest_version, schema_hash
-from oran_adapt.db.models import CurrentData, DataRecord, DatasetMetadata, DataVersion
+from oran_adapt.db.models import CurrentData, DatasetMetadata, DataVersion
 
 
 def _utc(ts: datetime) -> datetime:
@@ -38,12 +39,12 @@ def _utc(ts: datetime) -> datetime:
 
 @dataclass
 class CleanResult:
-    records: list[DataRecord]
+    records: list[Row]
     quality: dict[str, int] = field(default_factory=dict)
 
 
 def clean_records(
-    session: Session, records: Sequence[DataRecord], *, required_columns: Sequence[str] = ()
+    session: Session, records: Sequence[Row], *, required_columns: Sequence[str] = ()
 ) -> CleanResult:
     """The cleaning steps above, applied to ``records`` (rows of one or more data versions)."""
     version_ids = {r.data_version_id for r in records}
@@ -55,10 +56,10 @@ def clean_records(
         for key in (v.extra or {}).get("deleted_keys", []):
             deleted_in[key] = max(deleted_in.get(key, 0), v.id)
 
-    def rank(r: DataRecord) -> tuple:
+    def rank(r: Row) -> tuple:
         return (r.data_version_id, _utc(r.observed_at), r.id)
 
-    newest: dict[str, DataRecord] = {}
+    newest: dict[str, Row] = {}
     for r in records:
         if r.record_key is not None:
             cur = newest.get(r.record_key)
@@ -67,7 +68,7 @@ def clean_records(
 
     conflicts = deleted = duplicates = rejected = 0
     seen: set[tuple[str, str]] = set()
-    kept: list[DataRecord] = []
+    kept: list[Row] = []
     for r in records:
         if r.record_key is not None:
             if newest[r.record_key] is not r:
@@ -124,7 +125,7 @@ def persist_current_data(
     *,
     model_id: str,
     job_id: str | None,
-    records: Sequence[DataRecord],
+    records: Sequence[Row],
     source_version_ids: Sequence[int],
     quality: dict,
     actor: str = "system",

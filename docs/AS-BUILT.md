@@ -48,8 +48,10 @@ add stricter roles. With `AUTH_ENABLED=false`, every caller is `anonymous`/ADMIN
 | GET | `/adaptation/jobs/{job_id}` | any | – | `JobResponse` + `transitions[]` |
 | POST | `/datasets` | ADMIN, ML_ENGINEER | `{dataset_id, name?, description?}` | dataset |
 | GET | `/datasets` | any | – | list |
-| POST | `/datasets/{id}/versions` | ADMIN, ML_ENGINEER | `VersionCreate` with **inline `records: list[dict]`** | `VersionInfo`; 201/200 |
+| POST | `/datasets/{id}/versions` | ADMIN, ML_ENGINEER | `VersionCreate` with **inline `records: list[dict]`** (since Hardening Phase 5: *or* a `storage_uri` read by a dataset adapter, see `docs/adapters/dataset.md`) | `VersionInfo`; 201/200 |
 | GET | `/datasets/{id}/versions`, `/{version}`, `/{version}/lineage` | any | – | version info / lineage |
+| GET | `/datasets/{id}/versions/{version}/rows?offset&limit` | any | – | one page of rows, whatever the storage (Phase 5) |
+| POST | `/datasets/{id}/versions/{version}/verify` | ADMIN, ML_ENGINEER | – | re-hashes the rows against the recorded hash (Phase 5) |
 | POST | `/datasets/{id}/cdc/materialize` | see route | – | CDC data version |
 | GET | `/current-data`, `/current-data/{id}` | any | – | CurrentData records |
 | GET | `/models`, `/models/{model_id}` | any | – | model metadata (+ live alias/version) |
@@ -98,7 +100,7 @@ test and no guardrail metrics.
 | `model_metadata` | model_id, mlflow_model_name, model_type, framework, task_type, target_column, extra |
 | `dataset_metadata` | dataset_id, name, description, schema |
 | `data_version` | dataset_id, version (unique pair), kind, parent_version_id, data_start/end, row_count, content_hash, schema_hash, storage_uri, status, cdc_range, source_tx |
-| `data_record` | data_version_id, observed_at, **payload (JSON, one row per record)**, record_key |
+| `data_record` | data_version_id, observed_at, **payload (JSON, one row per record)**, record_key. Since Hardening Phase 5 only for versions with `extra.storage = rows`; `reference` versions keep their rows in the object at `storage_uri`, and `derived` training snapshots name their source versions |
 | `model_data_association` | model_id, model_version, data_version_id, role (unique quad) |
 | `performance_record` | model_id, model_version, data_version_id, metric_name, value |
 | `adaptation_job` | job_id, **idempotency_key (unique)**, model_id, status, strategy, event, result, error, correlation_id |

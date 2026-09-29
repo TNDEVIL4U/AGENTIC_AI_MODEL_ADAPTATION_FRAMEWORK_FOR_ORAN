@@ -19,6 +19,7 @@ import json
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pandas as pd
 from sqlalchemy import select
@@ -32,6 +33,7 @@ from oran_adapt.core.errors import (
     DataVersionConflictError,
     ModelNotFoundError,
 )
+from oran_adapt.datastore.formats import RowHasher
 from oran_adapt.db.models import (
     DataRecord,
     DatasetMetadata,
@@ -40,7 +42,19 @@ from oran_adapt.db.models import (
     ModelMetadata,
 )
 
+if TYPE_CHECKING:
+    from oran_adapt.datastore.access import DataAccess
+
 DEFAULT_ROW_SPACING = timedelta(minutes=1)
+
+# How a data version's rows are stored (DataVersion.extra["storage"]).
+STORAGE_ROWS = "rows"  # data_record rows in this database (sent inline, or copied)
+STORAGE_REFERENCE = "reference"  # an object outside the database, read by a dataset adapter
+STORAGE_DERIVED = "derived"  # rows of other versions minus excluded rows (training snapshots)
+
+
+def storage_of(dv: DataVersion) -> str:
+    return str((dv.extra or {}).get("storage", STORAGE_ROWS))
 
 
 @dataclass
@@ -88,20 +102,21 @@ class VersionInfo:
 
 
 # --------------------------------------------------------------------------- hashing
-def _canonical_records(frame: pd.DataFrame, observed_at: list[datetime]) -> list[dict]:
-    # JSON round-trip turns numpy scalars into plain Python values (what the JSON column stores).
-    rows = json.loads(frame.to_json(orient="records", double_precision=15))
-    return [
-        {"observed_at": ts.isoformat(), **{k: row[k] for k in sorted(row)}}
-        for ts, row in zip(observed_at, rows, strict=True)
-    ]
-
-
 def content_hash(frame: pd.DataFrame, observed_at: list[datetime]) -> str:
     """SHA-256 of the rows exactly as they would be stored: column order does not matter, row
-    order and timestamps do."""
-    canonical = json.dumps(_canonical_records(frame, observed_at), sort_keys=True)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    order and timestamps do. Streamed row by row (formats.RowHasher), never one big string."""
+    hasher = RowHasher()
+    hasher.add_frame(frame, observed_at)
+    return hasher.hexdigest()
+
+
+def keyed_hash(digest: str, record_keys: list | None, deleted_keys: list | None) -> str:
+    """Keys and deletions are part of what a version says, so part of its identity."""
+    if record_keys is None and not deleted_keys:
+        return digest
+    return hashlib.sha256(
+        json.dumps([digest, record_keys, sorted(deleted_keys or [])]).encode()
+    ).hexdigest()
 
 
 def schema_hash(columns: dict[str, str]) -> str:
@@ -206,7 +221,8 @@ def _find_version(session: Session, dataset: DatasetMetadata, version: str) -> D
     ).scalar_one_or_none()
 
 
-def get_version(session: Session, dataset_id: str, version: str) -> VersionInfo:
+def version_row(session: Session, dataset_id: str, version: str) -> DataVersion:
+    """The DataVersion row itself (for reading its data through DataAccess)."""
     dataset = get_dataset(session, dataset_id)
     dv = _find_version(session, dataset, version)
     if dv is None:
@@ -215,7 +231,12 @@ def get_version(session: Session, dataset_id: str, version: str) -> VersionInfo:
             dataset_id=dataset_id,
             version=version,
         )
-    return _info(dv, dataset_id, created=False, session=session)
+    return dv
+
+
+def get_version(session: Session, dataset_id: str, version: str) -> VersionInfo:
+    return _info(version_row(session, dataset_id, version), dataset_id, created=False,
+                 session=session)
 
 
 def list_versions(session: Session, dataset_id: str) -> list[VersionInfo]:
@@ -224,6 +245,141 @@ def list_versions(session: Session, dataset_id: str) -> list[VersionInfo]:
         select(DataVersion).where(DataVersion.dataset_id == dataset.id).order_by(DataVersion.id)
     ).scalars().all()
     return [_info(dv, dataset_id, created=False, session=session) for dv in rows]
+
+
+def _existing(
+    session: Session,
+    dataset: DatasetMetadata,
+    version: str,
+    digest: str,
+    model_id: str | None,
+    model_version: str | None,
+    role: AssociationRole | str | None,
+) -> VersionInfo | None:
+    """The stored version of that name when its content matches (an idempotent replay: the
+    model link is still recorded), None when the name is free. Raises
+    DataVersionConflictError when the name holds different content."""
+    existing = _find_version(session, dataset, version)
+    if existing is None:
+        return None
+    if existing.content_hash != digest:
+        raise DataVersionConflictError(
+            f"dataset '{dataset.dataset_id}' already has a different version '{version}'",
+            dataset_id=dataset.dataset_id,
+            version=version,
+            existing_hash=existing.content_hash,
+            new_hash=digest,
+        )
+    if model_id and model_version and role:
+        link_model_data(session, model_id, model_version, existing.id, role)
+    return _info(existing, dataset.dataset_id, created=False, session=session)
+
+
+def _parent_id(
+    session: Session, dataset: DatasetMetadata, parent_version: str | None
+) -> int | None:
+    if not parent_version:
+        return None
+    parent = _find_version(session, dataset, parent_version)
+    if parent is None:
+        raise DatasetNotFoundError(
+            f"parent version '{parent_version}' not found in dataset '{dataset.dataset_id}'",
+            dataset_id=dataset.dataset_id,
+        )
+    return parent.id
+
+
+def _audit_created(
+    session: Session,
+    info: VersionInfo,
+    *,
+    actor: str,
+    model_id: str | None,
+    model_version: str | None,
+    role: AssociationRole | str | None,
+    storage: str,
+) -> None:
+    record_audit(
+        session,
+        AuditAction.DATA_VERSION_CREATED,
+        component="datastore",
+        actor=actor,
+        model_id=model_id,
+        model_version=str(model_version) if model_version else None,
+        reason=info.source,
+        metadata={
+            "dataset_id": info.dataset_id,
+            "version": info.version,
+            "kind": info.kind,
+            "row_count": info.row_count,
+            "content_hash": info.content_hash,
+            "parent_version": info.parent_version,
+            "role": str(role) if role else None,
+            "schema_hash": info.schema_hash,
+            "cdc_range": info.cdc_range,
+            "storage": storage,
+            "storage_uri": info.storage_uri if storage == STORAGE_REFERENCE else None,
+        },
+    )
+
+
+def create_stored_version(
+    session: Session,
+    dataset_id: str,
+    version: str,
+    *,
+    digest: str,
+    row_count: int,
+    columns: dict[str, str],
+    data_start: datetime | None,
+    data_end: datetime | None,
+    kind: DataKind | str,
+    storage: str,
+    storage_uri: str | None,
+    extra: dict,
+    parent_version: str | None = None,
+    model_id: str | None = None,
+    model_version: str | None = None,
+    role: AssociationRole | str | None = None,
+    source: str | None = None,
+    dataset_name: str | None = None,
+    actor: str = "system",
+) -> VersionInfo:
+    """A data version whose rows are not stored in data_record (STORAGE_REFERENCE or
+    STORAGE_DERIVED): only its metadata, computed by the caller while streaming the rows.
+    Same idempotency, conflict and lineage rules as ingest_version."""
+    kind = DataKind(kind)
+    dataset = get_or_create_dataset(session, dataset_id, name=dataset_name)
+    existing = _existing(session, dataset, version, digest, model_id, model_version, role)
+    if existing is not None:
+        return existing
+    parent_id = _parent_id(session, dataset, parent_version)
+    dv = DataVersion(
+        dataset_id=dataset.id,
+        version=version,
+        kind=kind,
+        parent_version_id=parent_id,
+        data_start=data_start,
+        data_end=data_end,
+        row_count=row_count,
+        content_hash=digest,
+        extra={**extra, "columns": columns, "source": source, "storage": storage},
+        source=source,
+        schema_hash=schema_hash(columns),
+        status="AVAILABLE",
+        storage_uri=storage_uri,
+    )
+    session.add(dv)
+    session.flush()
+    if storage_uri is None:
+        dv.storage_uri = f"derived://data_version/{dv.id}"
+    if model_id and model_version and role:
+        link_model_data(session, model_id, model_version, dv.id, role)
+    info = _info(dv, dataset_id, created=True, session=session)
+    _audit_created(session, info, actor=actor, model_id=model_id, model_version=model_version,
+                   role=role, storage=storage)
+    session.flush()
+    return info
 
 
 def ingest_version(
@@ -266,39 +422,15 @@ def ingest_version(
     kind = DataKind(kind)
     dataset = get_or_create_dataset(session, dataset_id, name=dataset_name)
     features, observed_at = _timestamps(frame, timestamp_column, start, spacing)
-    digest = content_hash(features, observed_at)
-    if record_keys is not None or deleted_keys:
-        # Keys and deletions are part of what the version says, so part of its identity.
-        digest = hashlib.sha256(
-            json.dumps([digest, record_keys, sorted(deleted_keys or [])]).encode()
-        ).hexdigest()
+    digest = keyed_hash(content_hash(features, observed_at), record_keys, deleted_keys)
 
-    existing = _find_version(session, dataset, version)
+    existing = _existing(session, dataset, version, digest, model_id, model_version, role)
     if existing is not None:
-        if existing.content_hash != digest:
-            raise DataVersionConflictError(
-                f"dataset '{dataset_id}' already has a different version '{version}'",
-                dataset_id=dataset_id,
-                version=version,
-                existing_hash=existing.content_hash,
-                new_hash=digest,
-            )
-        if model_id and model_version and role:
-            link_model_data(session, model_id, model_version, existing.id, role)
-        return _info(existing, dataset_id, created=False, session=session)
-
-    parent_id = None
-    if parent_version:
-        parent = _find_version(session, dataset, parent_version)
-        if parent is None:
-            raise DatasetNotFoundError(
-                f"parent version '{parent_version}' not found in dataset '{dataset_id}'",
-                dataset_id=dataset_id,
-            )
-        parent_id = parent.id
+        return existing
+    parent_id = _parent_id(session, dataset, parent_version)
 
     columns = {c: str(t) for c, t in features.dtypes.items()}
-    extra: dict = {"columns": columns, "source": source}
+    extra: dict = {"columns": columns, "source": source, "storage": STORAGE_ROWS}
     if deleted_keys:
         extra["deleted_keys"] = sorted(deleted_keys)
     dv = DataVersion(
@@ -330,28 +462,11 @@ def ingest_version(
     )
     if model_id and model_version and role:
         link_model_data(session, model_id, model_version, dv.id, role)
-    record_audit(
-        session,
-        AuditAction.DATA_VERSION_CREATED,
-        component="datastore",
-        actor=actor,
-        model_id=model_id,
-        model_version=str(model_version) if model_version else None,
-        reason=source,
-        metadata={
-            "dataset_id": dataset_id,
-            "version": version,
-            "kind": kind.value,
-            "row_count": len(features),
-            "content_hash": digest,
-            "parent_version": parent_version,
-            "role": str(role) if role else None,
-            "schema_hash": dv.schema_hash,
-            "cdc_range": cdc_range,
-        },
-    )
+    info = _info(dv, dataset_id, created=True, session=session)
+    _audit_created(session, info, actor=actor, model_id=model_id, model_version=model_version,
+                   role=role, storage=STORAGE_ROWS)
     session.flush()
-    return _info(dv, dataset_id, created=True, session=session)
+    return info
 
 
 def link_model_data(
@@ -458,13 +573,18 @@ def snapshot_training_data(
     parent_version_id: int | None,
     exclude_record_ids: Collection[int] = (),
     job_ref: str | None = None,
+    access: DataAccess | None = None,
 ) -> VersionInfo:
     """After the pipeline registers a new model version, freeze exactly the rows it was trained
     on (every source version minus the validation hold-out ``exclude_record_ids``, timestamps
     preserved) as one new HISTORICAL data version, derived
     from the previous baseline, and link it to the new model version as TRAINING data. The next
     drift event for this model is then compared against the data the *live* model actually
-    learned from, instead of the stale pre-adaptation baseline."""
+    learned from, instead of the stale pre-adaptation baseline.
+
+    When a source is stored by reference (or derived), the snapshot is a derived version:
+    the source version ids and excluded row ids, read back through ``access``, with the
+    content hash of exactly those rows. Nothing is copied into the database."""
     looked_up = [session.get(DataVersion, i) for i in source_version_ids]
     sources = [s for s in looked_up if s is not None]
     if not sources or len(sources) != len(looked_up):
@@ -474,23 +594,64 @@ def snapshot_training_data(
         session.get_one(DataVersion, parent_version_id) if parent_version_id else sources[0]
     )
     dataset = session.get_one(DatasetMetadata, anchor.dataset_id)
+    excluded = set(exclude_record_ids)
+    source_names = [s.version for s in sources]
+    name = f"train-{model_id}-v{model_version}"
+    described = (
+        f"adaptation snapshot of {'+'.join(source_names)}"
+        + (f" minus {len(excluded)} held-out rows" if excluded else "")
+        + (f" (job {job_ref})" if job_ref else "")
+    )
+
+    if any(storage_of(s) != STORAGE_ROWS for s in sources):
+        # Some rows live outside the database: record which rows, not a copy of them.
+        if access is None:
+            raise ArtifactError("cannot snapshot referenced data without a DataAccess",
+                                source_version_ids=source_version_ids)
+        kept = [r for r in access.load_records(session, source_version_ids)
+                if r.id not in excluded]
+        hasher = RowHasher()
+        columns: dict[str, str] = {}
+        for s in sources:
+            columns.update((s.extra or {}).get("columns", {}))
+        for r in kept:
+            hasher.add({"observed_at": r.observed_at.isoformat(),
+                        **{k: r.payload[k] for k in sorted(r.payload)}})
+        return create_stored_version(
+            session,
+            dataset.dataset_id,
+            name,
+            digest=hasher.hexdigest(),
+            row_count=len(kept),
+            columns=columns,
+            data_start=kept[0].observed_at if kept else None,
+            data_end=kept[-1].observed_at if kept else None,
+            kind=DataKind.HISTORICAL,
+            storage=STORAGE_DERIVED,
+            storage_uri=None,
+            extra={"derived": {"sources": list(source_version_ids),
+                               "excluded_row_ids": sorted(excluded)}},
+            parent_version=anchor.version if parent_version_id else None,
+            model_id=model_id,
+            model_version=model_version,
+            role=AssociationRole.TRAINING,
+            source=described,
+        )
 
     rows = session.execute(
         select(DataRecord)
         .where(DataRecord.data_version_id.in_(source_version_ids))
         .order_by(DataRecord.observed_at, DataRecord.id)
     ).scalars().all()
-    excluded = set(exclude_record_ids)
     rows = [r for r in rows if r.id not in excluded]
     frame = pd.DataFrame([r.payload for r in rows])
     stamps = [_as_utc(r.observed_at) for r in rows]
     frame["__observed_at"] = stamps
 
-    source_names = [s.version for s in sources]
     return ingest_version(
         session,
         dataset.dataset_id,
-        f"train-{model_id}-v{model_version}",
+        name,
         frame,
         kind=DataKind.HISTORICAL,
         timestamp_column="__observed_at",
@@ -498,7 +659,5 @@ def snapshot_training_data(
         model_id=model_id,
         model_version=model_version,
         role=AssociationRole.TRAINING,
-        source=f"adaptation snapshot of {'+'.join(source_names)}"
-        + (f" minus {len(excluded)} held-out rows" if excluded else "")
-        + (f" (job {job_ref})" if job_ref else ""),
+        source=described,
     )

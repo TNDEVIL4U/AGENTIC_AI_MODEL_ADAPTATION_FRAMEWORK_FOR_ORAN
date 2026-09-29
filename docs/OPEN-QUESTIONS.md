@@ -39,9 +39,10 @@ them yet: the code they describe still calls the datastore and the registry dire
 
 | Port | Today | Scheduled |
 |---|---|---|
-| `dataset` | `adaptation.data.load_data_version_frame` reads the local datastore | Hardening Phase 5 (data access by reference) |
+| – | – | – |
 
-`deployment` left this list in Phase 3 and now has ten adapters.
+`deployment` left this list in Phase 3 and now has ten adapters; `dataset` left it in Phase 5
+with five (see "Dataset adapters" below).
 
 ## Registry adapters
 
@@ -112,6 +113,26 @@ Defaults and assumptions, with the key that changes each:
 | Production refuses a `webhook` sink without signing keys; other sinks rely on their own authentication (routing keys, broker credentials, IAM). | An unsigned webhook can be forged by anyone who finds the URL. | `NOTIFICATION_SIGNING_KEYS` |
 | Only job state transitions are events. Promotions and manual rollbacks (`POST /models/{id}/rollback`) outside a job are not yet. | The finding asked for job transitions; model-level events need their own type names. | none (a later phase) |
 | `webhook`, `slack`, `pagerduty` and `pubsub` were tested only against a local HTTP receiver, `nats` against a local server speaking the NATS protocol, and `email`, `kafka`, `sqs` and `sns` against client doubles in `tests/unit/notification_doubles.py`. **None is verified against the real service.** | No broker, cloud account, Slack workspace or PagerDuty service in the local gate. | the adapter's keys |
+
+## Dataset adapters
+
+Phase 5 lets a data version be a reference to a Parquet, CSV or JSON Lines object read in
+batches by a `DatasetPort` adapter (`file`, `http`, `fsspec`, `s3`, `gcs`) instead of rows
+posted inline. `oran_adapt.conformance.dataset` is the behaviour each adapter must show, and
+`docs/adapters/dataset.md` explains each key.
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| No adapter is enabled by default: data is sent inline, as before. | Reading from a store is a decision per installation, and every adapter needs an allow-list. | `DATASET_BACKENDS` |
+| Every adapter reads only inside an explicit allow-list (directories, hosts, prefixes, buckets); an empty list refuses everything. | A URI in a request body must not become a way to read arbitrary files or reach internal hosts. | `DATASET_FILE_ROOTS`, `DATASET_HTTP_ALLOWED_HOSTS`, `DATASET_FSSPEC_PREFIXES`, `DATASET_S3_BUCKETS`, `DATASET_GCS_BUCKETS` |
+| A registered object must not change. It is checked by fingerprint before each read; a change is refused, never silently re-read. File and fsspec fingerprints (size + modification time) can miss a same-size rewrite within the clock's resolution. | The content hash of a version is its identity for lineage and reproducibility. | `DATASET_VERIFY_ON_READ` (`hash` re-hashes every read) |
+| S3 pins `versionId` only on versioned buckets; on an unversioned bucket an overwrite is detected by ETag and refused. | Only a versioned store can serve the registered bytes after an overwrite. | bucket versioning |
+| A job holds at most 1 000 000 rows; drift analysis samples at most 100 000 rows per version; objects over 4 GiB are refused. | The framework runs on small machines; limits are checked before reading. | `DATASET_MAX_ROWS`, `DATASET_ANALYSIS_MAX_ROWS`, `DATASET_MAX_SOURCE_BYTES` |
+| Referenced data needs a timestamp column; there is no "start + spacing" fallback. | Row order in an object is not a time axis. | `DATASET_TIME_COLUMN`, `timestamp_column` per version |
+| CDC can follow any table; `kpi_sample` is only the default. Triggers are generated for review, not applied automatically. | Applying DDL to an operator's database is the operator's decision. | `CDC_*_COLUMN`, `CDC_DATASET_ID`, `oran-adapt cdc trigger-sql` |
+| `file` and `fsspec` (`memory://`) were tested for real, `http` and `gcs` against a local server, `s3` against a client double. **None of `http`, `s3`, `gcs` or a non-memory fsspec filesystem is verified against a real store.** | No cloud account or object store in the local gate. | the adapter's keys |
 
 ## Not yet behind a port
 

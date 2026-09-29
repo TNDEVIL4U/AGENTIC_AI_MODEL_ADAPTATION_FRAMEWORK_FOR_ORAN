@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from oran_adapt.cdc.events import CdcRowMapping
 from oran_adapt.cdc.sources import PollingCdcSource
 from oran_adapt.ports import AdapterSpec, Capability
 
@@ -13,7 +14,8 @@ if TYPE_CHECKING:
 
 
 def _build(settings: Settings) -> PollingCdcSource:
-    return PollingCdcSource(settings.cdc_polling_table, settings.cdc_schema_ref)
+    return PollingCdcSource(settings.cdc_polling_table, settings.cdc_schema_ref,
+                            CdcRowMapping.from_settings(settings))
 
 
 SPEC = AdapterSpec(
@@ -22,7 +24,9 @@ SPEC = AdapterSpec(
         adapter="polling",
         description="trigger-fed cdc_changelog table, offset committed with the events",
         features=frozenset({"exactly_once_offsets", "offline"}),
-        config_keys=("cdc_polling_table", "cdc_schema_ref"),
+        config_keys=("cdc_polling_table", "cdc_schema_ref", "cdc_key_column",
+                     "cdc_dataset_column", "cdc_dataset_id", "cdc_time_column",
+                     "cdc_payload_column"),
     ),
     factory=_build,
 )

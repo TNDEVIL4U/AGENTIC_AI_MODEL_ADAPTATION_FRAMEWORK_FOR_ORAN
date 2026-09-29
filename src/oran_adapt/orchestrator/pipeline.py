@@ -41,7 +41,7 @@ from oran_adapt.analysis.engine import analyze
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import ReuseDecision, VersionEvaluation
 from oran_adapt.analysis.version_eval import evaluate_versions
-from oran_adapt.bootstrap import build_deployer, build_model_handler
+from oran_adapt.bootstrap import build_data_access, build_deployer, build_model_handler
 from oran_adapt.core import metrics
 from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
@@ -64,6 +64,7 @@ from oran_adapt.core.errors import (
 )
 from oran_adapt.core.integrity import check_size, sha256_file, verify_checksum
 from oran_adapt.core.schemas import DriftEvent
+from oran_adapt.datastore.access import DataAccess
 from oran_adapt.datastore.current_data import clean_records, persist_current_data
 from oran_adapt.datastore.versioning import snapshot_training_data
 from oran_adapt.db.models import ModelMetadata, ModelVersionEvaluation
@@ -230,6 +231,7 @@ def run_adaptation_job(
     registry: ModelRegistryPort,
     llm_client: LlmClient | None,
     workdir: str,
+    data_access: DataAccess | None = None,
 ) -> JobResult:
     """Run the full pipeline for one drift event. Raises ModelNotFoundError if
     ``event.model_id`` isn't registered (Member 1's precondition) or ArtifactError if the model
@@ -237,6 +239,7 @@ def run_adaptation_job(
     existing version reused, a rejected candidate, a registered candidate - comes back as a
     JobResult, never an exception."""
     handler = build_model_handler(settings)
+    access = data_access or build_data_access(settings)
     deployer = build_deployer(settings, registry)
     model_meta = session.execute(
         select(ModelMetadata).where(ModelMetadata.model_id == event.model_id)
@@ -262,7 +265,7 @@ def run_adaptation_job(
             ),
         )
 
-    analysis = analyze(session, event, settings, live_version=live_version)
+    analysis = analyze(session, event, settings, live_version=live_version, access=access)
     assert model_meta is not None  # analyze() raised ModelNotFoundError otherwise
     metrics.DRIFT_EVENTS.labels(outcome=analysis.status).inc()
 
@@ -288,7 +291,9 @@ def run_adaptation_job(
         ref.data_version_id for ref in (package.historical_data, package.drifted_data) if ref
     ]
     cleaned = clean_records(
-        session, load_records(session, train_ids), required_columns=[target] if target else []
+        session,
+        load_records(session, train_ids, access=access),
+        required_columns=[target] if target else [],
     )
     if not cleaned.records:
         raise ArtifactError(
@@ -669,6 +674,7 @@ def run_adaptation_job(
         if package.historical_data
         else None,
         job_ref=event.event_id,
+        access=access,
     )
     registry.set_version_tags(
         name,

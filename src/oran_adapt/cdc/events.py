@@ -4,20 +4,29 @@
 for Debezium, the changelog sequence for the polling fallback) plus table, key and operation.
 A redelivered change therefore always has the same id, which is what makes processing
 idempotent (see cdc.store).
+
+Source tables need not look like kpi_sample. ``CdcRowMapping`` (CDC_KEY_COLUMN,
+CDC_DATASET_COLUMN / CDC_DATASET_ID, CDC_TIME_COLUMN, CDC_PAYLOAD_COLUMN) says which source
+columns hold the key, the dataset, the timestamp and the features, and every row image is
+normalized to the same {id, dataset_id, observed_at, payload} shape either way.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from pydantic import BaseModel
 
 from oran_adapt.core.enums import CdcOperation
 from oran_adapt.core.errors import CdcProcessingError
+
+if TYPE_CHECKING:
+    from oran_adapt.core.config import Settings
 
 _DEBEZIUM_OPS = {
     "c": CdcOperation.INSERT,
@@ -57,28 +66,62 @@ def _utc(value: Any) -> datetime:
     return ts.to_pydatetime()
 
 
-def _normalize_row(row: dict | None) -> dict | None:
-    """The row image in one shape whichever source it came from: JSON payload decoded,
-    observed_at as ISO-8601 UTC."""
+@dataclass(frozen=True)
+class CdcRowMapping:
+    """Which source columns hold what. ``dataset_column`` "" means every row belongs to
+    ``dataset_id``; ``payload_column`` "" means the features are every column other than the
+    key, dataset and time columns (a plain relational table rather than one JSON column)."""
+
+    key_column: str = "id"
+    dataset_column: str = "dataset_id"
+    dataset_id: str | None = None
+    time_column: str = "observed_at"
+    payload_column: str = "payload"
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> CdcRowMapping:
+        return cls(
+            key_column=settings.cdc_key_column,
+            dataset_column=settings.cdc_dataset_column,
+            dataset_id=settings.cdc_dataset_id,
+            time_column=settings.cdc_time_column,
+            payload_column=settings.cdc_payload_column,
+        )
+
+    def payload(self, row: dict) -> dict:
+        if self.payload_column:
+            value = row.get(self.payload_column)
+            if isinstance(value, str):  # Debezium's io.debezium.data.Json arrives as a string
+                value = json.loads(value)
+            return value or {}
+        skip = {self.key_column, self.dataset_column, self.time_column}
+        return {k: v for k, v in row.items() if k not in skip}
+
+
+DEFAULT_MAPPING = CdcRowMapping()
+
+
+def _normalize_row(row: dict | None, mapping: CdcRowMapping = DEFAULT_MAPPING) -> dict | None:
+    """The row image in one shape whichever source and table it came from: JSON payload
+    decoded, observed_at as ISO-8601 UTC."""
     if row is None:
         return None
-    payload = row.get("payload")
-    if isinstance(payload, str):  # Debezium's io.debezium.data.Json arrives as a string
-        payload = json.loads(payload)
-    observed = row.get("observed_at")
+    observed = row.get(mapping.time_column)
     if isinstance(observed, int):  # Debezium MicroTimestamp for a timestamp without zone
         observed = datetime.fromtimestamp(observed / 1_000_000, UTC)
+    dataset = row.get(mapping.dataset_column) if mapping.dataset_column else None
     return {
-        "id": row.get("id"),
-        "dataset_id": row.get("dataset_id"),
+        "id": row.get(mapping.key_column),
+        "dataset_id": dataset if dataset is not None else mapping.dataset_id,
         "observed_at": _utc(observed).isoformat() if observed is not None else None,
-        "payload": payload or {},
+        "payload": mapping.payload(row),
     }
 
 
 def from_changelog_row(
     seq: int, table: str, operation: str, pk: str, old_row: str | None, new_row: str | None,
     tx_id: str | None, changed_at: str, *, schema_ref: str,
+    mapping: CdcRowMapping = DEFAULT_MAPPING,
 ) -> CdcEvent:
     """A cdc_changelog row (written by the migration 0005 triggers) as a CdcEvent.
     ``schema_ref`` (CDC_SCHEMA_REF) versions the row image: {id, dataset_id, observed_at,
@@ -90,8 +133,8 @@ def from_changelog_row(
         source_table=table,
         operation=op,
         primary_key=pk,
-        old_value=_normalize_row(json.loads(old_row)) if old_row else None,
-        new_value=_normalize_row(json.loads(new_row)) if new_row else None,
+        old_value=_normalize_row(json.loads(old_row), mapping) if old_row else None,
+        new_value=_normalize_row(json.loads(new_row), mapping) if new_row else None,
         timestamp=_utc(changed_at),
         transaction_id=tx_id,
         source_offset=str(seq),
@@ -101,7 +144,8 @@ def from_changelog_row(
 
 def from_debezium(
     value: bytes | str | dict | None, *, topic: str, partition: int, offset: int,
-    schema_ref: str, key_field: str = "id",
+    schema_ref: str, key_field: str | None = None,
+    mapping: CdcRowMapping = DEFAULT_MAPPING,
 ) -> CdcEvent | None:
     """A Debezium change message (JSON converter, with or without the schema wrapper) as a
     CdcEvent. Returns None for tombstones (the null-value message Kafka compaction uses after a
@@ -130,6 +174,7 @@ def from_debezium(
     before, after = envelope.get("before"), envelope.get("after")
     source = envelope.get("source") or {}
     row = after or before or {}
+    key_field = key_field or mapping.key_column
     if key_field not in row:
         raise CdcProcessingError(
             f"CDC row has no primary key field {key_field!r}", topic=topic, offset=offset
@@ -149,8 +194,8 @@ def from_debezium(
         source_table=table,
         operation=op,
         primary_key=pk,
-        old_value=_normalize_row(before),
-        new_value=_normalize_row(after),
+        old_value=_normalize_row(before, mapping),
+        new_value=_normalize_row(after, mapping),
         timestamp=datetime.fromtimestamp(ts_ms / 1000, UTC) if ts_ms else datetime.now(UTC),
         transaction_id=str(tx) if tx is not None else None,
         source_offset=f"{topic}:{partition}:{offset}",

@@ -185,11 +185,28 @@ keys (`docs/adapters/notification.md`, "Configuration"). What is still a literal
 | `adapters/notify_email.py` | subject cut to 200 characters | mail clients truncate long subjects; the full text is in the body |
 | `notifications/service.py` | at most 100 delivery ids in one redrive audit row | a bound on the audit row's size (the count is always recorded) |
 
+## Hardening Phase 5 status
+
+No baseline item reopened. The new code (`datastore/access.py`, `datastore/formats.py`,
+`adapters/datasets*.py`, `cdc/triggers.py`) takes every allow-list, limit, batch size, timeout,
+endpoint and credential from `DATASET_*` keys (`docs/adapters/dataset.md`, "Configuration"),
+and the CDC column names from `CDC_*_COLUMN` / `CDC_DATASET_ID`. A24 (`observed_at`) is now
+only the default of `DATASET_TIME_COLUMN` and `CDC_TIME_COLUMN` for external data; it stays
+the internal `data_record` column name. C10 (`CDC_KAFKA_TOPIC` defaulting to the kpi_sample
+topic) is unchanged: the default still names that table, and following another table means
+setting the topic. What is still a literal, and why:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `datastore/formats.py` | suffixes `.parquet`/`.pq`, `.csv`, `.jsonl`/`.ndjson` | file-format conventions; `format` overrides them per version |
+| `cdc/triggers.py` | identifiers limited to `[A-Za-z_][A-Za-z0-9_]{0,62}` | they are interpolated into DDL, and 63 is PostgreSQL's identifier limit |
+| `api/routes_data.py` | `limit` at most 1000 rows per page; `storage_uri` at most 500 characters | a bound on one response; the `storage_uri` column width |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 |
-|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 |
+|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 |

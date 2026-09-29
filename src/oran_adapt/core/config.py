@@ -44,13 +44,20 @@ ADAPTER_SELECTORS: dict[str, str] = {
     "auth_backend": "auth",
     "policy_backend": "policy",
     "notification_backend": "notification",
+    "dataset_backends": "dataset",
     "secrets_backend": "secrets",
 }
 # Selector values that mean "this port is switched off" rather than naming an adapter.
-DISABLED = {"llm_provider": "none", "cdc_mode": "disabled", "notification_backend": "none"}
+DISABLED = {
+    "llm_provider": "none",
+    "cdc_mode": "disabled",
+    "notification_backend": "none",
+    "dataset_backends": "none",
+}
 # Selectors that take a comma-separated list of adapters, all of them in use at once (every
-# notification sink named receives every event its filter lets through).
-MULTI_SELECTORS = frozenset({"notification_backend"})
+# notification sink named receives every event its filter lets through; every dataset adapter
+# named serves the URI schemes it declares).
+MULTI_SELECTORS = frozenset({"notification_backend", "dataset_backends"})
 # Keys a production deployment must set explicitly (a default would point at a local file).
 # Each selected adapter adds its own storage keys (Capability.production_keys).
 PRODUCTION_REQUIRED = ("database_url", "artifact_workdir")
@@ -472,6 +479,48 @@ class Settings(BaseSettings):
     secrets_backend: str = "env"
     secrets_dir: str | None = None
 
+    # Data by reference (docs/adapters/dataset.md). A data version is either rows stored in the
+    # database (sent inline) or a URI to a Parquet/CSV/JSONL object that stays where it is and is
+    # read in DATASET_CHUNK_ROWS batches through the dataset adapter serving its scheme.
+    # DATASET_BACKENDS lists the enabled adapters ("none": inline data only).
+    dataset_backends: str = Field("none", min_length=1)
+    dataset_chunk_rows: int = Field(10_000, ge=1)
+    # Memory ceilings. A job or a frame load refuses (DATA_TOO_LARGE) before reading more than
+    # DATASET_MAX_ROWS rows; analysis compares drift on a deterministic sample of at most
+    # DATASET_ANALYSIS_MAX_ROWS rows per version; a download is refused past
+    # DATASET_MAX_SOURCE_BYTES.
+    dataset_max_rows: int = Field(1_000_000, ge=1)
+    dataset_analysis_max_rows: int = Field(100_000, ge=1)
+    dataset_max_source_bytes: int = Field(4 * 1024**3, ge=1)
+    # Default name of the timestamp column in referenced data (per version: timestamp_column).
+    dataset_time_column: str = Field("observed_at", min_length=1)
+    # Before reading a referenced version: "fingerprint" (compare ETag/generation/mtime, and the
+    # content hash when the store has no fingerprint), "hash" (always re-hash while reading), or
+    # "off".
+    dataset_verify_on_read: Literal["fingerprint", "hash", "off"] = "fingerprint"
+    # Where downloads of remote objects are spooled (default: the system temp directory).
+    dataset_spool_dir: str | None = None
+    # file: local directories references may point into (anything else is refused).
+    dataset_file_roots: list[str] = Field(default_factory=list)
+    # http: hosts (host or host:port) references may name; https only unless
+    # DATASET_HTTP_ALLOW_PLAIN is set.
+    dataset_http_allowed_hosts: list[str] = Field(default_factory=list)
+    dataset_http_allow_plain: bool = False
+    dataset_http_timeout_s: float = Field(30.0, gt=0)
+    dataset_http_token: SecretStr | None = None  # sent as "Authorization: Bearer <token>"
+    # fsspec: URL prefixes references may start with (s3://bucket/, abfs://container/, ...) and
+    # the filesystem storage options as a JSON object (credentials, endpoint).
+    dataset_fsspec_prefixes: list[str] = Field(default_factory=list)
+    dataset_fsspec_options: SecretStr | None = None
+    # s3 (boto3): buckets references may name; region and optional endpoint (MinIO, LocalStack).
+    dataset_s3_buckets: list[str] = Field(default_factory=list)
+    dataset_s3_region: str | None = None
+    dataset_s3_endpoint_url: str | None = None
+    # gcs (JSON API over HTTPS): buckets references may name.
+    dataset_gcs_buckets: list[str] = Field(default_factory=list)
+    dataset_gcs_endpoint: str = Field("https://storage.googleapis.com", min_length=1)
+    dataset_gcs_credentials: Literal["adc", "none"] = "adc"
+
     # Change data capture from the source table (see docs/CDC.md): "disabled", or a cdc_source
     # adapter - "kafka" (Debezium via Kafka, production) or "polling" (trigger-fed changelog).
     cdc_mode: str = "disabled"
@@ -486,6 +535,14 @@ class Settings(BaseSettings):
     cdc_consumer_group: str = "oran-adapt-cdc"
     cdc_kafka_poll_timeout_s: float = Field(1.0, gt=0)
     cdc_kafka_auto_offset_reset: Literal["earliest", "latest"] = "earliest"
+    # The source table's row image: primary key, dataset id, timestamp and payload columns.
+    # CDC_PAYLOAD_COLUMN="" takes every other column as the payload (a plain wide table);
+    # CDC_DATASET_COLUMN="" puts every row into the one dataset CDC_DATASET_ID names.
+    cdc_key_column: str = Field("id", min_length=1)
+    cdc_dataset_column: str = "dataset_id"
+    cdc_dataset_id: str | None = None
+    cdc_time_column: str = Field("observed_at", min_length=1)
+    cdc_payload_column: str = "payload"
 
     @model_validator(mode="after")
     def _api_keys_well_formed(self) -> Settings:
@@ -496,6 +553,19 @@ class Settings(BaseSettings):
                 raise ValueError("API_KEYS keys must be SHA-256 hex digests of the API keys")
             if spec.partition(":")[0] not in Role.__members__:
                 raise ValueError(f"API_KEYS role must be one of {', '.join(Role)}")
+        return self
+
+    @model_validator(mode="after")
+    def _data_limits_consistent(self) -> Settings:
+        if self.dataset_chunk_rows > self.dataset_max_rows:
+            raise ConfigurationError(
+                "DATASET_CHUNK_ROWS must not exceed DATASET_MAX_ROWS", key="DATASET_CHUNK_ROWS"
+            )
+        if not self.cdc_dataset_column and not self.cdc_dataset_id:
+            raise ConfigurationError(
+                "CDC_DATASET_COLUMN is empty, so CDC_DATASET_ID must name the dataset",
+                key="CDC_DATASET_ID",
+            )
         return self
 
     @model_validator(mode="after")

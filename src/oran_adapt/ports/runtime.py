@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, BinaryIO, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    import pandas as pd
     from sqlalchemy.orm import Session
 
 
@@ -64,13 +63,42 @@ class DeploymentPort(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class SourceStat:
+    """What a dataset adapter reports about one stored object, without reading its content.
+
+    ``fingerprint`` changes whenever the object's bytes change (an ETag, an object generation,
+    size plus modification time); None when the store offers nothing of the kind, in which case
+    readers verify the content hash instead. ``pinned_uri`` names this exact object version
+    when the store keeps versions (an S3 ``versionId``, a GCS ``generation``), so later writes
+    to the same key do not change what the reference reads; otherwise it is the URI as given.
+    """
+
+    uri: str
+    pinned_uri: str
+    fingerprint: str | None
+    size_bytes: int | None = None
+
+
 @runtime_checkable
 class DatasetPort(Protocol):
-    """Read access to versioned datasets for analysis and training."""
+    """Byte access to data stored outside the framework's database (docs/adapters/dataset.md).
 
-    def load_version_frame(self, session: Session, data_version_id: int) -> pd.DataFrame:
-        """One stored data version as a frame (``observed_at`` plus the payload columns)."""
-        ...
+    A data version registered by reference keeps only a URI; reading it goes through the
+    adapter whose ``schemes`` include the URI's scheme. ``check`` refuses (without I/O) a URI
+    outside the adapter's configured allow-list with DataSourceNotAllowedError. ``stat`` and
+    ``open`` raise DatasetNotFoundError for a missing object, DataSourceUnavailableError when
+    the store cannot be reached, and DataTooLargeError past DATASET_MAX_SOURCE_BYTES. ``open``
+    returns a seekable binary file the caller closes; parsing the format is not the adapter's
+    concern (oran_adapt.datastore.formats)."""
+
+    schemes: frozenset[str]
+
+    def check(self, uri: str) -> None: ...
+
+    def stat(self, uri: str) -> SourceStat: ...
+
+    def open(self, uri: str) -> BinaryIO: ...
 
 
 @runtime_checkable

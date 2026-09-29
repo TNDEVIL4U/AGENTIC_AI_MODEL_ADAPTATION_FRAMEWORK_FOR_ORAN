@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from oran_adapt.core.config import Settings
 from oran_adapt.core.errors import DataLeakageError
-from oran_adapt.db.models import DataRecord
+from oran_adapt.datastore.access import Row
 
 
 class LeakageReport(BaseModel):
@@ -80,13 +80,13 @@ def _target_leaks(
 
 
 def check_leakage(
-    train: list[DataRecord],
-    holdout: list[DataRecord],
+    train: list[Row],
+    holdout: list[Row],
     *,
     target: str,
     feature_names: list[str],
     settings: Settings,
-) -> tuple[list[DataRecord], LeakageReport]:
+) -> tuple[list[Row], LeakageReport]:
     """Return the training rows that are safe to fit on, and what was found. Raises
     DataLeakageError on target leakage, or if no training rows survive the checks."""
     report = LeakageReport(train_rows_in=len(train), holdout_rows=len(holdout))

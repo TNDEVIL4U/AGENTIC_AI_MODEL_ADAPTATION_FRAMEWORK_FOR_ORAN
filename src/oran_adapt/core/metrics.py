@@ -117,6 +117,30 @@ JOB_TIMEOUTS = Counter(
     "Adaptation jobs recorded TIMED_OUT, by the stage their worker had reached when killed.",
     ["stage"],
 )
+DATASET_ROWS_READ = Counter(
+    "dataset_rows_read_total",
+    "Data rows read for analysis and training, by how the version stores them "
+    "(rows, reference, derived).",
+    ["storage"],
+)
+DATASET_BYTES_READ = Counter(
+    "dataset_bytes_read_total",
+    "Bytes read from referenced data objects, by URI scheme.",
+    ["scheme"],
+)
+DATASET_READ_DURATION = Histogram(
+    "dataset_read_duration_seconds",
+    "Time to read one data version's rows, by how the version stores them.",
+    ["storage"],
+    buckets=_EVAL_BUCKETS,
+)
+DATASET_READ_REFUSED = Counter(
+    "dataset_read_refused_total",
+    "Data reads refused, by reason: too_large (over DATASET_MAX_ROWS or "
+    "DATASET_MAX_SOURCE_BYTES), changed (the referenced object no longer matches) or "
+    "not_allowed (URI outside the configured allow-lists).",
+    ["reason"],
+)
 
 # The metrics a job's worker process can move. A worker runs in its own process with its own
 # registry, so it reports how far each of these moved (delta_since) and the parent, which
@@ -137,6 +161,10 @@ _FORWARDED = (
     LLM_REQUESTS,
     LLM_FAILURES,
     SANDBOX_FAILURES,
+    DATASET_ROWS_READ,
+    DATASET_BYTES_READ,
+    DATASET_READ_DURATION,
+    DATASET_READ_REFUSED,
 )
 _BY_NAME = {family.name: metric for metric in _FORWARDED for family in metric.describe()}
 

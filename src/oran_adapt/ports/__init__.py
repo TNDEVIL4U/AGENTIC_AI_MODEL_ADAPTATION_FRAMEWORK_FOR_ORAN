@@ -21,6 +21,7 @@ from oran_adapt.ports.runtime import (
     LLMPort,
     NotificationPort,
     OutboundMessage,
+    SourceStat,
 )
 from oran_adapt.ports.security import AuthPort, PolicyPort, Principal, SecretsPort
 
@@ -63,4 +64,5 @@ __all__ = [
     "Principal",
     "RegisteredModel",
     "SecretsPort",
+    "SourceStat",
 ]

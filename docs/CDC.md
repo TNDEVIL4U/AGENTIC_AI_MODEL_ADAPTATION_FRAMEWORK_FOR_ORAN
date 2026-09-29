@@ -26,6 +26,21 @@ Settings (environment variable = field name, see `core/config.py`):
 | `CDC_KAFKA_TOPIC` | `oran.public.kpi_sample` | Debezium topic: `<topic.prefix>.<schema>.<table>` |
 | `CDC_CONSUMER_GROUP` | `oran-adapt-cdc` | Kafka consumer group |
 | `CDC_KAFKA_POLL_TIMEOUT_S` | `1.0` | How long one Kafka poll waits |
+| `CDC_KEY_COLUMN` | `id` | Source column holding the row key (also the Debezium key field) |
+| `CDC_DATASET_COLUMN` | `dataset_id` | Source column naming the dataset |
+| `CDC_DATASET_ID` | unset | A fixed dataset id, for tables without a dataset column |
+| `CDC_TIME_COLUMN` | `observed_at` | Source column holding the observation time |
+| `CDC_PAYLOAD_COLUMN` | `payload` | Source column holding the features as JSON; empty = every other column is a feature |
+
+`kpi_sample` is only the default. To follow another table, set the keys above and, for the
+polling mode, generate its changelog triggers, review them, and apply them:
+
+```
+oran-adapt cdc trigger-sql --table cell_kpi --dialect sqlite --key-column sample_id \n    --columns sample_id,cell,ts,prb_util
+oran-adapt cdc trigger-sql --table cell_kpi --dialect postgresql
+```
+
+For Kafka, point Debezium's `table.include.list` and `CDC_KAFKA_TOPIC` at the table.
 
 ## Delivery guarantees
 

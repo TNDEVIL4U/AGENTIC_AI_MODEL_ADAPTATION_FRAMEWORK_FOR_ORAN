@@ -6,6 +6,9 @@ the same database / MLflow registry the API uses (configured through the usual s
     python -m oran_adapt.cli db upgrade
     python -m oran_adapt.cli data ingest --dataset kpi --version v1 --csv train.csv
     python -m oran_adapt.cli data lineage --dataset kpi --version v1
+    python -m oran_adapt.cli data register --dataset kpi --version v3         --uri s3://kpi-bucket/2026/09/cells.parquet --timestamp-column ts
+    python -m oran_adapt.cli data verify --dataset kpi --version v3
+    python -m oran_adapt.cli cdc trigger-sql --table cell_kpi --dialect sqlite         --columns id,cell,ts,prb_util
     python -m oran_adapt.cli model onboard --model-id m1 --model-file m1.joblib \\
         --framework sklearn --task-type classifier --target label \\
         --dataset kpi --training-csv train.csv
@@ -100,6 +103,62 @@ def _cmd_data_ingest(args, settings: Settings) -> Any:
         return info.as_dict()
 
 
+def _data_access(settings: Settings):
+    from oran_adapt.bootstrap import build_data_access
+
+    return build_data_access(settings)
+
+
+def _cmd_data_register(args, settings: Settings) -> Any:
+    from oran_adapt.db.base import session_scope
+
+    access = _data_access(settings)
+    with session_scope(_session_factory(settings)) as session:
+        info = access.register(
+            session,
+            args.dataset,
+            args.version,
+            args.uri,
+            kind=args.kind,
+            fmt=args.format,
+            timestamp_column=args.timestamp_column,
+            parent_version=args.parent,
+            model_id=args.model_id,
+            model_version=args.model_version,
+            role=args.role,
+            actor="cli",
+        )
+        return info.as_dict()
+
+
+def _cmd_data_verify(args, settings: Settings) -> Any:
+    from oran_adapt.datastore.versioning import version_row
+    from oran_adapt.db.base import session_scope
+
+    access = _data_access(settings)
+    with session_scope(_session_factory(settings)) as session:
+        result = access.verify(session, version_row(session, args.dataset, args.version))
+    if not result["matches"]:
+        from oran_adapt.core.errors import DataSourceChangedError
+
+        raise DataSourceChangedError(
+            f"data version '{args.version}' no longer matches its content hash", **result
+        )
+    return result
+
+
+def _cmd_data_rows(args, settings: Settings) -> Any:
+    from oran_adapt.datastore.versioning import version_row
+    from oran_adapt.db.base import session_scope
+
+    access = _data_access(settings)
+    with session_scope(_session_factory(settings)) as session:
+        dv = version_row(session, args.dataset, args.version)
+        rows = access.page(session, dv, offset=args.offset, limit=args.limit)
+        return [{"observed_at": r.observed_at, "record_key": r.record_key, "payload": r.payload}
+                for r in rows]
+
+
 def _cmd_data_list(args, settings: Settings) -> Any:
     from oran_adapt.datastore import list_datasets, list_versions
     from oran_adapt.db.base import session_scope
@@ -156,6 +215,20 @@ def _cmd_cdc_materialize(args, settings: Settings) -> Any:
         if info is None:
             return {"dataset_id": args.dataset, "materialized": False, "reason": "no pending events"}
         return {"materialized": True, **info.as_dict()}
+
+
+def _cmd_cdc_trigger_sql(args, settings: Settings) -> Any:
+    from oran_adapt.cdc.triggers import trigger_sql
+
+    statements = trigger_sql(
+        args.table or settings.cdc_polling_table,
+        dialect=args.dialect,
+        key_column=args.key_column or settings.cdc_key_column,
+        columns=[c for c in (args.columns or "").split(",") if c],
+        json_columns=[c for c in (args.json_columns or "").split(",") if c],
+    )
+    print(";\n\n".join(statements) + ";")
+    return None
 
 
 def _cmd_notifications_dispatch(args, settings: Settings) -> Any:
@@ -378,6 +451,31 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--model-version")
     c.add_argument("--role", choices=["TRAINING", "VALIDATION", "DRIFT_OBSERVED"])
     c.set_defaults(fn=_cmd_data_ingest)
+    c = data.add_parser(
+        "register", help="register a file / URL / object-store URI as a data version, uncopied"
+    )
+    c.add_argument("--dataset", required=True)
+    c.add_argument("--version", required=True)
+    c.add_argument("--uri", required=True, help="read by a DATASET_BACKENDS adapter")
+    c.add_argument("--format", choices=["csv", "jsonl", "parquet"],
+                   help="default: from the URI's extension")
+    c.add_argument("--kind", choices=["HISTORICAL", "DRIFTED"], default="HISTORICAL")
+    c.add_argument("--timestamp-column")
+    c.add_argument("--parent")
+    c.add_argument("--model-id")
+    c.add_argument("--model-version")
+    c.add_argument("--role", choices=["TRAINING", "VALIDATION", "DRIFT_OBSERVED"])
+    c.set_defaults(fn=_cmd_data_register)
+    c = data.add_parser("verify", help="re-read a version and recompute its content hash")
+    c.add_argument("--dataset", required=True)
+    c.add_argument("--version", required=True)
+    c.set_defaults(fn=_cmd_data_verify)
+    c = data.add_parser("rows", help="print a page of a version's rows")
+    c.add_argument("--dataset", required=True)
+    c.add_argument("--version", required=True)
+    c.add_argument("--offset", type=int, default=0)
+    c.add_argument("--limit", type=int, default=20)
+    c.set_defaults(fn=_cmd_data_rows)
     c = data.add_parser("list")
     c.add_argument("--dataset")
     c.set_defaults(fn=_cmd_data_list)
@@ -399,6 +497,15 @@ def build_parser() -> argparse.ArgumentParser:
     c = cdc.add_parser("materialize", help="fold pending CDC events into a new data version")
     c.add_argument("--dataset", required=True)
     c.set_defaults(fn=_cmd_cdc_materialize)
+    c = cdc.add_parser(
+        "trigger-sql", help="print changelog trigger DDL for a source table (to review, apply)"
+    )
+    c.add_argument("--table", help="default: CDC_POLLING_TABLE")
+    c.add_argument("--dialect", choices=["sqlite", "postgresql"], required=True)
+    c.add_argument("--key-column", help="default: CDC_KEY_COLUMN")
+    c.add_argument("--columns", help="comma-separated column list (required for sqlite)")
+    c.add_argument("--json-columns", help="columns holding JSON text (sqlite)")
+    c.set_defaults(fn=_cmd_cdc_trigger_sql)
 
     notes = top.add_parser("notifications").add_subparsers(dest="cmd", required=True)
     c = notes.add_parser("dispatch", help="deliver the notification outbox to the sinks")
@@ -483,7 +590,9 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
     try:
         settings = get_settings() if getattr(args, "needs_settings", True) else None
-        _print(args.fn(args, settings))
+        result = args.fn(args, settings)
+        if result is not None:
+            _print(result)
     except AdaptationError as exc:
         _print(exc.to_dict())
         return 1

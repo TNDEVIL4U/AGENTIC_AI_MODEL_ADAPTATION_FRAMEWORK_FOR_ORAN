@@ -24,6 +24,7 @@ from oran_adapt.analysis.schemas import (
 from oran_adapt.analysis.summary import summarize_drift
 from oran_adapt.core.config import Settings
 from oran_adapt.core.schemas import DriftEvent
+from oran_adapt.datastore.access import DataAccess
 
 
 def _ref(data_slice: DataSlice | None) -> DataVersionRef | None:
@@ -33,14 +34,21 @@ def _ref(data_slice: DataSlice | None) -> DataVersionRef | None:
         data_version_id=data_slice.data_version_id,
         version=data_slice.version,
         kind=data_slice.kind,
-        row_count=data_slice.row_count,
+        row_count=data_slice.total_rows
+        if data_slice.total_rows is not None
+        else data_slice.row_count,
         data_start=data_slice.data_start,
         data_end=data_slice.data_end,
     )
 
 
 def analyze(
-    session: Session, event: DriftEvent, settings: Settings, *, live_version: str | None = None
+    session: Session,
+    event: DriftEvent,
+    settings: Settings,
+    *,
+    live_version: str | None = None,
+    access: DataAccess | None = None,
 ) -> AnalysisResult:
     """Run the full Member 1 pipeline for a single drift event. Raises ModelNotFoundError if
     ``event.model_id`` is not registered. ``live_version`` picks the baseline: the data that
@@ -50,6 +58,7 @@ def analyze(
         event,
         performance_limit=settings.analysis_performance_history_limit,
         live_version=live_version,
+        access=access or DataAccess.from_settings(settings),
     )
 
     if context.historical is None or context.drifted is None:

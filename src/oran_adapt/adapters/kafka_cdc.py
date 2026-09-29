@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from oran_adapt.cdc.events import CdcEvent, from_debezium
+from oran_adapt.cdc.events import CdcEvent, CdcRowMapping, from_debezium
 from oran_adapt.core.errors import CdcUnavailableError
 from oran_adapt.ports import AdapterSpec, Capability
 
@@ -42,6 +42,7 @@ class KafkaCdcSource:
     def __init__(self, settings: Settings, consumer: Any) -> None:
         self.topic = settings.cdc_kafka_topic
         self.schema_ref = settings.cdc_schema_ref
+        self.mapping = CdcRowMapping.from_settings(settings)
         self.timeout = settings.cdc_kafka_poll_timeout_s
         self.name = f"kafka:{settings.cdc_consumer_group}:{self.topic}"
         self._consumer = consumer
@@ -67,6 +68,7 @@ class KafkaCdcSource:
                 partition=msg.partition(),
                 offset=msg.offset(),
                 schema_ref=self.schema_ref,
+                mapping=self.mapping,
             )
             if event is not None:
                 events.append(event)
@@ -100,6 +102,11 @@ SPEC = AdapterSpec(
             "cdc_kafka_poll_timeout_s",
             "cdc_kafka_auto_offset_reset",
             "cdc_schema_ref",
+            "cdc_key_column",
+            "cdc_dataset_column",
+            "cdc_dataset_id",
+            "cdc_time_column",
+            "cdc_payload_column",
         ),
         required_keys=("kafka_bootstrap_servers", "cdc_kafka_topic"),
         distributions=("confluent-kafka",),
