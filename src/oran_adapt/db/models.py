@@ -460,6 +460,26 @@ class RolloutObservation(Base):
     )
 
 
+class LlmUsage(Base):
+    """One LLM call's usage, the ledger the token and cost budgets are checked against
+    (llm.guard). Rows are written after each call that reached the provider."""
+
+    __tablename__ = "llm_usage"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(100), index=True)
+    prompt_id: Mapped[str | None] = mapped_column(String(100))
+    prompt_version: Mapped[str | None] = mapped_column(String(50))
+    job_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated: Mapped[bool] = mapped_column(Boolean, default=False)
+    cost: Mapped[float] = mapped_column(Float, default=0.0)
+    outcome: Mapped[str] = mapped_column(String(40), default="ok")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )
+
+
 @event.listens_for(AuditLog, "before_update")
 @event.listens_for(AuditLog, "before_delete")
 def _audit_log_is_append_only(_mapper, _connection, target: AuditLog) -> None:

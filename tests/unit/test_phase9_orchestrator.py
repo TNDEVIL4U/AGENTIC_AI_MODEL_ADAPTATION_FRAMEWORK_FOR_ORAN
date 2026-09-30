@@ -119,10 +119,12 @@ def _seed_model(
     historical: pd.DataFrame,
     drifted: pd.DataFrame,
     warm_start: bool,
+    pip_requirements: list[str] | None = None,
 ) -> None:
     clf = LogisticRegression(warm_start=warm_start).fit(historical[FEATURES], historical[TARGET])
     with mlflow.start_run():
-        mlflow.sklearn.log_model(clf, name="model", registered_model_name=mlflow_name)
+        mlflow.sklearn.log_model(clf, name="model", registered_model_name=mlflow_name,
+                                 pip_requirements=pip_requirements)
     registry.set_alias(mlflow_name, settings.live_alias, "1")
 
     with session_scope(session_factory) as session:

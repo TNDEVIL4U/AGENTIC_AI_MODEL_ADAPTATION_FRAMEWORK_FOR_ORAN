@@ -56,6 +56,9 @@ DISABLED = {
     "notification_backend": "none",
     "dataset_backends": "none",
 }
+# Selectors switched on by a separate boolean key: with the switch false the selector selects
+# nothing, so its adapter is neither built nor checked for its required keys.
+ENABLE_SWITCHES = {"llm_provider": "llm_enabled"}
 # Selectors that take a comma-separated list of adapters, all of them in use at once (every
 # notification sink named receives every event its filter lets through; every dataset adapter
 # named serves the URI schemes it declares).
@@ -73,6 +76,9 @@ _ALL_ROLES = ["ADMIN", "OPERATOR", "ML_ENGINEER", "READ_ONLY"]
 def selected_adapters(settings: Any, selector: str) -> list[str]:
     """The adapter names ``selector`` selects: none when it holds its DISABLED value, every
     comma-separated name for a MULTI_SELECTORS key, otherwise the one name it holds."""
+    switch = ENABLE_SWITCHES.get(selector)
+    if switch is not None and not getattr(settings, switch):
+        return []
     value = str(getattr(settings, selector))
     if DISABLED.get(selector) == value:
         return []
@@ -243,20 +249,56 @@ class Settings(BaseSettings):
     mlflow_http_max_retries: int = Field(1, ge=0)
     mlflow_http_backoff_factor: float = Field(0.0, ge=0)
     mlflow_http_timeout_s: float = Field(10.0, gt=0)
+    # MLflow's usage telemetry to its vendor (off: no call leaves the deployment unasked).
+    mlflow_telemetry: bool = False
     # Registry tag names the framework writes on model versions.
     registry_tags_checksum: str = Field("artifact.sha256", min_length=1)
     registry_tags_status: str = Field("oran.status", min_length=1)
 
-    # LLM adapter (oran_adapt.llm group) or "none" for the deterministic path only.
+    # The LLM is off unless LLM_ENABLED is true: every decision and adaptation then takes the
+    # deterministic path and nothing is sent anywhere. LLM_PROVIDER names the adapter
+    # (oran_adapt.llm group) used when it is on.
+    llm_enabled: bool = False
     llm_provider: str = "none"
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-sonnet-5"
+    # Messages API base URL; unset means the SDK default (api.anthropic.com).
+    anthropic_base_url: str | None = None
     gemini_api_key: SecretStr | None = None
     gemini_model: str = "gemini-3.6-flash"
+    # generate_content base URL; unset means the SDK default (generativelanguage.googleapis.com).
+    gemini_base_url: str | None = None
     llm_timeout_s: float = Field(60.0, gt=0)
     llm_max_output_tokens: int = Field(2048, ge=1)
-    # Provider SDK retries on top of the first attempt (0: fail fast, the job retries instead).
+    # Retries after the first attempt, made by the guard (llm.guard) with exponential backoff
+    # from LLM_RETRY_BACKOFF_S; provider SDKs never retry on their own.
     llm_max_retries: int = Field(0, ge=0)
+    llm_retry_backoff_s: float = Field(0.5, ge=0)
+    # Circuit breaker: this many failed calls in a row open it; after LLM_BREAKER_RESET_S one
+    # trial call is let through.
+    llm_breaker_failure_threshold: int = Field(3, ge=1)
+    llm_breaker_reset_s: float = Field(60.0, gt=0)
+    # Caps. A call whose prompt exceeds LLM_MAX_INPUT_TOKENS, or that could take the budget
+    # window past LLM_TOKEN_BUDGET or LLM_COST_BUDGET (counting LLM_MAX_OUTPUT_TOKENS as spent),
+    # is refused before it is sent. 0 means no cap. Usage is kept in the llm_usage table.
+    llm_max_input_tokens: int = Field(16000, ge=0)
+    llm_token_budget: int = Field(0, ge=0)
+    llm_cost_budget: float = Field(0.0, ge=0)
+    llm_budget_window_s: int = Field(86400, gt=0)
+    # Prices per 1000 tokens, in the currency LLM_COST_BUDGET is in (0: cost not tracked).
+    llm_cost_per_1k_input_tokens: float = Field(0.0, ge=0)
+    llm_cost_per_1k_output_tokens: float = Field(0.0, ge=0)
+    # Token estimate for providers that do not report usage, and for the pre-call check.
+    llm_chars_per_token: float = Field(4.0, gt=0)
+    # Prompt version per prompt id (default: the newest built-in version); LLM_PROMPT_DIR adds
+    # versions from files named <id>@<version>.txt.
+    llm_prompt_versions: dict[str, str] = Field(default_factory=dict)
+    llm_prompt_dir: str | None = None
+    # OpenAI-compatible chat completions endpoint (vLLM, Ollama, LM Studio, LiteLLM, Azure
+    # OpenAI behind a gateway, ...): LLM_PROVIDER=openai-compatible.
+    llm_openai_base_url: str | None = None
+    llm_openai_model: str | None = None
+    llm_openai_api_key: SecretStr | None = None
 
     sandbox_backend: Literal["docker", "subprocess"] = "subprocess"
     sandbox_timeout_s: int = Field(120, gt=0)
@@ -445,6 +487,9 @@ class Settings(BaseSettings):
             "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
         ]
     )
+    # The pip requirements written into every saved model's environment. Empty: MLflow infers
+    # them, which imports the model in a subprocess (seconds to tens of seconds per save).
+    mlflow_pip_requirements: list[str] = Field(default_factory=list)
 
     # Largest model artifact (file or directory) downloaded, loaded or registered; a bigger one is
     # refused with ARTIFACT_ERROR before it is deserialized.
@@ -754,6 +799,15 @@ class Settings(BaseSettings):
             raise ConfigurationError(
                 "DEPLOYMENT_CANARY_ALIAS must differ from LIVE_ALIAS, CANDIDATE_ALIAS and "
                 "DEPLOYMENT_ALIAS", key="deployment_canary_alias",
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _llm_switch_consistent(self) -> Settings:
+        if self.llm_enabled and self.llm_provider == DISABLED["llm_provider"]:
+            raise ConfigurationError(
+                "LLM_ENABLED=true requires LLM_PROVIDER to name an LLM adapter",
+                key="LLM_PROVIDER",
             )
         return self
 

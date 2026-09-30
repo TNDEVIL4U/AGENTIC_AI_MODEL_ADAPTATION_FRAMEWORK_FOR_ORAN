@@ -220,7 +220,23 @@ class OutboundPolicy:
     ) -> httpx.Client:
         """An httpx client that checks every request against this policy, verifies TLS and never
         follows redirects."""
-        return httpx.Client(
+        client: httpx.Client = self.client_from(
+            httpx, timeout=timeout, ca_file=ca_file, transport=transport, headers=headers
+        )
+        return client
+
+    def client_from(
+        self,
+        module: Any,
+        *,
+        timeout: float,
+        ca_file: str | None = None,
+        transport: Any = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Any:
+        """``client`` built from ``module``, any httpx-compatible library (an SDK that ships
+        its own fork of httpx, such as ``httpx2``, is handed a client of that fork)."""
+        return module.Client(
             timeout=timeout,
             follow_redirects=False,
             verify=self.ssl_context(ca_file),

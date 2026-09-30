@@ -30,3 +30,8 @@ class Decision(BaseModel):
     resource_requirement: dict = Field(default_factory=dict)
     # What to do if this strategy cannot be carried out; NO_ACTION keeps LIVE as it is.
     fallback_strategy: Strategy | None = None
+    # How the LLM took part: the prompt stamp (id, version, sha256) when it was consulted,
+    # whether its answer was used, and otherwise the fallback reason ("disabled", "unavailable",
+    # "circuit_open", "budget_exceeded", "invalid_output", "outside_compatible_set"). None when
+    # a hard constraint decided and the LLM was not consulted.
+    llm: dict | None = None

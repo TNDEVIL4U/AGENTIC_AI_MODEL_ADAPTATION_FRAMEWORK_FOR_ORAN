@@ -119,9 +119,11 @@ def test_missing_model_raises_not_found(settings) -> None:
 def test_settings_reject_provider_without_key() -> None:
     for provider in ("anthropic", "gemini"):
         with pytest.raises(ConfigurationError) as exc:
-            Settings(_env_file=None, llm_provider=provider)
+            Settings(_env_file=None, llm_enabled=True, llm_provider=provider)
         assert exc.value.context["key"] == f"{provider.upper()}_API_KEY"
         assert exc.value.context["selected_by"] == "LLM_PROVIDER"
+        # LLM_ENABLED=false (the default) selects no provider, so no key is needed.
+        assert Settings(_env_file=None, llm_provider=provider).llm_enabled is False
     assert Settings(_env_file=None, llm_provider="none").llm_provider == "none"
 
 

@@ -269,11 +269,28 @@ the outbound policy (`OUTBOUND_*`) are keys. What is still a literal, and why:
 | `core/outbound.py` | non-public address classes | `ipaddress` classification; exceptions go in `OUTBOUND_ALLOWLIST` |
 | `scripts/secret_scan.py` | credential patterns | the scanner's rules, in one table |
 
+## Hardening Phase 10 status
+
+No baseline item reopened, and the counts do not move. A1 and A2 were already keys. C4 and C5
+(the default model ids) stay open. They apply only once `LLM_ENABLED=true`, and they are
+recorded in `docs/OPEN-QUESTIONS.md` ("LLM"). The switch (`LLM_ENABLED`), the providers' base
+URLs, the guard (`LLM_MAX_*`, `LLM_*_BUDGET`, `LLM_BREAKER_*`, `LLM_RETRY_BACKOFF_S`,
+`LLM_COST_PER_1K_*`, `LLM_CHARS_PER_TOKEN`), the prompts (`LLM_PROMPT_VERSIONS`,
+`LLM_PROMPT_DIR`), `MLFLOW_TELEMETRY` and `MLFLOW_PIP_REQUIREMENTS` are keys. What is still a
+literal, and why:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `llm/prompts.py` | the text of `strategy-selection@1`, `adaptation-code@1` | versioned built-ins; replaced through `LLM_PROMPT_DIR` and `LLM_PROMPT_VERSIONS` |
+| `adapters/llm_providers.py` | `/chat/completions`, message roles | the OpenAI chat completions wire format |
+| `llm/guard.py`, `decision/llm_selector.py` | fallback reason names | the recorded vocabulary (`docs/adapters/llm.md`) |
+| `adapters/registry/mlflow/registry.py` | `MLFLOW_DISABLE_TELEMETRY` | MLflow's own switch; whether it is set is `MLFLOW_TELEMETRY` |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 | Open after Phase 10 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 | 7 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |

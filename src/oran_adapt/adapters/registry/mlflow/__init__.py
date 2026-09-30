@@ -51,6 +51,7 @@ SPEC = AdapterSpec(
             "mlflow_http_max_retries",
             "mlflow_http_backoff_factor",
             "mlflow_http_timeout_s",
+            "mlflow_telemetry",
         ),
         required_keys=("mlflow_tracking_uri",),
         production_keys=("mlflow_tracking_uri",),

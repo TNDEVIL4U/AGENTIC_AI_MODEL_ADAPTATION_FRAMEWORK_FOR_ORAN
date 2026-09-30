@@ -113,6 +113,19 @@ with the `onnx` reference evaluator: unverified locally against the real librari
 | `adaptation/llm_adapter.py` | LLM-generated adapter code runs in the sandbox when no engine fits; LLM unavailability propagates as `LlmUnavailableError` |
 | `Dockerfile:26` | build pulls from `download.pytorch.org` and PyPI (build time only) |
 
+**Closed in Hardening Phase 10** (`docs/PHASE10_REPORT.md`): the LLM is off unless
+`LLM_ENABLED=true`, and `.env.example` ships `LLM_ENABLED=false`, `LLM_PROVIDER=none`, so
+copying it starts offline. Providers are adapters: `anthropic`, `gemini` and
+`openai-compatible` for self-hosted servers, each with a base-URL key, plus plugins. Every call
+goes through `llm/guard.py`: an input cap, a token and cost budget shared through the
+`llm_usage` table, a per-provider circuit breaker, retries with backoff, and a usage row per
+call. Prompts are versioned and stamped on the decision and the job. Every failure, including
+unsafe or failing generated code, falls back to the rules or to native retraining with a
+recorded reason; no job fails for it. The egress-blocked end-to-end test also found MLflow's
+usage telemetry, which is now off (`MLFLOW_TELEMETRY`). What remains is the image build: it
+downloads packages at build time. The running service needs no internet. The live provider
+services are unverified locally.
+
 ## 8. Assumes API keys are the only identity (finding #9, Hardening Phase 9)
 
 | Where | Assumption |

@@ -50,6 +50,7 @@ xgboost = "oran_adapt.adapters.model_types.tabular:XGBOOST"
 [project.entry-points."oran_adapt.llm"]
 anthropic = "oran_adapt.adapters.llm_providers:ANTHROPIC"
 gemini = "oran_adapt.adapters.llm_providers:GEMINI"
+openai-compatible = "oran_adapt.adapters.llm_providers:OPENAI_COMPATIBLE"
 
 [project.entry-points."oran_adapt.cdc_source"]
 kafka = "oran_adapt.adapters.kafka_cdc:SPEC"

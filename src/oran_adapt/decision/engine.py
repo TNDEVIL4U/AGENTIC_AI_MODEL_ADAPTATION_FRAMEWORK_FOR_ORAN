@@ -12,9 +12,10 @@ from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy
 from oran_adapt.decision.constraints import ConstraintResult, evaluate_constraints
 from oran_adapt.decision.fallback import select_strategy_fallback
-from oran_adapt.decision.llm_selector import select_strategy_via_llm
+from oran_adapt.decision.llm_selector import select_strategy_checked
 from oran_adapt.decision.report import explain_decision
 from oran_adapt.decision.schemas import Decision
+from oran_adapt.llm import calls
 from oran_adapt.llm.client import LlmClient
 
 
@@ -56,7 +57,7 @@ def _choose(package: DecisionPackage, settings: Settings, llm_client: LlmClient 
             constraint_result,
             llm_client,
             _evidence_confidence(package, settings),
-            settings.decision_default_confidence,
+            settings,
         ),
         constraint_result.rejected,
     )
@@ -67,7 +68,7 @@ def _select(
     constraint_result: ConstraintResult,
     llm_client: LlmClient | None,
     evidence_confidence: float | None,
-    default_confidence: float,
+    settings: Settings,
 ) -> Decision:
 
     if constraint_result.forced_strategy is not None:
@@ -82,8 +83,13 @@ def _select(
 
     compatible = constraint_result.compatible_strategies
 
+    # Whether the LLM was consulted, with which prompt, and why its answer was not used.
+    llm: dict = {"used": False, "fallback_reason": calls.FALLBACK_DISABLED}
     if llm_client is not None:
-        llm_choice = select_strategy_via_llm(llm_client, package, compatible)
+        llm_choice, reason, prompt = select_strategy_checked(
+            llm_client, package, compatible, settings
+        )
+        llm = {**prompt.stamp(), "used": llm_choice is not None, "fallback_reason": reason}
         if llm_choice is not None:
             # The LLM cannot be surer than the evidence allows; its own figure is kept.
             confidence = llm_choice.confidence
@@ -97,16 +103,20 @@ def _select(
                 compatible_strategies=compatible,
                 source="LLM",
                 evidence={"llm_confidence": llm_choice.confidence},
+                llm=llm,
             )
+    calls.fallback(llm["fallback_reason"])
 
     strategy, reason = select_strategy_fallback(compatible)
     return Decision(
         model_id=package.model_id,
         strategy=strategy,
-        confidence=default_confidence if evidence_confidence is None else evidence_confidence,
+        confidence=(settings.decision_default_confidence if evidence_confidence is None
+                    else evidence_confidence),
         rationale=reason,
         compatible_strategies=compatible,
         source="FALLBACK",
+        llm=llm,
     )
 
 

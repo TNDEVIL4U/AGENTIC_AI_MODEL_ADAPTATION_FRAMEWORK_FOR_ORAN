@@ -16,6 +16,7 @@ from oran_adapt.core.config import selected_adapters
 from oran_adapt.core.errors import ConfigurationError
 from oran_adapt.datastore.access import DataAccess
 from oran_adapt.llm.client import InstrumentedLlmClient
+from oran_adapt.llm.guard import GuardedLlmClient
 from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.handlers import ModelHandlers
 
@@ -38,7 +39,6 @@ if TYPE_CHECKING:
         SecretsPort,
     )
 
-LLM_DISABLED = "none"
 CDC_DISABLED = "disabled"
 
 
@@ -135,11 +135,15 @@ def build_artifact_store(settings: Settings) -> ArtifactStorePort:
 
 
 def build_llm(settings: Settings) -> LLMPort | None:
-    """None means "no LLM configured" (LLM_PROVIDER=none): callers keep a deterministic path
-    for that case rather than treating it as an error."""
-    if settings.llm_provider == LLM_DISABLED:
+    """None means "no LLM" (LLM_ENABLED=false, the default, or LLM_PROVIDER=none): callers keep
+    a deterministic path for that case rather than treating it as an error, and nothing is sent
+    anywhere. Otherwise the provider comes wrapped in the guard (caps, retries, breaker)."""
+    if not selected_adapters(settings, "llm_provider"):
         return None
-    return InstrumentedLlmClient(_make("llm", settings, "llm_provider"), settings.llm_provider)
+    provider = settings.llm_provider
+    return GuardedLlmClient.from_settings(
+        InstrumentedLlmClient(_make("llm", settings, "llm_provider"), provider), provider, settings
+    )
 
 
 def build_job_executor(settings: Settings) -> JobExecutorPort:

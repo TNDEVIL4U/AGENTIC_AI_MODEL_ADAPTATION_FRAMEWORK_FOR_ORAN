@@ -49,7 +49,7 @@ case "$phase" in
     7) scope="validation registry orchestrator" ;;        # validation gate, progressive delivery
     8) scope="adaptation.model_types adaptation.sequence adaptation.torch_engine adaptation.inspector validation conformance.model_types adapters.model_types" ;;  # model-type plugins
     9) scope="api.security api.ratelimit adapters.auth adapters.jwt adapters.vault adapters.access core.outbound" ;;  # security
-    10) scope="llm decision adaptation" ;;                # LLM paths
+    10) scope="llm adapters.llm_providers conformance.llm decision.llm_selector" ;;  # LLM paths
     11) scope="core api" ;;                               # packaging and deployment
     12) scope="core api orchestrator" ;;                  # observability
     13) scope="core api orchestrator registry" ;;         # test and conformance consolidation
@@ -89,7 +89,11 @@ if (( ${#scoped[@]} == 0 )); then
     exit 1
 fi
 printf '  %s\n' "${scoped[@]}"
-"$py" -m pytest -q -m "not heavy" -n "$workers" --ff "${scoped[@]}"
+# The acceptance script reads this report instead of re-running the same tests (_gate.py).
+mkdir -p .pytest_cache/oran-verify
+export ORAN_GATE_JUNIT="$root/.pytest_cache/oran-verify/scoped.xml"
+export ORAN_GATE_STARTED="$(date +%s)"
+"$py" -m pytest -q -m "not heavy" -n "$workers" --ff --junitxml "$ORAN_GATE_JUNIT" "${scoped[@]}"
 step "4/5 smoke tier (files not run above)"
 # The scoped run already ran the smoke tests in its own files; run the rest of the tier.
 ignored=()

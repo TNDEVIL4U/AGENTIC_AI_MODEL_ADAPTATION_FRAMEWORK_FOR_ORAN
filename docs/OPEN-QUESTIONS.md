@@ -225,6 +225,30 @@ Defaults and assumptions, with the key that changes each:
 | `AUTH_ENABLED=false` makes every caller an anonymous ADMIN. | Local development only. | `AUTH_ENABLED` |
 | **Unverified locally:** a real IdP, Vault/OpenBao, Envoy/ingress and API gateway (local doubles only); `pip-audit`, `bandit` and the SBOM run in CI only. | Not available on the gate machine. | - |
 
+## LLM
+
+Hardening Phase 10 made the LLM optional and fenced: `LLM_ENABLED` switches it on,
+providers are adapters (`anthropic`, `gemini`, `openai-compatible`), and every call goes
+through the guard (caps, budget, breaker, retries, usage ledger). Every failure falls back to
+the rules with a recorded reason. `docs/adapters/llm.md` explains every key.
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| The LLM is off; nothing is sent anywhere. | The framework must work with egress blocked; the rules decide. | `LLM_ENABLED` |
+| No token or cost budget (0); the input cap is 16000 estimated tokens. | A budget depends on the operator's contract; the input cap stops runaway prompts regardless. | `LLM_TOKEN_BUDGET`, `LLM_COST_BUDGET`, `LLM_BUDGET_WINDOW_S`, `LLM_MAX_INPUT_TOKENS` |
+| Prices are 0, so cost is not tracked until set. | Prices change and differ by contract; none is shipped. | `LLM_COST_PER_1K_INPUT_TOKENS`, `LLM_COST_PER_1K_OUTPUT_TOKENS` |
+| Without provider usage counts, tokens are estimated at 4 characters per token (rows flagged `estimated`). | A conservative average for English and code. | `LLM_CHARS_PER_TOKEN` |
+| The budget check reads the ledger, then the call writes it, so concurrent callers can overshoot by at most one call's maximum each. | No distributed lock is assumed. | - |
+| The circuit breaker is per process and per provider (3 failures open it, 60 s to half-open). | No shared store is assumed; each worker learns on its own. | `LLM_BREAKER_FAILURE_THRESHOLD`, `LLM_BREAKER_RESET_S` |
+| No retries by default (0; backoff 0.5 s doubling when set). SDK retries are always off. | A failed call falls back to the rules at once; retries cost money. | `LLM_MAX_RETRIES`, `LLM_RETRY_BACKOFF_S` |
+| The newest built-in prompt version is used. | Pin a version to freeze behaviour across upgrades. | `LLM_PROMPT_VERSIONS`, `LLM_PROMPT_DIR` |
+| Default model ids `claude-sonnet-5` and `gemini-3.6-flash` (hardcoding C4, C5). | Used only when the LLM is on with that provider. | `ANTHROPIC_MODEL`, `GEMINI_MODEL` |
+| MLflow's usage telemetry is off. | Nothing leaves the deployment unasked. | `MLFLOW_TELEMETRY` |
+| MLflow infers each saved model's pip requirements (a subprocess per save) unless a list is given. | Correct by default; pin the list to save seconds per save. | `MLFLOW_PIP_REQUIREMENTS` |
+| **Unverified locally:** the live Anthropic, Gemini and OpenAI-compatible services (local wire-format doubles only). | The gate runs with egress blocked. | - |
+
 ## Not yet behind a port
 
 - **Sandbox backend** (`SANDBOX_BACKEND`, `subprocess` or `docker`): this is a fixed choice in

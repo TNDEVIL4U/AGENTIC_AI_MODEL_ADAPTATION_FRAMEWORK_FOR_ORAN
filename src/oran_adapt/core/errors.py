@@ -105,6 +105,24 @@ class ValidationFailedError(AdaptationError):
 
 class LlmUnavailableError(AdaptationError):
     code = "LLM_UNAVAILABLE"
+    # Why the LLM path was not taken, recorded as the fallback reason (llm.calls.FALLBACK_*).
+    reason = "unavailable"
+
+
+class LlmCircuitOpenError(LlmUnavailableError):
+    """The provider failed LLM_BREAKER_FAILURE_THRESHOLD times in a row; calls are refused
+    without being sent until LLM_BREAKER_RESET_S has passed."""
+
+    code = "LLM_CIRCUIT_OPEN"
+    reason = "circuit_open"
+
+
+class LlmBudgetExceededError(LlmUnavailableError):
+    """The call would exceed a token or cost cap (per call or per budget window); it was
+    refused before anything was sent."""
+
+    code = "LLM_BUDGET_EXCEEDED"
+    reason = "budget_exceeded"
 
 
 class UnsafeCodeError(AdaptationError):

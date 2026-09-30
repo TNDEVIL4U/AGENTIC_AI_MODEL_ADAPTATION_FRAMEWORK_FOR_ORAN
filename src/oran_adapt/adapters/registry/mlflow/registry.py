@@ -42,16 +42,25 @@ class MlflowRegistry:
         http_max_retries: int,
         http_backoff_factor: float,
         http_timeout_s: float,
+        telemetry: bool = False,
     ) -> None:
         # MLflow's default HTTP policy (7 retries with exponential backoff) makes an outage take
         # minutes to surface. Fail fast unless the operator set MLflow's own variables.
         os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", str(http_max_retries))
         os.environ.setdefault("MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR", str(http_backoff_factor))
         os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", str(int(http_timeout_s)))
+        if not telemetry:
+            # MLflow reports usage to its vendor's servers unless told not to; the framework
+            # makes no call the operator did not configure (MLFLOW_TELEMETRY opts in).
+            os.environ.setdefault("MLFLOW_DISABLE_TELEMETRY", "true")
+            from mlflow.telemetry import set_telemetry_client
+
+            set_telemetry_client()  # drops the client MLflow started on import
         self.tracking_uri = tracking_uri
         self.registry_uri = registry_uri or tracking_uri
         self.artifact_policy = artifact_policy
         self._http = (http_max_retries, http_backoff_factor, http_timeout_s)
+        self._telemetry = telemetry
         self.client = MlflowClient(tracking_uri=tracking_uri, registry_uri=self.registry_uri)
 
     @classmethod
@@ -63,6 +72,7 @@ class MlflowRegistry:
             http_max_retries=settings.mlflow_http_max_retries,
             http_backoff_factor=settings.mlflow_http_backoff_factor,
             http_timeout_s=settings.mlflow_http_timeout_s,
+            telemetry=settings.mlflow_telemetry,
         )
 
     # The MlflowClient holds sessions; a job worker process rebuilds it from the URIs.
@@ -72,6 +82,7 @@ class MlflowRegistry:
             "registry_uri": self.registry_uri,
             "artifact_policy": self.artifact_policy,
             "http": self._http,
+            "telemetry": self._telemetry,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -83,6 +94,7 @@ class MlflowRegistry:
             http_max_retries=retries,
             http_backoff_factor=backoff,
             http_timeout_s=timeout,
+            telemetry=state.get("telemetry", False),
         )
 
     def ping(self) -> None:

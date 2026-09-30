@@ -9,6 +9,7 @@ ever crosses back.
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
 import joblib
 import pandas as pd
@@ -17,24 +18,14 @@ from oran_adapt.adaptation.schemas import CandidateModel
 from oran_adapt.core import metrics
 from oran_adapt.core.enums import EngineKind
 from oran_adapt.core.errors import SandboxExecutionError, UnsafeCodeError
+from oran_adapt.llm import calls
 from oran_adapt.llm.client import LlmClient
+from oran_adapt.llm.prompts import ADAPTATION_CODE, get_prompt
 from oran_adapt.sandbox.runner import SandboxLimits, run_sandboxed
 from oran_adapt.sandbox.security import check_code_safety
 
-_SYSTEM_PROMPT = (
-    "You write Python adaptation code for an O-RAN model-adaptation pipeline. "
-    "Define exactly one top-level function `adapt(current_model, X, y)` that returns a trained "
-    "model object usable the same way as current_model, trained on X (a pandas DataFrame of "
-    "features) and y (a pandas Series of the target). Continue training current_model in place "
-    "when that is reasonable for its framework; otherwise fit a fresh model of the same kind. "
-    "You may only import from: numpy, pandas, sklearn, xgboost, torch, math, json. "
-    "Never use eval, exec, compile, __import__, open, input, os, sys, subprocess, socket, or any "
-    "dunder attribute such as __globals__ or __subclasses__, no str.format (use f-strings), no "
-    "file reads or writes, and no dataset downloads - the code runs in a restricted "
-    "sandbox that rejects all of these before execution. "
-    "Respond with ONLY the Python code defining `adapt`, no markdown fences, no prose."
-)
-
+if TYPE_CHECKING:
+    from oran_adapt.core.config import Settings
 
 def _extract_code(text: str) -> str:
     stripped = text.strip()
@@ -74,15 +65,18 @@ def adapt_via_llm(
     sandbox_docker_image: str,
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
     sandbox_limits: SandboxLimits | None = None,
+    settings: Settings | None = None,
 ) -> CandidateModel:
     """Raises LlmUnavailableError if the LLM can't be reached, UnsafeCodeError if its code fails
     the security scan, or SandboxExecutionError if the (safe) code fails to run. Never catches
     any of these - the caller (Phase 9 orchestrator) decides what "no adaptation possible" means
-    for the job."""
+    for the job. The system prompt is the versioned ``adaptation-code`` prompt."""
     feature_names = list(X.columns)
-    raw = client.complete(
-        system=_SYSTEM_PROMPT,
-        prompt=_build_user_prompt(framework, model_class, feature_names, target_column),
+    raw = calls.ask(
+        client,
+        get_prompt(ADAPTATION_CODE, settings),
+        _build_user_prompt(framework, model_class, feature_names, target_column),
+        purpose="adaptation",
     )
     code = _extract_code(raw)
     try:

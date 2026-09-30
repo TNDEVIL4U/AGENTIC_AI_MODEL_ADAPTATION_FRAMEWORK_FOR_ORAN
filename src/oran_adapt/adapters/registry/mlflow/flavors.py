@@ -49,8 +49,11 @@ def _flavor(framework: str) -> Any:
 
 
 class MlflowFlavorHandler:
-    def __init__(self, skops_trusted_types: Sequence[str]) -> None:
+    def __init__(self, skops_trusted_types: Sequence[str],
+                 pip_requirements: Sequence[str] | None = None) -> None:
         self.skops_trusted_types = tuple(skops_trusted_types)
+        # None: MLflow infers the serving requirements (a subprocess that imports the model).
+        self.pip_requirements = list(pip_requirements) if pip_requirements else None
 
     @property
     def frameworks(self) -> frozenset[str]:
@@ -66,6 +69,8 @@ class MlflowFlavorHandler:
     def save(self, model: object, framework: str, dst_dir: str) -> str:
         flavor = _flavor(framework)
         extra: dict[str, Any] = {}
+        if self.pip_requirements is not None:
+            extra["pip_requirements"] = self.pip_requirements
         if flavor.__name__ == "mlflow.sklearn":
             trusted = resolve_skops_trusted_types(model, self.skops_trusted_types)
             extra["skops_trusted_types"] = trusted or None
@@ -94,7 +99,8 @@ class MlflowFlavorHandler:
 
 
 def _build(settings: Settings) -> MlflowFlavorHandler:
-    return MlflowFlavorHandler(settings.mlflow_skops_trusted_types)
+    return MlflowFlavorHandler(settings.mlflow_skops_trusted_types,
+                               settings.mlflow_pip_requirements)
 
 
 SPEC = AdapterSpec(
@@ -103,7 +109,7 @@ SPEC = AdapterSpec(
         adapter="mlflow-flavors",
         description="models of every MLflow flavor in FLAVORS, stored in MLflow's format",
         features=frozenset({"load", "save", *FLAVORS}),
-        config_keys=("mlflow_skops_trusted_types",),
+        config_keys=("mlflow_skops_trusted_types", "mlflow_pip_requirements"),
         distributions=("mlflow",),
     ),
     factory=_build,

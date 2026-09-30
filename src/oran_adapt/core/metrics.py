@@ -62,6 +62,24 @@ CDC_PROCESSING_LAG = Gauge(
 )
 LLM_REQUESTS = Counter("llm_requests_total", "Calls made to the LLM provider.", ["provider"])
 LLM_FAILURES = Counter("llm_failures_total", "LLM calls that failed.", ["provider"])
+# Fallback reasons are a closed set (llm.calls.FALLBACK_* and LlmUnavailableError.reason).
+LLM_FALLBACKS = Counter(
+    "llm_fallbacks_total",
+    "Decisions and adaptations the deterministic rules made because the LLM path failed.",
+    ["reason"],
+)
+LLM_TOKENS = Counter(
+    "llm_tokens_total", "Tokens sent to and received from the LLM.", ["provider", "direction"]
+)
+LLM_COST = Counter("llm_cost_total", "LLM spend in the LLM_COST_* currency.", ["provider"])
+LLM_REFUSED = Counter(
+    "llm_calls_refused_total",
+    "LLM calls refused before sending (circuit open, over a cap).",
+    ["provider", "reason"],
+)
+LLM_CIRCUIT_OPEN = Gauge(
+    "llm_circuit_open", "1 while the LLM circuit breaker is open (this process).", ["provider"]
+)
 # Notification sink labels come from NOTIFICATION_BACKEND, a short configured list.
 NOTIFICATION_EVENTS = Counter(
     "notification_events_total", "Events written to the notification outbox.", ["event_type"]
@@ -211,6 +229,10 @@ _FORWARDED = (
     CDC_EVENTS,
     LLM_REQUESTS,
     LLM_FAILURES,
+    LLM_FALLBACKS,
+    LLM_TOKENS,
+    LLM_COST,
+    LLM_REFUSED,
     SANDBOX_FAILURES,
     DATASET_ROWS_READ,
     DATASET_BYTES_READ,

@@ -141,7 +141,8 @@ base, on SQLite only.
 A single `pydantic-settings` class, `core/config.py:Settings` (about 60 keys). Sources are field
 defaults, then `.env`, then environment variables; there is no YAML/TOML layer and no secret
 references (since Hardening Phase 9, secret-typed settings can come from `SECRETS_BACKEND`:
-`env`, `file` or `vault`). Validators check that the LLM key is present for the chosen provider and that
+`env`, `file` or `vault`). Validators check that the LLM key is present for the chosen provider (since Hardening
+Phase 10, only when `LLM_ENABLED=true`, which also requires a provider) and that
 `API_KEYS` is well formed. There is no effective-config endpoint and no `config-lint` CLI.
 `.env.example` lists every key with its default.
 
@@ -155,7 +156,7 @@ references (since Hardening Phase 9, secret-typed settings can come from `SECRET
 | Kafka + Debezium | CDC from `kpi_sample` (optional) | `cdc/sources.py`, `deploy/debezium/` |
 | Evidently AI | KS/PSI drift statistics, validation scores | `analysis/comparison.py`, `validation/evaluate.py` |
 | scikit-learn, XGBoost, PyTorch | model inspection, fine-tune and retrain. **Since Hardening Phase 8** every model library sits behind a model type plugin (`ModelTypePort`, `adapters/model_types/`: sklearn, XGBoost, LightGBM, CatBoost, torch tabular, torch sequence, Keras, ONNX, statsmodels), imported lazily; see `docs/adapters/model_type.md` | `adaptation/` |
-| Anthropic / Google GenAI | optional LLM strategy choice and generated adapters | `llm/client.py`, `decision/llm_selector.py`, `adaptation/llm_adapter.py` |
+| Anthropic / Google GenAI | optional LLM strategy choice and generated adapters. **Since Hardening Phase 10** off unless `LLM_ENABLED=true`; providers are adapters (`adapters/llm_providers.py`: `anthropic`, `gemini`, `openai-compatible`), wrapped in the guard (`llm/guard.py`: caps, budget, breaker, retries, `llm_usage` ledger), prompts versioned (`llm/prompts.py`); see `docs/adapters/llm.md` | `llm/client.py`, `decision/llm_selector.py`, `adaptation/llm_adapter.py` |
 | Docker CLI | optional sandbox backend | `sandbox/runner.py` |
 | Prometheus | scrapes `/metrics` (compose) | `deploy/prometheus/` |
 

@@ -47,3 +47,6 @@ class JobResult(BaseModel):
     promotion: dict | None = None
     # The rollout this job started (DELIVERING) or found running (ROLLOUT_IN_PROGRESS).
     rollout: dict | None = None
+    # Every LLM call this job made (llm.calls.LlmCall): prompt id, version and SHA-256,
+    # outcome or fallback reason, provider, tokens and cost. Empty when the LLM is disabled.
+    llm_calls: list[dict] = Field(default_factory=list)

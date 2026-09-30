@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 
 import pandas as pd
 from sqlalchemy import select
@@ -59,6 +60,7 @@ from oran_adapt.core.enums import (
 )
 from oran_adapt.core.errors import (
     ArtifactError,
+    LlmUnavailableError,
     PromotionError,
     SandboxExecutionError,
     UnsafeCodeError,
@@ -79,6 +81,7 @@ from oran_adapt.delivery.controller import (
     start_rollout,
 )
 from oran_adapt.delivery.controller import to_dict as rollout_dict
+from oran_adapt.llm import calls
 from oran_adapt.llm.client import LlmClient
 from oran_adapt.orchestrator.context import current_job_id, report_stage
 from oran_adapt.orchestrator.schemas import JobResult
@@ -108,9 +111,16 @@ def _produce_candidate(
     llm_client: LlmClient | None,
     workdir: str,
     model_types: ModelTypes,
+    on_llm_failure: Callable[[Exception, str], None] | None = None,
 ) -> CandidateModel:
     """Try the model's model type plugin first; only fall back to the LLM sandbox adapter when
     it genuinely has nothing for this (strategy, capability) combination.
+
+    The LLM path never makes the outcome worse than having no LLM: when it cannot be reached,
+    is refused by the guard, writes unsafe code or code that fails in the sandbox, the failure
+    is reported to ``on_llm_failure`` (with the fallback reason) and the deterministic rule
+    applies - a full retrain when the model supports one, otherwise the plugin's
+    UnsupportedAdaptationError, exactly as without an LLM.
 
     Fine-tuning happens only when the artifact technically supports it: an artifact with no
     incremental-update mechanism, or one whose mechanism no native engine uses while no LLM is
@@ -138,34 +148,76 @@ def _produce_candidate(
             logger.warning("%s", why)
         return candidate.model_copy(update={"applied_strategy": chosen, "adaptation_note": why})
 
+    retrain_instead = strategy == Strategy.FINE_TUNING and capability.supports_full_retraining
     try:
         return _applied(_native(strategy), strategy, note)
-    except UnsupportedAdaptationError:
+    except UnsupportedAdaptationError as unsupported:
         if llm_client is None:
-            if strategy == Strategy.FINE_TUNING and capability.supports_full_retraining:
+            calls.fallback(calls.FALLBACK_DISABLED)
+            if retrain_instead:
                 note = (
                     f"{inspection.model_class} can only be fine-tuned through the LLM adapter "
                     "(no native fine-tuning engine) and no LLM is configured; fully retrained"
                 )
                 return _applied(_native(Strategy.FULL_RETRAINING), Strategy.FULL_RETRAINING, note)
             raise
-        candidate = adapt_via_llm(
-            llm_client,
-            current_model,
-            framework=framework,
-            model_class=inspection.model_class,
-            X=X,
-            y=y,
-            target_column=target_column,
-            sandbox_timeout_s=settings.sandbox_timeout_s,
-            sandbox_memory_mb=settings.sandbox_memory_mb,
-            workdir=os.path.join(workdir, "llm"),
-            sandbox_backend=settings.sandbox_backend,
-            sandbox_docker_image=settings.sandbox_docker_image,
-            skops_trusted_types=settings.mlflow_skops_trusted_types,
-            sandbox_limits=SandboxLimits.from_settings(settings),
-        )
+        try:
+            candidate = _adapt_with_llm(
+                llm_client, current_model, inspection=inspection, framework=framework, X=X, y=y,
+                target_column=target_column, settings=settings, workdir=workdir,
+            )
+        except (LlmUnavailableError, UnsafeCodeError, SandboxExecutionError) as exc:
+            reason = _llm_failure_reason(exc)
+            calls.fallback(reason)
+            if on_llm_failure is not None:
+                on_llm_failure(exc, reason)
+            if not retrain_instead:
+                raise unsupported from exc
+            note = (
+                f"the LLM adapter could not fine-tune {inspection.model_class} ({reason}); "
+                "fully retrained instead"
+            )
+            return _applied(_native(Strategy.FULL_RETRAINING), Strategy.FULL_RETRAINING, note)
         return _applied(candidate, strategy, note)
+
+
+def _llm_failure_reason(exc: Exception) -> str:
+    if isinstance(exc, LlmUnavailableError):
+        return exc.reason
+    if isinstance(exc, UnsafeCodeError):
+        return calls.FALLBACK_UNSAFE_CODE
+    return calls.FALLBACK_SANDBOX_FAILED
+
+
+def _adapt_with_llm(
+    llm_client: LlmClient,
+    current_model: object,
+    *,
+    inspection: ModelInspection,
+    framework: str,
+    X: pd.DataFrame,
+    y: pd.Series,
+    target_column: str,
+    settings: Settings,
+    workdir: str,
+) -> CandidateModel:
+    return adapt_via_llm(
+        llm_client,
+        current_model,
+        framework=framework,
+        model_class=inspection.model_class,
+        X=X,
+        y=y,
+        target_column=target_column,
+        sandbox_timeout_s=settings.sandbox_timeout_s,
+        sandbox_memory_mb=settings.sandbox_memory_mb,
+        workdir=os.path.join(workdir, "llm"),
+        sandbox_backend=settings.sandbox_backend,
+        sandbox_docker_image=settings.sandbox_docker_image,
+        skops_trusted_types=settings.mlflow_skops_trusted_types,
+        sandbox_limits=SandboxLimits.from_settings(settings),
+        settings=settings,
+    )
 
 
 def _stage(session: Session, status: JobStatus, message: str = "") -> None:
@@ -327,6 +379,28 @@ def _promotion_key(suffix: str) -> str | None:
 
 
 def run_adaptation_job(
+    session: Session,
+    event: DriftEvent,
+    settings: Settings,
+    *,
+    registry: ModelRegistryPort,
+    llm_client: LlmClient | None,
+    workdir: str,
+    data_access: DataAccess | None = None,
+) -> JobResult:
+    """Run the full pipeline for one drift event (``_run_adaptation_job``) and stamp every LLM
+    call it made - prompt versions, outcomes, fallback reasons, tokens - on the result."""
+    with calls.recording(current_job_id()) as made:
+        result = _run_adaptation_job(
+            session, event, settings, registry=registry, llm_client=llm_client,
+            workdir=workdir, data_access=data_access,
+        )
+    if not made:
+        return result
+    return result.model_copy(update={"llm_calls": [c.to_dict() for c in made]})
+
+
+def _run_adaptation_job(
     session: Session,
     event: DriftEvent,
     settings: Settings,
@@ -609,43 +683,46 @@ def run_adaptation_job(
     excluded_ids = {r.id for r in records} - {r.id for r in train_records}
     X, y = split_features_target(records_frame(train_records), feature_names, target)
 
-    try:
-        candidate = _produce_candidate(
-            decision.strategy,
-            current_model,
-            inspection=inspection,
-            framework=framework,
-            X=X,
-            y=y,
-            target_column=target,
-            settings=settings,
-            llm_client=llm_client,
-            workdir=workdir,
-            model_types=model_types,
-        )
-    except (UnsafeCodeError, SandboxExecutionError) as exc:
-        # Only the LLM adapter raises these. Commit the audit rows now: the job's session is
-        # rolled back when the error escapes.
-        unsafe = isinstance(exc, UnsafeCodeError)
+    def _llm_failed(exc: Exception, reason: str) -> None:
+        # Commit the audit rows now: if no deterministic fallback exists the job fails and its
+        # session is rolled back.
+        sandboxed = isinstance(exc, SandboxExecutionError)
+        message = getattr(exc, "message", str(exc))
         _audit(
             session,
             AuditAction.ADAPTER_GENERATED,
             event.model_id,
             model_version=live_version,
-            status="FAILED" if unsafe else "OK",
-            reason=exc.message if unsafe else "adapter code passed the safety scan",
+            status="OK" if sandboxed else "FAILED",
+            reason="adapter code passed the safety scan" if sandboxed else message,
+            metadata={"fallback_reason": reason},
         )
-        if not unsafe:
+        if sandboxed:
             _audit(
                 session,
                 AuditAction.SANDBOX_EXECUTED,
                 event.model_id,
                 model_version=live_version,
                 status="FAILED",
-                reason=exc.message,
+                reason=message,
+                metadata={"fallback_reason": reason},
             )
         session.commit()
-        raise
+
+    candidate = _produce_candidate(
+        decision.strategy,
+        current_model,
+        inspection=inspection,
+        framework=framework,
+        X=X,
+        y=y,
+        target_column=target,
+        settings=settings,
+        llm_client=llm_client,
+        workdir=workdir,
+        model_types=model_types,
+        on_llm_failure=_llm_failed,
+    )
     check_size(candidate.artifact_path, settings.artifact_max_bytes, stage="candidate")
     chunk = settings.artifact_hash_chunk_bytes
     candidate_sha = sha256_file(candidate.artifact_path, chunk)
