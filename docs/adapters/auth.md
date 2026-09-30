@@ -4,8 +4,8 @@ The API asks an **auth adapter** (`AuthPort`) who is calling and a **policy adap
 (`PolicyPort`) whether that caller's role may perform the route's action. The configuration asks
 a **secrets adapter** (`SecretsPort`) for secret-typed settings (API tokens, passwords), so they
 do not have to sit in the environment. Pick adapters with `AUTH_BACKEND`, `POLICY_BACKEND` and
-`SECRETS_BACKEND`. Third-party adapters register under the entry-point groups `oran_adapt.auth`
-and `oran_adapt.secrets`. The whole security model is in [docs/security.md](../security.md).
+`SECRETS_BACKEND`. Third-party adapters register under the entry-point groups `oran_adapt.auth`,
+`oran_adapt.policy` and `oran_adapt.secrets`. The whole security model is in [docs/security.md](../security.md).
 
 ## Shipped auth adapters
 
@@ -40,6 +40,50 @@ These two adapters trust a header that the proxy in front of the API sets. They 
 only when the TCP peer is inside `AUTH_TRUSTED_PROXIES` (addresses or CIDRs). A client that
 connects directly cannot forge it. Make sure the proxy **overwrites** the header on every
 request rather than passing through a client-supplied one.
+
+## Shipped policy adapters
+
+| `POLICY_BACKEND` | Decides | Settings |
+|---|---|---|
+| `static-rbac` (default) | the `POLICY_ROLES` table: action → roles allowed | `POLICY_ROLES` |
+| `opa` | an Open Policy Agent server, over its Data API | `POLICY_OPA_URL`, `POLICY_OPA_PATH`, `POLICY_OPA_TOKEN`, `POLICY_OPA_TIMEOUT_S`, `POLICY_OPA_CACHE_S` |
+
+Both are **deny-by-default**: an action the policy does not grant to any role is refused. The
+route-to-action mapping is in [docs/security/authz-matrix.md](../security/authz-matrix.md).
+
+### `opa`
+
+- Each question is `POST {POLICY_OPA_URL}/v1/data/{POLICY_OPA_PATH}` with the body
+  `{"input": {"action": ..., "role": ..., "principal": ...}}`. `POLICY_OPA_TOKEN`, when set, is
+  sent as a bearer token.
+- Only a `result` of exactly `true` allows. An undefined decision, any other value, an HTTP
+  error, a timeout (`POLICY_OPA_TIMEOUT_S`) or an unreachable server refuses: the adapter
+  **fails closed**.
+- The answer for each action and role is cached for `POLICY_OPA_CACHE_S` seconds, so a policy
+  change in OPA reaches the API within that time. 0 asks every time.
+- The request goes through the outbound policy (SSRF and TLS checks), like every other
+  outbound call.
+
+A Rego policy that reproduces the default `POLICY_ROLES` table:
+
+```rego
+package oran_adapt.authz
+
+default allow := false
+
+roles := {
+    "read": {"ADMIN", "OPERATOR", "ML_ENGINEER", "READ_ONLY"},
+    "submit": {"ADMIN", "OPERATOR", "ML_ENGINEER"},
+    "data": {"ADMIN", "ML_ENGINEER"},
+    "promote": {"ADMIN", "OPERATOR"},
+    "admin": {"ADMIN"},
+}
+
+allow if input.role in roles[input.action]
+```
+
+Load it into OPA and set `POLICY_BACKEND=opa`, `POLICY_OPA_URL=https://opa.example:8181`. The
+policy conformance suite (`oran_adapt.conformance.policy`) runs on both adapters.
 
 ## Shipped secrets adapters
 

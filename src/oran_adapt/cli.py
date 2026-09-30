@@ -403,6 +403,49 @@ def _cmd_event_submit(args, settings: Settings) -> Any:
     ).model_dump(mode="json")
 
 
+def _cmd_event_map(args, settings: Settings) -> Any:
+    import json
+
+    from oran_adapt.core.errors import EventMapperNotFoundError, EventMappingError
+    from oran_adapt.core.event_mapping import load_mapping, map_payload
+
+    if args.mapping:
+        mapping = load_mapping(args.mapping, key="mapping")
+        name = args.mapping
+    elif args.mapper in settings.drift_mappers:
+        mapping = load_mapping(settings.drift_mappers[args.mapper])
+        name = args.mapper
+    else:
+        raise EventMapperNotFoundError(f"no drift-event mapper named {args.mapper!r}",
+                                       available=sorted(settings.drift_mappers))
+    try:
+        with open(args.input, encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise EventMappingError(f"{args.input} is not a readable JSON document",
+                                cause=str(exc)) from exc
+    events = map_payload(
+        mapping, payload, max_events=settings.drift_mapper_max_events,
+        overrides={"model_id": args.model_id, "model_version": args.model_version,
+                   "dataset_id": args.dataset},
+    )
+    body: dict[str, Any] = {"mapper": name,
+                            "events": [e.model_dump(mode="json", exclude_none=True)
+                                       for e in events]}
+    if args.submit:
+        from oran_adapt.bootstrap import build_llm
+        from oran_adapt.orchestrator.jobs import submit_adaptation_job
+
+        body["jobs"] = [
+            submit_adaptation_job(
+                _session_factory(settings), event, settings, registry=_registry(settings),
+                llm_client=build_llm(settings), workdir=settings.artifact_workdir,
+            ).model_dump(mode="json")
+            for event in events
+        ]
+    return body
+
+
 def _classes(value: str | None) -> list[str] | None:
     return [c.strip() for c in value.split(",") if c.strip()] if value else None
 
@@ -700,6 +743,16 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--drifted-version")
     c.add_argument("--event-id")
     c.set_defaults(fn=_cmd_event_submit)
+    c = event.add_parser("map", help="turn a monitoring payload into drift events (a mapper)")
+    which = c.add_mutually_exclusive_group(required=True)
+    which.add_argument("--mapper", help="a mapper named in DRIFT_MAPPERS")
+    which.add_argument("--mapping", help="a mapping file (config/mappers/*.toml)")
+    c.add_argument("--input", required=True, help="the payload, a JSON file")
+    c.add_argument("--model-id")
+    c.add_argument("--model-version")
+    c.add_argument("--dataset")
+    c.add_argument("--submit", action="store_true", help="queue a job for each event")
+    c.set_defaults(fn=_cmd_event_map)
 
     worker = top.add_parser("worker").add_subparsers(dest="cmd", required=True)
     c = worker.add_parser("run", help="claim and run queued adaptation jobs")

@@ -111,6 +111,15 @@ class JobResponse(BaseModel):
     quarantined: bool = False
 
 
+class MappedEventsResponse(BaseModel):
+    """What POST /adaptation/events/from/{mapper} did with a monitoring payload: the events its
+    mapper found (none when no record matched) and the job each one produced or already had."""
+
+    mapper: str
+    events: int
+    jobs: list[JobResponse] = Field(default_factory=list)
+
+
 class ComponentHealth(BaseModel):
     name: str
     ok: bool

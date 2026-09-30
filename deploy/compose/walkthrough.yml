@@ -1,0 +1,28 @@
+# Compose override for the clone-to-canary walkthrough (docs/integration-guide.md):
+#
+#   docker compose -f docker-compose.yml -f deploy/compose/walkthrough.yml up -d --build --wait
+#   docker compose -f docker-compose.yml -f deploy/compose/walkthrough.yml exec \
+#       -e ORAN_API_KEY="$ORAN_API_KEY" api python scripts/walkthrough.py \
+#       --base-url http://127.0.0.1:8000
+#
+# It mounts config/ (mapping files and the delivery policy) and scripts/ read-only into the API
+# and the worker, and turns on canary delivery and the Alertmanager mapper; compose merges these
+# keys into the services' own environment. The walkthrough runs inside the api container so that
+# onboarding reaches PostgreSQL and MLflow on the compose network. Put the key's API_KEYS entry
+# in .env first (`oran-adapt auth new-key --role OPERATOR` prints both).
+
+services:
+  api:
+    volumes:
+      - ./config:/app/config:ro
+      - ./scripts:/app/scripts:ro
+    environment:
+      DELIVERY_STRATEGY: canary
+      DELIVERY_POLICY_FILE: config/policies/delivery.toml
+      DRIFT_MAPPERS: '{"alertmanager": "config/mappers/alertmanager.toml"}'
+  worker:
+    volumes:
+      - ./config:/app/config:ro
+    environment:
+      DELIVERY_STRATEGY: canary
+      DELIVERY_POLICY_FILE: config/policies/delivery.toml

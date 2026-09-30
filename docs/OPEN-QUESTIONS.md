@@ -10,27 +10,33 @@ is the record of *why* each default was chosen.
 
 | Port | Selector key | Default | Other adapters | Open question |
 |---|---|---|---|---|
-| `llm` | `LLM_PROVIDER` | `none` (deterministic path, no LLM) | `anthropic`, `gemini` | Which LLM provider, if any, is the operator allowed to call from the RIC environment? |
+| `llm` | `LLM_PROVIDER` (and `LLM_ENABLED`) | `none` (deterministic path, no LLM) | `anthropic`, `gemini`, `openai-compatible` | Which LLM provider, if any, is the operator allowed to call from the RIC environment? |
 | `cdc_source` | `CDC_MODE` | `disabled` | `polling` (DB trigger + outbox table), `kafka` | Is a Kafka/Debezium pipeline available, or only the database itself? |
 | `job_executor` | `JOB_EXECUTION_MODE` (how a worker runs one attempt) | `process` (hard timeout, whole process tree killed) | `thread` (tests, debugging) | – (settled: jobs run in workers since Phase 6) |
 | `job_queue` | `JOB_QUEUE_BACKEND` | `database` (workers poll the job table; no broker) | `celery`, `rq`, `kubernetes`, `inline` (development only) | Is there a broker (RabbitMQ, Redis) or a cluster the workers should be woken through? See "Job queue adapters" below. |
 | `notification` | `NOTIFICATION_BACKEND` (comma-separated: several sinks at once, or `none`) | `log` | `webhook`, `slack`, `pagerduty`, `email`, `kafka`, `sqs`, `sns`, `pubsub`, `nats` | Which channel does the operations team watch, and which system consumes job events? See "Notification adapters" below. |
-| `secrets` | `SECRETS_BACKEND` | `env` | `file` (mounted secret files, e.g. Kubernetes/Docker secrets) | Is a secrets manager (Vault, a cloud KMS) mandated? |
+| `secrets` | `SECRETS_BACKEND` | `env` | `file` (mounted secret files, e.g. Kubernetes/Docker secrets), `vault` (Vault / OpenBao KV v2) | Is a secrets manager (Vault, a cloud KMS) mandated? |
 | `registry` | `REGISTRY_BACKEND` | `mlflow` (standing decision: MLflow with `--serve-artifacts`) | `filesystem`, `mirror`, `sagemaker`, `vertex` | Will the deployment keep MLflow, or register models in a cloud registry (SageMaker, Vertex)? See "Registry adapters" below. |
 | `artifact_store` | `ARTIFACT_STORE_BACKEND` (used by the `filesystem` registry only) | `filesystem` (`ARTIFACT_STORE_ROOT`) | `fsspec` (`ARTIFACT_STORE_URL`: `s3://`, `gs://`, `az://`, ... with the matching fsspec driver) | Is there a shared volume, or must artifacts go to an object store? |
-| `auth` | `AUTH_BACKEND` | `api-key` | none yet | Is there an identity provider (OIDC, mTLS) the API must trust? |
-| `policy` | `POLICY_BACKEND` | `static-rbac` (roles from `POLICY_ROLES`) | none yet | Does authorization come from an external policy engine (OPA)? |
+| `auth` | `AUTH_BACKEND` | `api-key` | `oidc`, `gateway`, `mtls` | Is there an identity provider (OIDC, an API gateway, mTLS) the API must trust? See "Security" below. |
+| `policy` | `POLICY_BACKEND` | `static-rbac` (roles from `POLICY_ROLES`) | `opa` (Open Policy Agent over its Data API; fails closed) | Does authorization come from an external policy engine? |
 | `model_handler` | `MODEL_FORMAT` (saving; loading uses whichever installed handler recognises the artifact) | `mlflow-flavors` | `native` (skops / UBJSON / torch files with a manifest; no MLflow needed) | Must serving read MLflow's model format, or the frameworks' own files? |
 | `deployment` | `DEPLOYMENT_BACKEND` | `registry-alias` (serving loads `model://<name>@<LIVE_ALIAS>`, the pre-Phase-3 behaviour) | `webhook`, `bentoml`, `gitops`, `triton`, `kserve`, `seldon`, `k8s`, `sagemaker`, `vertex` | What serves models in the RIC: a model server (Triton, BentoML), Kubernetes (KServe, Seldon, plain Deployments), GitOps, or a cloud endpoint? See "Deployment adapters" below. |
+| `dataset` | `DATASET_BACKENDS` (comma-separated) | `none` (data sent inline) | `file`, `fsspec`, `s3`, `gcs`, `http` | Where does the training and drift data live? See "Dataset adapters" below. |
+| `rollout_metrics` | `ROLLOUT_METRICS_BACKEND` | `api` (the serving layer posts observations) | `prometheus` | Does a metrics system see the serving traffic? See "Validation gate and progressive delivery" below. |
+| – | `DELIVERY_STRATEGY` | `shadow` | `canary`, `ab`, `blue_green`, `manual` | How much risk may a new model take on live traffic? |
+
+Each default has an architecture decision record with its context and when to revisit it:
+[adr/README.md](adr/README.md). `tests/unit/test_phase14_integration.py` fails when a selector
+has no record or its record disagrees with `Settings`.
 
 ## Single-adapter ports
 
-The Unknown-Stack Protocol asks for at least two adapters per port. These ports have one:
-
-- **`auth`, `policy`**: no identity provider or policy engine has been named. A second adapter
-  will be written once the deployment answers the questions in the table above.
-
-Each one is still open until a second adapter lands or the question is answered.
+The Unknown-Stack Protocol asks for at least two adapters per port. **None is left with
+one.** `auth` gained `oidc`, `gateway` and `mtls` in Phase 9, and `policy` gained `opa` in
+Phase 14. Every port also has the extension path: an authoring guide
+([adapter-authoring.md](adapter-authoring.md)), a template or cookiecutter, and a conformance
+suite that the gate runs on every installed adapter.
 
 ## Ports declared without an adapter
 
@@ -302,6 +308,21 @@ matrix, a skip policy and a testcontainers tier (`docs/testing.md`).
 | Non-heavy scenario tests must finish in under 5 min on 2 workers. | The spec's budget and the laptop's worker cap. | - |
 | Every skip carries `[owner=... expires=YYYY-MM-DD]`; all current ones expire on 2027-03-31. | A skip is reviewed by a date, not forgotten. | edit the reason |
 | **Unverified locally:** the testcontainers tier (PostgreSQL, Kafka) and the heavy scenario tests. | No Docker daemon on the development laptop; CI's `containers` and `quality` jobs run them. | - |
+
+## Integration and documentation
+
+Hardening Phase 14 added declarative drift mappers, the `opa` policy adapter, example configs for
+seven stacks, the integration, authoring, operations and migration guides, and an ADR per
+default (`docs/PHASE14_REPORT.md`).
+
+| Assumption | Why | Key |
+|---|---|---|
+| Monitoring payloads are mapped by TOML mapping files, not code. Three are shipped: Alertmanager, Evidently, generic JSON. | A mapping file is reviewable configuration and cannot run code in the API. A payload that needs computation needs a translator in front (docs/LIMITATIONS.md). | `DRIFT_MAPPERS`, `DRIFT_MAPPER_MAX_EVENTS` |
+| A mapping file that does not load stops startup. | A mapper that fails at the first alert would lose drift silently. | `DRIFT_MAPPERS` |
+| `opa` refuses on any failure: timeout, HTTP error, undefined decision or non-`true` result. Role answers are cached for 30 s. | Deny-by-default must hold when the policy engine is down. The cache bounds load on OPA and the delay before a policy change applies. | `POLICY_OPA_TIMEOUT_S`, `POLICY_OPA_CACHE_S` |
+| A delivery that splits traffic (`canary`, `ab`, and shadow or approval that continues as a canary) with a deployment adapter that cannot split is a configuration error, raised by `config lint` and at startup. | Found while writing the example configs: before, it failed only when the deployer was built. | `DELIVERY_STRATEGY`, `DEPLOYMENT_BACKEND` |
+| The example configs choose per stack: canary on KServe, manual on SageMaker, shadow on Vertex and BentoML, blue/green on Seldon and Triton, and `registry-alias` when air-gapped. | Only `registry-alias`, `kserve` and `webhook` split traffic. The others get the safest strategy they support. | `config/examples/*.toml` |
+| **Unverified locally:** the walkthrough against the compose stack (`deploy/compose/walkthrough.yml`), and every example against its real service. | No Docker on the development laptop, and no cloud or cluster. The in-process walkthrough runs in the gate. | - |
 
 ## Not yet behind a port
 

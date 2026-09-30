@@ -6,15 +6,16 @@ GET /adaptation/jobs/{id} for its outcome, or cancel it with POST /adaptation/jo
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Body, Query, Request, Response
 from sqlalchemy import select
 
 from oran_adapt.api.security import Submitter
 from oran_adapt.core.enums import JobStatus
-from oran_adapt.core.errors import JobNotFoundError
-from oran_adapt.core.schemas import DriftEvent, JobResponse
+from oran_adapt.core.errors import EventMapperNotFoundError, JobNotFoundError
+from oran_adapt.core.event_mapping import map_payload
+from oran_adapt.core.schemas import DriftEvent, JobResponse, MappedEventsResponse
 from oran_adapt.db.base import session_scope
 from oran_adapt.db.models import AdaptationEvent, AdaptationJob
 from oran_adapt.orchestrator.jobs import (
@@ -49,6 +50,44 @@ def submit_event(
     )
     response.status_code = 200 if result.duplicate else 201
     return result
+
+
+@router.post("/events/from/{mapper}", response_model=MappedEventsResponse)
+def submit_mapped_events(
+    mapper: str,
+    request: Request,
+    response: Response,
+    principal: Submitter,
+    payload: Annotated[dict[str, Any], Body()],
+    model_id: Annotated[str | None, Query(max_length=200)] = None,
+    model_version: Annotated[str | None, Query(max_length=50)] = None,
+    dataset_id: Annotated[str | None, Query(max_length=200)] = None,
+) -> MappedEventsResponse:
+    """A monitoring system's own payload (an Alertmanager webhook, an Evidently report, ...)
+    turned into drift events by the mapper named in DRIFT_MAPPERS, each submitted as if POSTed
+    to /adaptation/events. The query parameters set fields the payload does not carry. 201 when
+    any event made a new job; 200 when every one was a duplicate or none matched."""
+    state = request.app.state
+    mapping = state.drift_mappers.get(mapper)
+    if mapping is None:
+        raise EventMapperNotFoundError(f"no drift-event mapper named {mapper!r}",
+                                       available=sorted(state.drift_mappers))
+    events = map_payload(
+        mapping, payload, max_events=state.settings.drift_mapper_max_events,
+        overrides={"model_id": model_id, "model_version": model_version,
+                   "dataset_id": dataset_id},
+    )
+    jobs = [
+        submit_adaptation_job(
+            state.session_factory, event, state.settings,
+            registry=state.registry, llm_client=state.llm_client,
+            workdir=state.settings.artifact_workdir, actor=principal.name,
+            queue=state.job_queue,
+        )
+        for event in events
+    ]
+    response.status_code = 201 if any(not job.duplicate for job in jobs) else 200
+    return MappedEventsResponse(mapper=mapper, events=len(events), jobs=jobs)
 
 
 @router.get("/jobs")

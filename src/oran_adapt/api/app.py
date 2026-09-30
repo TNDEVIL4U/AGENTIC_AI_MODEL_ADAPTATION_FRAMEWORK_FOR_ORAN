@@ -41,6 +41,7 @@ from oran_adapt.bootstrap import (
 from oran_adapt.core import correlation, metrics
 from oran_adapt.core.config import Settings, get_settings
 from oran_adapt.core.errors import AdaptationError
+from oran_adapt.core.event_mapping import load_mappers
 from oran_adapt.core.logging import configure_logging
 from oran_adapt.db.base import create_db_engine, make_session_factory
 from oran_adapt.notifications.dispatcher import Dispatcher, DispatcherThread
@@ -240,6 +241,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.notifiers = build_notifiers(settings)
     app.state.data_access = build_data_access(settings)
     app.state.rollout_metrics = build_rollout_metrics(settings)
+    app.state.drift_mappers = load_mappers(settings.drift_mappers)
     app.state.dispatcher = (
         DispatcherThread(
             Dispatcher(app.state.session_factory, app.state.notifiers, settings)
@@ -300,6 +302,8 @@ def _status_for(exc: AdaptationError) -> int:
         "DATASET_NOT_FOUND": 404,
         "DELIVERY_NOT_FOUND": 404,
         "ROLLOUT_NOT_FOUND": 404,
+        "EVENT_MAPPER_NOT_FOUND": 404,
+        "EVENT_MAPPING_FAILED": 422,
         "CONFLICT": 409,
         "DATA_VERSION_CONFLICT": 409,
         "MODEL_BUSY": 409,

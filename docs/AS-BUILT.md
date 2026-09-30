@@ -189,3 +189,13 @@ Phase 10, only when `LLM_ENABLED=true`, which also requires a provider) and that
   as `RegistryUnavailableError`, and the native handler refuses an existing directory with
   `ArtifactError`. The test suite gained mutation testing (`scripts/mutation.py`), a scenario
   matrix, an owner-and-expiry skip policy and a testcontainers tier (`docs/testing.md`).
+- **Since Hardening Phase 14:** monitoring payloads reach the pipeline through declarative
+  drift mappers (`core/event_mapping.py`, `config/mappers/`): `POST
+  /api/v1/adaptation/events/from/{mapper}` and `oran-adapt event map`. The `opa` policy adapter
+  is the second `policy` adapter. A delivery strategy that needs a traffic split is now checked
+  against the deployment adapter by `Settings` itself, so `config lint` catches it. New:
+  example configs for seven stacks (`config/examples/`), a generated capability matrix
+  (`scripts/capability_matrix.py`) and OpenAPI document (`scripts/openapi.py`, `docs/api/`), a
+  clone-to-canary walkthrough (`scripts/walkthrough.py`, `deploy/compose/walkthrough.yml`),
+  ADRs (`docs/adr/`), and the integration, adapter-authoring, operations and migration guides,
+  and `docs/LIMITATIONS.md`.

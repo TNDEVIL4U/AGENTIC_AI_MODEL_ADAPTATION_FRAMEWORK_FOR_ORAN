@@ -77,7 +77,8 @@ COVERAGE: dict[str, list[tuple[str, str, dict[str, str | None]]]] = {
     ],
     "auth": [("test_phase9_security.py", "test_auth_adapters_pass_the_conformance_suite", {
         name: None for name in ("api-key", "oidc", "gateway", "mtls")})],
-    "policy": [(_P13, "test_policy_conformance", {"static-rbac": None})],
+    "policy": [(_P13, "test_policy_conformance", {"static-rbac": None}),
+               ("test_phase14_integration.py", "test_opa_policy_conformance", {"opa": None})],
     "secrets": [("test_phase9_security.py", "test_secrets_adapters_pass_the_conformance_suite", {
         name: None for name in ("env", "file", "vault")})],
 }

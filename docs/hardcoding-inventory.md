@@ -323,11 +323,23 @@ No category count changes. New literals, and why they are not keys:
 | skip reasons in `tests/` | `owner=TNDEVIL4U expires=2027-03-31` | a review date per skip, changed in the diff |
 | `tests/integration/test_testcontainers.py` | `postgres:16-alpine`, `confluentinc/cp-kafka:7.6.1` | test fixtures, run only in CI |
 
+## Hardening Phase 14 status
+
+No category count changes. New literals, and why they are not keys:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `config/mappers/*.toml` | the Alertmanager, Evidently and generic-JSON field paths | they are configuration: a site copies and edits them, or points `DRIFT_MAPPERS` at its own |
+| `config/examples/*.toml` | the example hosts, buckets and strategies | worked examples, each passing `oran-adapt config lint`; a site replaces them |
+| `scripts/walkthrough.py` | 300 synthetic rows, seeds 1 and 2, slopes 2.0 and 1.2, a 120 s local job timeout | a reproducible demonstration; `--timeout-s` sets the remote timeout |
+| `scripts/acceptance/phase14.py` | the seven target stacks, the required docs, a 240 s walkthrough timeout | the phase's acceptance criteria |
+| `adapters/opa.py` | the `/v1/data/` path prefix | OPA's Data API contract; the rule path is `POLICY_OPA_PATH` |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 | Open after Phase 10 | Open after Phase 11 | Open after Phase 12 | Open after Phase 13 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 | 7 | 7 | 7 | 7 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 5 | 5 | 5 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 | Open after Phase 10 | Open after Phase 11 | Open after Phase 12 | Open after Phase 13 | Open after Phase 14 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 7 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 5 | 5 | 5 | 5 |

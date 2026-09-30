@@ -1,0 +1,43 @@
+# Prometheus Alertmanager webhook (payload version 4) -> one DriftEvent per firing alert.
+# Point an Alertmanager receiver at POST /api/v1/adaptation/events/from/alertmanager with
+# DRIFT_MAPPERS='{"alertmanager": "config/mappers/alertmanager.toml"}'. The alert rule carries
+# the model in its labels and the score in an annotation, e.g.
+#   labels:      {model_id: cell-a-throughput, model_version: "3", severity: warning,
+#                 drift_type: feature, features: "prb_util,cqi", dataset_id: cell-a-kpis}
+#   annotations: {drift_score: "{{ $value }}"}
+# Rename the label and annotation paths below to match your rules.
+version = "1"
+description = "Prometheus Alertmanager webhook, one event per firing alert"
+records = "alerts"
+
+[where]
+status = "firing"
+
+[fields]
+model_id = "labels.model_id"
+model_version = "labels.model_version"
+dataset_id = "labels.dataset_id"
+drifted_data_version = "labels.data_version"
+drift_type = "labels.drift_type"
+severity = "labels.severity"
+affected_features = "labels.features"
+drift_score = "annotations.drift_score"
+detected_at = "startsAt"
+
+[split]
+affected_features = ","
+
+# Alertmanager severities -> the DriftEvent severity scale (case-insensitive).
+[value_maps.severity]
+critical = "CRITICAL"
+high = "HIGH"
+warning = "MEDIUM"
+medium = "MEDIUM"
+info = "LOW"
+low = "LOW"
+
+# The alert's fingerprint and start time identify one firing: Alertmanager re-sends a firing
+# alert every repeat_interval, and those re-sends are duplicates, not new drift.
+[event_id]
+parts = ["fingerprint", "startsAt"]
+separator = "@"

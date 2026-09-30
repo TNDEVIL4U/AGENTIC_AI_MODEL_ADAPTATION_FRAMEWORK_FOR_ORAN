@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any, cast
 from oran_adapt import plugins
 from oran_adapt.core import observed
 from oran_adapt.core.config import selected_adapters
-from oran_adapt.core.errors import ConfigurationError
 from oran_adapt.datastore.access import DataAccess
 from oran_adapt.llm.client import InstrumentedLlmClient
 from oran_adapt.llm.guard import GuardedLlmClient
@@ -98,37 +97,14 @@ def build_deployment(settings: Settings, registry: ModelRegistryPort) -> Deploym
     return observed.observe(deployment, port="deployment", name=settings.deployment_backend)
 
 
-def needs_traffic_split(settings: Settings) -> bool:
-    """Whether the configured delivery can put a candidate on part of the traffic (canary, A/B,
-    or a shadow / approval that continues as a canary)."""
-    policy = settings.delivery_policy
-    strategy = settings.delivery_strategy
-    return (
-        strategy in ("canary", "ab")
-        or (strategy == "shadow" and policy.shadow_then == "canary")
-        or (strategy in ("manual", "shadow") and policy.approval_then == "canary")
-    )
-
-
 def build_deployer(settings: Settings, registry: ModelRegistryPort) -> Deployer:
-    """The serving system wrapped with read-back. Fails at startup when DELIVERY_STRATEGY needs
-    a traffic split the adapter does not offer."""
+    """The serving system wrapped with read-back. A DELIVERY_STRATEGY that needs a traffic
+    split the adapter does not offer is refused earlier, when the settings are validated
+    (``Settings._delivery_fits_deployment``)."""
     spec = plugins.resolve("deployment", settings.deployment_backend,
                            config_key="deployment_backend")
-    deployer = Deployer.from_settings(build_deployment(settings, registry), settings,
-                                      spec.capability.features)
-    if needs_traffic_split(settings) and not deployer.splits_traffic:
-        raise ConfigurationError(
-            f"DELIVERY_STRATEGY={settings.delivery_strategy} needs a deployment backend with "
-            f"the traffic_split feature; {settings.deployment_backend} has none",
-            key="delivery_strategy",
-            backend=settings.deployment_backend,
-            with_traffic_split=sorted(
-                name for name, s in plugins.adapters("deployment").items()
-                if "traffic_split" in s.capability.features
-            ),
-        )
-    return deployer
+    return Deployer.from_settings(build_deployment(settings, registry), settings,
+                                  spec.capability.features)
 
 
 def build_rollout_metrics(settings: Settings) -> RolloutMetricsPort:

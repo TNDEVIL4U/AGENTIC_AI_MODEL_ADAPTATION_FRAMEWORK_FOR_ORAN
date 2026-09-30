@@ -171,8 +171,9 @@ def policy_hash(policy: BaseModel) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def load_policy_file(path: str, model: type[BaseModel], key: str) -> Any:
-    """Read a TOML or JSON policy file (by extension; anything else is tried as TOML)."""
+def load_policy_file(path: str, model: type[BaseModel], key: str, what: str = "policy") -> Any:
+    """Read a TOML or JSON policy file (by extension; anything else is tried as TOML);
+    ``what`` names the kind of file in the error."""
     try:
         raw = Path(path).read_bytes()
     except OSError as exc:
@@ -182,5 +183,5 @@ def load_policy_file(path: str, model: type[BaseModel], key: str) -> Any:
         data = json.loads(raw) if path.lower().endswith(".json") else tomllib.loads(raw.decode())
         return model.model_validate(data)
     except (ValueError, ValidationError) as exc:
-        raise ConfigurationError(f"{key.upper()} is not a valid policy", key=key, path=path,
+        raise ConfigurationError(f"{key.upper()}: {path} is not a valid {what}", key=key, path=path,
                                  cause=str(exc)) from exc

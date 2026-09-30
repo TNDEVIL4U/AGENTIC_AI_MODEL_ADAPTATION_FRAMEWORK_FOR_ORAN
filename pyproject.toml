@@ -75,6 +75,7 @@ mtls = "oran_adapt.adapters.auth:MTLS"
 
 [project.entry-points."oran_adapt.policy"]
 static-rbac = "oran_adapt.adapters.access:STATIC_RBAC"
+opa = "oran_adapt.adapters.opa:OPA"
 
 [project.entry-points."oran_adapt.notification"]
 log = "oran_adapt.adapters.notify:LOG"

@@ -12,6 +12,7 @@ every route that is not `public`. `/metrics` is public while `METRICS_PUBLIC` is
 | Method | Path | Actions | ADMIN | OPERATOR | ML_ENGINEER | READ_ONLY |
 |---|---|---|---|---|---|---|
 | POST | `/api/v1/adaptation/events` | read, submit | yes | yes | yes | - |
+| POST | `/api/v1/adaptation/events/from/{mapper}` | read, submit | yes | yes | yes | - |
 | GET | `/api/v1/adaptation/jobs` | read | yes | yes | yes | yes |
 | GET | `/api/v1/adaptation/jobs/{job_id}` | read | yes | yes | yes | yes |
 | POST | `/api/v1/adaptation/jobs/{job_id}/cancel` | read, submit | yes | yes | yes | - |

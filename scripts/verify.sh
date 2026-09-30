@@ -55,7 +55,7 @@ case "$phase" in
     # 13: the new suites and the mutation tests ("." also matches the space in "X import Y");
     # the acceptance runs every conformance test, the scenario matrix and the skip policy.
     13) scope="conformance.import.artifact_store core.import.state_machine" ;;
-    14) scope="core api" ;;                               # documentation, migration, samples
+    14) scope="core.event_mapping adapters.opa" ;;  # mappers, OPA; acceptance: docs, examples, walkthrough
     15) scope="core api orchestrator registry sandbox" ;;
     *) echo "unknown phase '$phase' (expected 1-15)" >&2; exit 2 ;;
 esac

@@ -360,6 +360,19 @@ class RolloutMetricsUnavailableError(AdaptationError):
     code = "ROLLOUT_METRICS_UNAVAILABLE"
 
 
+class EventMapperNotFoundError(AdaptationError):
+    """No drift-event mapper of that name is configured (DRIFT_MAPPERS)."""
+
+    code = "EVENT_MAPPER_NOT_FOUND"
+
+
+class EventMappingError(AdaptationError):
+    """A monitoring payload could not be turned into drift events by its mapper: it is not the
+    shape the mapping describes, or a mapped value does not fit the DriftEvent contract."""
+
+    code = "EVENT_MAPPING_FAILED"
+
+
 def rebuild_error(code: str, message: str, context: dict[str, object]) -> AdaptationError:
     """An AdaptationError sent across a process boundary as (code, message, context), rebuilt
     with its original class so ``except`` clauses and the recorded code behave the same."""

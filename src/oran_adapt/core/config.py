@@ -476,6 +476,11 @@ class Settings(BaseSettings):
     delivery_strategy: Literal["shadow", "canary", "blue_green", "ab", "manual"] = "shadow"
     delivery_policy: DeliveryPolicy = Field(default_factory=DeliveryPolicy)
     delivery_policy_file: str | None = None
+    # Monitoring -> DriftEvent mappers (core.event_mapping): mapper name -> mapping file
+    # (config/mappers/*.toml). Each is served at POST /api/v1/adaptation/events/from/{name};
+    # every file is validated at startup. A payload may hold at most DRIFT_MAPPER_MAX_EVENTS.
+    drift_mappers: dict[str, str] = Field(default_factory=dict)
+    drift_mapper_max_events: int = Field(100, ge=1)
     # Where the rollout controller reads each arm's online metrics (oran_adapt.rollout_metrics):
     # "api" (observations POSTed to /api/v1/rollouts/{id}/observations) or "prometheus".
     rollout_metrics_backend: str = "api"
@@ -611,6 +616,14 @@ class Settings(BaseSettings):
             "admin": ["ADMIN"],
         }
     )
+    # "opa": Open Policy Agent decides (adapters.opa). Each question is a POST to
+    # POLICY_OPA_URL/v1/data/POLICY_OPA_PATH with input {action, role, principal}; only a result
+    # of true allows. Role answers are cached POLICY_OPA_CACHE_S; any failure refuses.
+    policy_opa_url: str | None = None
+    policy_opa_path: str = "oran_adapt/authz/allow"
+    policy_opa_token: SecretStr | None = None
+    policy_opa_timeout_s: float = Field(2.0, gt=0)
+    policy_opa_cache_s: float = Field(30.0, ge=0)
 
     # Outbound notifications (oran_adapt.notifications, docs/adapters/notification.md). Every
     # job state transition is written to a durable outbox in the transaction that makes it; a
@@ -829,6 +842,14 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _drift_mappers_valid(self) -> Settings:
+        if self.drift_mappers:
+            from oran_adapt.core.event_mapping import check_mappers
+
+            check_mappers(self.drift_mappers)
+        return self
+
+    @model_validator(mode="after")
     def _llm_switch_consistent(self) -> Settings:
         if self.llm_enabled and self.llm_provider == DISABLED["llm_provider"]:
             raise ConfigurationError(
@@ -947,6 +968,29 @@ class Settings(BaseSettings):
                     )
         return self
 
+    @model_validator(mode="after")
+    def _delivery_fits_deployment(self) -> Settings:
+        """A delivery that puts a candidate on part of the traffic needs a deployment adapter
+        with the traffic_split feature; checked here so config lint catches it too."""
+        from oran_adapt import plugins
+
+        if not needs_traffic_split(self):
+            return self
+        spec = plugins.resolve("deployment", self.deployment_backend,
+                               config_key="deployment_backend")
+        if "traffic_split" not in spec.capability.features:
+            raise ConfigurationError(
+                f"DELIVERY_STRATEGY={self.delivery_strategy} needs a deployment backend with "
+                f"the traffic_split feature; {self.deployment_backend} has none",
+                key="DELIVERY_STRATEGY",
+                backend=self.deployment_backend,
+                with_traffic_split=sorted(
+                    name for name, s in plugins.adapters("deployment").items()
+                    if "traffic_split" in s.capability.features
+                ),
+            )
+        return self
+
 
 def _problems(exc: ValidationError) -> list[dict[str, str]]:
     return [
@@ -989,6 +1033,18 @@ class _FileOnlySettings(Settings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (init_settings,)
+
+
+def needs_traffic_split(settings: Settings) -> bool:
+    """Whether the configured delivery can put a candidate on part of the traffic (canary, A/B,
+    or a shadow / approval that continues as a canary)."""
+    policy = settings.delivery_policy
+    strategy = settings.delivery_strategy
+    return (
+        strategy in ("canary", "ab")
+        or (strategy == "shadow" and policy.shadow_then == "canary")
+        or (strategy in ("manual", "shadow") and policy.approval_then == "canary")
+    )
 
 
 def lint_config_file(path: str) -> list[str]:

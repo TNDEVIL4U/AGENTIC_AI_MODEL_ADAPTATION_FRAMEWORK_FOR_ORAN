@@ -623,12 +623,13 @@ def test_startup_refuses_a_strategy_the_backend_cannot_split(tmp_path) -> None:
     base = {"registry_backend": "filesystem", "registry_fs_root": str(tmp_path / "r"),
             "artifact_store_root": str(tmp_path / "s"), "log_json": False,
             "deployment_bentoml_url": None}
-    settings = Settings(_env_file=None, delivery_strategy="canary", deployment_backend="bentoml",
-                        bentoml_url="http://bento.local", **{k: v for k, v in base.items()
-                                                            if k != "deployment_bentoml_url"})
+    # Refused when the settings are validated, so config lint catches it too.
     with pytest.raises(ConfigurationError) as info:
-        build_deployer(settings, build_registry(settings))
+        Settings(_env_file=None, delivery_strategy="canary", deployment_backend="bentoml",
+                 bentoml_url="http://bento.local", **{k: v for k, v in base.items()
+                                                     if k != "deployment_bentoml_url"})
     assert "registry-alias" in info.value.context["with_traffic_split"]
+    assert info.value.context["key"] == "DELIVERY_STRATEGY"
     ok = Settings(_env_file=None, delivery_strategy="canary",
                   **{k: v for k, v in base.items() if k != "deployment_bentoml_url"})
     assert build_deployer(ok, build_registry(ok)).splits_traffic

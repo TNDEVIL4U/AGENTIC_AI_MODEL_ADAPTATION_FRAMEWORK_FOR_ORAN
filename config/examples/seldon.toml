@@ -1,0 +1,35 @@
+# MLflow registry + Seldon Core v2: every promoted version becomes a Seldon Model whose storageUri
+# comes from the template below. The adapter has no traffic split, so an accepted candidate
+# replaces the Model at once, read back before it counts (blue_green). Set K8S_TOKEN (or K8S_TOKEN_FILE) and API_KEYS outside this file.
+# Use with:  ORAN_CONFIG_FILE=config/examples/seldon.toml
+
+environment = "production"
+database_url = "postgresql+psycopg://oran@db.internal:5432/oran_adapt"
+mlflow_tracking_uri = "http://mlflow.internal:5000"
+artifact_workdir = "/var/lib/oran-adapt/artifacts"
+registry_backend = "mlflow"
+deployment_backend = "seldon"
+delivery_strategy = "blue_green"
+delivery_policy_file = "config/policies/delivery.toml"
+
+[k8s]
+api_url = "https://kubernetes.default.svc"
+ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+namespace = "seldon-mesh"
+name_prefix = "oran-"
+
+[seldon]
+storage_uri_template = "gs://mlflow-artifacts/models/{model}/{version}"
+requirements = ["mlflow"]
+
+[drift_mappers]
+alertmanager = "config/mappers/alertmanager.toml"
+
+[auth]
+enabled = true
+backend = "api-key"
+
+[log]
+level = "INFO"
+json = true

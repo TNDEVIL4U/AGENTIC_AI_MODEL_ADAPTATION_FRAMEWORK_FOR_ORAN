@@ -55,8 +55,9 @@ data and policy give the same decision. Cost is bounded by `max_rows`, `resample
 
 A job that starts a rollout ends `COMPLETED` with outcome `DELIVERING`; LIVE moves only when the
 rollout promotes. While a model has an active rollout, new events for it finish with outcome
-`ROLLOUT_IN_PROGRESS` and start no adaptation. A startup check refuses a strategy that needs a
-traffic split with a deployment backend that has none (docs/adapters/deployment.md).
+`ROLLOUT_IN_PROGRESS` and start no adaptation. Settings validation (startup and
+`oran-adapt config lint`) refuses a strategy that needs a traffic split with a deployment
+backend that has none (docs/adapters/deployment.md).
 
 ### Health and the controller
 

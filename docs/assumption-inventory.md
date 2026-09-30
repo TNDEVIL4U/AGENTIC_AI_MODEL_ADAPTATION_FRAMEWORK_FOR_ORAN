@@ -176,3 +176,12 @@ its port's conformance suite, and the gate fails an adapter with no passing case
 broke the contract and were fixed: an unreachable filesystem artifact root raised a raw
 `OSError`, and the native handler raised `FileExistsError`. The assumption that the gate and
 state-machine tests would catch a regression is now measured: the mutation score is 1.0.
+
+**Closed in Hardening Phase 14** (`docs/PHASE14_REPORT.md`): the assumption that monitoring
+systems send DriftEvents. Alertmanager, Evidently and any JSON source are mapped by mapping
+files, and the walkthrough drives the pipeline from an unchanged Alertmanager payload to a
+canary. Also closed: the assumption that authorization is always a static table (`opa` is
+shipped), and the assumption that an example configuration is right because it loads. Every
+example now passes `config lint`, and lint now rejects a traffic-splitting strategy on a
+deployment adapter that cannot split. Three drafted examples had that mistake. The defaults
+are recorded as ADRs, and a test keeps them in step with `Settings`.

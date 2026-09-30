@@ -1,0 +1,27 @@
+# MLflow registry + a BentoML service that loads the version it is told to
+# (templates/bentoml-service): the framework POSTs the promoted version and reads the served one
+# back. Set BENTOML_TOKEN and API_KEYS outside this file.
+# Use with:  ORAN_CONFIG_FILE=config/examples/bentoml.toml
+
+environment = "production"
+database_url = "postgresql+psycopg://oran@db.internal:5432/oran_adapt"
+mlflow_tracking_uri = "http://mlflow.internal:5000"
+artifact_workdir = "/var/lib/oran-adapt/artifacts"
+registry_backend = "mlflow"
+deployment_backend = "bentoml"
+delivery_strategy = "shadow"
+delivery_policy_file = "config/policies/delivery.toml"
+
+[bentoml]
+url = "http://bento.internal:3000"
+
+[drift_mappers]
+evidently = "config/mappers/evidently.toml"
+
+[auth]
+enabled = true
+backend = "api-key"
+
+[log]
+level = "INFO"
+json = true

@@ -69,6 +69,9 @@ def settings(tmp_path, database_url) -> Settings:
         # test_phase7_gate_delivery covers the superiority gate and the rollout strategies.
         delivery_strategy="blue_green",
         gate_policy=GatePolicy(mode="non_inferiority", margin=0.05, margin_relative=True),
+        # Pinned serving requirements spare MLflow's inference subprocess on every saved model
+        # (tens of seconds each on the development laptop); no test reads what it would infer.
+        mlflow_pip_requirements=["scikit-learn"],
     )
 
 
