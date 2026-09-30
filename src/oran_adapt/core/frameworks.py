@@ -1,11 +1,10 @@
-"""The model frameworks the adaptation engines handle, and which engine carries out each
-strategy for each of them.
+"""The built-in adaptation engines and the frameworks they handle: which engine carries out
+each strategy for scikit-learn, XGBoost and tabular torch models.
 
-This table is the one place a framework name maps to an engine. Engine selection, the drift
-summary's capability flags, the inspector, validation scoring, the CLI and the default of
-decision_supported_frameworks all read it, so adding
-a framework means adding its rows here and its engine, nothing else. Importing it pulls in no ML
-library.
+Only the built-in model type plugins (oran_adapt.adapters.model_types.tabular) read this table.
+Which frameworks the service adapts is whatever the installed model type plugins declare
+(oran_adapt.adaptation.model_types): a new framework is a new plugin, not a row here. Importing
+it pulls in no ML library.
 """
 
 from __future__ import annotations
@@ -30,14 +29,6 @@ ENGINES: Mapping[Strategy, Mapping[str, EngineKind]] = {
         **dict.fromkeys(TORCH_FRAMEWORKS, EngineKind.TORCH_FULL_RETRAIN),
     },
 }
-
-ADAPTABLE_FRAMEWORKS = frozenset(fw for table in ENGINES.values() for fw in table)
-
-
-def frameworks_for(strategy: Strategy) -> frozenset[str]:
-    """Frameworks with a built-in engine for ``strategy`` (empty for a strategy without one)."""
-    return frozenset(ENGINES.get(strategy, {}))
-
 
 def engine_for(strategy: Strategy, framework: str) -> EngineKind | None:
     return ENGINES.get(strategy, {}).get(framework.lower())

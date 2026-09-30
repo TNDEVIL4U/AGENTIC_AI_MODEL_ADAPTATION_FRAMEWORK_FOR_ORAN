@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from oran_adapt.core.enums import EngineKind, Strategy
+from oran_adapt.core.enums import Strategy
 
 
 class ModelInspection(BaseModel):
@@ -30,6 +30,25 @@ class ModelInspection(BaseModel):
     # model expects raw features and does its own preprocessing.
     preprocessing_steps: list[str] = Field(default_factory=list)
     classes: list[str] | None = None  # a classifier's labels, as strings
+    # The model type plugin that recognised the model (oran_adapt.model_type entry point).
+    model_type: str | None = None
+    # The model predicts from an ordered history of rows (a sequence model, a forecaster):
+    # every split of its data is by time, never random.
+    temporal: bool = False
+    # How many consecutive rows a sequence model reads to make one prediction.
+    sequence_window: int | None = None
+
+
+class UnsupportedModelType(BaseModel):
+    """The typed answer of inspection for a model no installed model type plugin recognises
+    (or whose plugin could not describe it): never an exception with a stack trace."""
+
+    kind: Literal["unsupported_model_type"] = "unsupported_model_type"
+    framework: str
+    model_class: str
+    reason: str
+    # The installed model type plugins and the frameworks each serves.
+    installed: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class SchemaCompatibility(BaseModel):
@@ -50,7 +69,9 @@ class CandidateModel(BaseModel):
     """A real, fitted model produced by an engine and saved to a local artifact path - not yet
     validated or registered."""
 
-    engine: EngineKind
+    # The engine that produced it: an EngineKind value for the built-in engines, or the name
+    # a model type plugin declares (ModelTypePort.engines).
+    engine: str
     framework: str
     model_class: str
     artifact_path: str

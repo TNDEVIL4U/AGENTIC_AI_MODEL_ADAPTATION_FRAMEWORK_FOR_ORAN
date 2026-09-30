@@ -42,6 +42,7 @@ def _log_torch_model(name: str) -> None:
 
 
 # ---- loaders + inspector, real artifacts -------------------------------------------------------
+@pytest.mark.heavy  # an MLflow round trip (~20 s); runs in CI
 def test_sklearn_artifact_round_trip(registry, tmp_path) -> None:
     _log_sklearn_model("sk-test-model", warm_start=True)
     local_path = registry.download_artifacts("sk-test-model", "1", str(tmp_path / "dl"))

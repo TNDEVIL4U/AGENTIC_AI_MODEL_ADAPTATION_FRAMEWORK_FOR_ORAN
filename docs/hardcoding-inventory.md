@@ -70,7 +70,7 @@ Hardening Phase 1 has to decide, for each one, whether it stays a schema default
 | C5 | `GEMINI_MODEL` | `gemini-3.6-flash` | model id | `llm.providers.gemini.model` (required when enabled) |
 | C6 | `SANDBOX_DOCKER_IMAGE` | `oran-adapt-sandbox:latest` | mutable `:latest` tag | required, pinned by digest |
 | C7 | `LIVE_ALIAS` / `CANDIDATE_ALIAS` | `live` / `candidate` | MLflow alias semantics | `deployment.targets[].alias` (registry-alias adapter only) |
-| C8 | `DECISION_SUPPORTED_FRAMEWORKS` | `sklearn, xgboost, torch, pytorch` | vendor list in config | derived from registered handlers |
+| C8 | `DECISION_SUPPORTED_FRAMEWORKS` | `sklearn, xgboost, torch, pytorch` | vendor list in config | closed in Hardening Phase 1 (derived default); **since Hardening Phase 8** the default `[]` means every framework an installed model type plugin can adapt; set it only to narrow the list |
 | C9 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | host:port | required when `cdc.mode=kafka` |
 | C10 | `CDC_KAFKA_TOPIC` | `oran.public.kpi_sample` | table-bound topic | `cdc.sources[].topic` |
 | C11 | `CDC_CONSUMER_GROUP` | `oran-adapt-cdc` | name | `cdc.consumer_group` |
@@ -234,11 +234,29 @@ defaults. What is still a literal, and why:
 | `api/routes_rollouts.py` | at most 50 metrics per observation; `limit` at most 1000 rollouts per page | bounds on one request and one response, as on the other routes |
 | `validation/gate.py` | the metric per task type (accuracy, RMSE, ...) and its direction | the definition of the task type; `metric_guards` adds others |
 
+## Hardening Phase 8 status
+
+No baseline item reopened, and the counts do not move (C8 was closed in Phase 1). C8's derived
+default no longer lists frameworks at all: `DECISION_SUPPORTED_FRAMEWORKS` defaults to `[]`,
+which the decision layer reads as every framework an installed model type plugin can adapt
+(`supported_frameworks`). A23's single table (`core/frameworks.py`) is now read only by the
+built-in tabular and sequence plugins; everywhere else (pipeline, validation, reuse check,
+decision, drift summary, CLI) asks the model type registry (`adaptation/model_types.py`), and a
+new framework is a new plugin, not a row in that table. The plugins, their order (`MODEL_TYPES`), sequence training (`SEQUENCE_*`) and the ONNX runtime
+(`ONNX_RUNTIME`) are keys. What is still a literal, and why:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `adapters/model_types/*.py` | each plugin's framework names (`sklearn`, `lightgbm`, `torch`, ...) and engine names | the plugin's identity: what it serves; a new framework is a new plugin |
+| `adapters/model_types/sequence.py` | the layer types that mark a torch module as sequential (recurrent, convolutional, attention) | how the plugin recognises its models; a module can declare `sequence_window` instead |
+| `adapters/model_types/onnx.py` | output names `label`/`probabilities` and ArgMax as the classifier signal | ONNX conventions (skl2onnx, onnxmltools) |
+| `adapters/model_types/tabular.py` | continued boosting via `init_model` | the LightGBM and CatBoost API |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 |
-|---|---|---|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 |
+|---|---|---|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |

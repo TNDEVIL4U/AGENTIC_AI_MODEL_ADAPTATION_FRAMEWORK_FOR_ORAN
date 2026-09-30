@@ -18,6 +18,7 @@ from xgboost import XGBRegressor
 
 from oran_adapt.adaptation.capability import assess_capability, assess_schema_compatibility
 from oran_adapt.adaptation.inspector import inspect_model
+from oran_adapt.adaptation.model_types import build_model_types
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import EngineKind, Strategy
 from oran_adapt.orchestrator.pipeline import _produce_candidate
@@ -51,6 +52,7 @@ def _produce(strategy: Strategy, model: object, framework: str, X, y, tmp_path):
         settings=SETTINGS,
         llm_client=None,
         workdir=str(tmp_path),
+        model_types=build_model_types(SETTINGS),
     )
 
 

@@ -3,9 +3,9 @@ event. Each member stays ignorant of the others - this module is the seam.
 
     analyze() [Member 1] -> evaluate_versions() + decide_reuse() [Member 1]: score every
     registered version on the current data and, if one clearly beats LIVE, promote it and stop
-    (no training) -> decide() [Member 2] -> select_engine()/run_engine() [Member 3], falling
-    back to adapt_via_llm() (sandboxed) when the engine registry has no built-in engine for the
-    chosen (strategy, framework) -> validate_candidate() [Member 4] -> registry (MLflow):
+    (no training) -> decide() [Member 2] -> the model's model type plugin adapts it [Member 3],
+    falling back to adapt_via_llm() (sandboxed) when that plugin has no engine for the chosen
+    strategy -> validate_candidate() [Member 4] -> registry (MLflow):
     register the candidate, then deliver it, but only when the validation gate accepted it:
     DELIVERY_STRATEGY=blue_green has promote_version() move the live alias at once; shadow,
     canary, ab and manual start a rollout (delivery.controller) that the controller moves on
@@ -35,10 +35,9 @@ from oran_adapt.adaptation.data import (
     records_frame,
     split_features_target,
 )
-from oran_adapt.adaptation.engines import TorchBudget, run_engine, select_engine
-from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.leakage import check_leakage
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
+from oran_adapt.adaptation.model_types import ModelTypes, build_model_types
 from oran_adapt.adaptation.schemas import CandidateModel, ModelInspection
 from oran_adapt.analysis.engine import analyze
 from oran_adapt.analysis.reuse_decision import decide_reuse
@@ -83,7 +82,7 @@ from oran_adapt.delivery.controller import to_dict as rollout_dict
 from oran_adapt.llm.client import LlmClient
 from oran_adapt.orchestrator.context import current_job_id, report_stage
 from oran_adapt.orchestrator.schemas import JobResult
-from oran_adapt.ports import ModelRegistryPort
+from oran_adapt.ports import ModelRegistryPort, TrainingSet
 from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.promotion import current_live, promote_version, verify_version_artifact
 from oran_adapt.registry.publishing import record_artifact_checksum, register_candidate
@@ -108,9 +107,10 @@ def _produce_candidate(
     settings: Settings,
     llm_client: LlmClient | None,
     workdir: str,
+    model_types: ModelTypes,
 ) -> CandidateModel:
-    """Try the built-in engine registry first; only fall back to the LLM sandbox adapter when
-    the registry genuinely has nothing for this (strategy, framework, capability) combination.
+    """Try the model's model type plugin first; only fall back to the LLM sandbox adapter when
+    it genuinely has nothing for this (strategy, capability) combination.
 
     Fine-tuning happens only when the artifact technically supports it: an artifact with no
     incremental-update mechanism, or one whose mechanism no native engine uses while no LLM is
@@ -125,16 +125,12 @@ def _produce_candidate(
         strategy = Strategy.FULL_RETRAINING
         note = f"fine-tuning is not supported ({capability.reason}); fully retrained instead"
 
+    data = TrainingSet(X=X, y=y, target_column=target_column,
+                       artifact_dir=os.path.join(workdir, "engine"))
+
     def _native(chosen: Strategy) -> CandidateModel:
-        return run_engine(
-            select_engine(chosen, framework, capability),
-            current_model,
-            inspection=inspection,
-            X=X,
-            y=y,
-            target_column=target_column,
-            artifact_dir=os.path.join(workdir, "engine"),
-            torch_budget=TorchBudget.from_settings(settings),
+        return model_types.adapt(
+            current_model, chosen, inspection=inspection, capability=capability, data=data
         )
 
     def _applied(candidate: CandidateModel, chosen: Strategy, why: str) -> CandidateModel:
@@ -597,7 +593,9 @@ def run_adaptation_job(
             model_id=event.model_id,
         )
     current_model = handler.load(local_path, framework)
-    inspection = inspect_model(current_model, framework)
+    model_types = build_model_types(settings)
+    # An unsupported model is a typed UNSUPPORTED_MODEL_TYPE job error, never a crash.
+    inspection = model_types.require(current_model, framework)
 
     train_records = [r for r in records if r.id not in holdout_ids]
     feature_names = inspection.feature_names_in or [
@@ -623,6 +621,7 @@ def run_adaptation_job(
             settings=settings,
             llm_client=llm_client,
             workdir=workdir,
+            model_types=model_types,
         )
     except (UnsafeCodeError, SandboxExecutionError) as exc:
         # Only the LLM adapter raises these. Commit the audit rows now: the job's session is
@@ -679,7 +678,7 @@ def run_adaptation_job(
         event.model_id,
         model_version=live_version,
         metadata={
-            "engine": candidate.engine.value,
+            "engine": str(candidate.engine),
             "applied_strategy": str(candidate.applied_strategy or decision.strategy),
             "adaptation_note": candidate.adaptation_note,
             "inspection": inspection.model_dump(mode="json"),
@@ -760,7 +759,7 @@ def run_adaptation_job(
             "adaptation.applied_strategy": str(candidate.applied_strategy or decision.strategy),
             # 250: the smallest per-tag limit of the registry adapters (SageMaker, 256).
             "adaptation.note": candidate.adaptation_note[:250],
-            "adaptation.engine": candidate.engine.value,
+            "adaptation.engine": str(candidate.engine),
             "candidate.sha256": candidate_sha,
             "validation.metric": report.metric_name,
             "validation.candidate_value": f"{report.candidate_value:.6f}",
@@ -781,7 +780,7 @@ def run_adaptation_job(
         model_version=new_version,
         decision=decision.strategy.value,
         reason=f"validated candidate registered (parent version {live_version})",
-        metadata={"artifact_sha256": candidate_sha, "engine": candidate.engine.value},
+        metadata={"artifact_sha256": candidate_sha, "engine": str(candidate.engine)},
     )
     registry.set_alias(name, settings.candidate_alias, new_version)
     if gate_row is not None:

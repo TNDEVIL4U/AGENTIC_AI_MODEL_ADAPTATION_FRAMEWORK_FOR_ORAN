@@ -1,11 +1,14 @@
 """Model handler adapter ``native``: each framework's own serialization, no registry format.
 
 An artifact directory holds the model file and ``oran-model.json``, a manifest naming the
-format, the framework and the file. sklearn models are written with skops (only the reviewed
-types in MLFLOW_SKOPS_TRUSTED_TYPES are accepted, when saving and again when loading), xgboost
-models with xgboost's own ``save_model`` (UBJSON), torch modules with ``torch.save``. A torch
-artifact is a pickle; it is only loaded after the caller has checked its registered SHA-256
-(oran_adapt.registry.promotion.verify_version_artifact), as with the MLflow pytorch flavor.
+format, the framework and the file. sklearn, LightGBM and CatBoost models are written with
+skops (only the reviewed types in MLFLOW_SKOPS_TRUSTED_TYPES are accepted, when saving and again
+when loading), xgboost models with xgboost's own ``save_model`` (UBJSON), ONNX graphs as the
+protobuf they are, Keras models in the ``.keras`` format (loaded in Keras' safe mode), torch
+modules with ``torch.save`` and statsmodels results with their own ``save``. torch and
+statsmodels artifacts are pickles; they are only loaded after the caller has checked their
+registered SHA-256 (oran_adapt.registry.promotion.verify_version_artifact), as with the MLflow
+pytorch flavor. Each library is imported only when a model of its framework is saved or loaded.
 """
 
 from __future__ import annotations
@@ -23,9 +26,32 @@ if TYPE_CHECKING:
 
 FORMAT = "oran-native/1"
 MANIFEST = "oran-model.json"
-# Framework name -> canonical name. "pytorch" is accepted as an alias of "torch".
-_CANONICAL = {"sklearn": "sklearn", "xgboost": "xgboost", "torch": "torch", "pytorch": "torch"}
-_FILES = {"sklearn": "model.skops", "xgboost": "model.ubj", "torch": "model.pt"}
+# Framework name -> canonical name. "pytorch" is accepted as an alias of "torch", "tensorflow"
+# of "keras".
+_CANONICAL = {
+    "sklearn": "sklearn",
+    "xgboost": "xgboost",
+    "torch": "torch",
+    "pytorch": "torch",
+    "lightgbm": "lightgbm",
+    "catboost": "catboost",
+    "onnx": "onnx",
+    "statsmodels": "statsmodels",
+    "keras": "keras",
+    "tensorflow": "keras",
+}
+_FILES = {
+    "sklearn": "model.skops",
+    "xgboost": "model.ubj",
+    "torch": "model.pt",
+    "lightgbm": "model.skops",
+    "catboost": "model.skops",
+    "onnx": "model.onnx",
+    "statsmodels": "model.pickle",
+    "keras": "model.keras",
+}
+# Frameworks whose scikit-learn-API models skops serializes.
+_SKOPS = frozenset({"sklearn", "lightgbm", "catboost"})
 # xgboost estimator classes a manifest may name; anything else is refused on load.
 _XGB_CLASSES = frozenset(
     {"Booster", "XGBRegressor", "XGBClassifier", "XGBRanker", "XGBRFRegressor", "XGBRFClassifier"}
@@ -89,7 +115,7 @@ class NativeHandler:
         target = os.path.join(dst_dir, _FILES[fw])
         manifest: dict[str, Any] = {"format": FORMAT, "framework": fw, "file": _FILES[fw]}
         try:
-            if fw == "sklearn":
+            if fw in _SKOPS:
                 import skops.io as sio
 
                 resolve_skops_trusted_types(model, self.skops_trusted_types)
@@ -100,6 +126,13 @@ class NativeHandler:
                     raise UnsupportedAdaptationError(f"no native xgboost format for {cls}")
                 model.save_model(target)  # type: ignore[attr-defined]
                 manifest["class"] = cls
+            elif fw == "onnx":
+                import onnx
+
+                onnx.save_model(model, target)  # type: ignore[arg-type]
+            elif fw in ("statsmodels", "keras"):
+                # Both write their own format to the path: a results pickle, a .keras archive.
+                model.save(target)  # type: ignore[attr-defined]
             else:
                 import torch
 
@@ -128,7 +161,7 @@ class NativeHandler:
         if os.path.dirname(os.path.normpath(target)) != os.path.normpath(local_path):
             raise ArtifactError("manifest file escapes the artifact directory", path=local_path)
         try:
-            if fw == "sklearn":
+            if fw in _SKOPS:
                 import skops.io as sio
 
                 needed = sio.get_untrusted_types(file=target)
@@ -136,6 +169,18 @@ class NativeHandler:
                 return sio.load(target, trusted=needed)
             if fw == "xgboost":
                 return _load_xgboost(target, str(manifest.get("class")))
+            if fw == "onnx":
+                import onnx
+
+                return onnx.load_model(target)
+            if fw == "statsmodels":
+                from statsmodels.iolib.smpickle import load_pickle
+
+                return load_pickle(target)
+            if fw == "keras":
+                import keras
+
+                return keras.saving.load_model(target, safe_mode=True)
             import torch
 
             return torch.load(target, map_location="cpu", weights_only=False)
@@ -177,7 +222,7 @@ SPEC = AdapterSpec(
     capability=Capability(
         port="model_handler",
         adapter="native",
-        description="sklearn (skops), xgboost (UBJSON) and torch models in their own formats",
+        description="each framework's own format: skops, UBJSON, ONNX, .keras, torch, statsmodels",
         features=frozenset({"load", "save", *_CANONICAL}),
         config_keys=("mlflow_skops_trusted_types",),
     ),

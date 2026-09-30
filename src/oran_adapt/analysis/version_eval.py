@@ -21,7 +21,7 @@ import time
 
 import pandas as pd
 
-from oran_adapt.adaptation.inspector import inspect_model
+from oran_adapt.adaptation.model_types import ModelTypes, build_model_types
 from oran_adapt.analysis.schemas import VersionEvaluation
 from oran_adapt.core.config import Settings
 from oran_adapt.core.errors import AdaptationError, RegistryUnavailableError
@@ -64,6 +64,7 @@ def _evaluate_one(
     live_version: str,
     expected_estimator: str | None,
     workdir: str,
+    model_types: ModelTypes,
     task_type: str | None = None,
 ) -> VersionEvaluation:
     version = version_info.version
@@ -76,7 +77,7 @@ def _evaluate_one(
     try:
         local, ev.artifact_sha256 = verify_version_artifact(registry, name, version, workdir)
         model = handler.load(local, framework)
-        inspection = inspect_model(model, framework)
+        inspection = model_types.require(model, framework)
     except RegistryUnavailableError:
         raise
     except AdaptationError as exc:
@@ -103,6 +104,7 @@ def _evaluate_one(
             framework=framework,
             estimator_type=inspection.estimator_type,
             task_type=task_type,
+            model_types=model_types,
         )
     except AdaptationError as exc:
         ev.incompatibility_reason = f"{exc.code}: {exc.message}"
@@ -137,6 +139,7 @@ def evaluate_versions(
     live_info = [v for v in infos if str(v.version) == live_version]
     others = [v for v in infos if str(v.version) != live_version]
 
+    model_types = build_model_types(settings)
     results: list[VersionEvaluation] = []
     expected: str | None = None
     for info in live_info + others:
@@ -151,6 +154,7 @@ def evaluate_versions(
             live_version=live_version,
             expected_estimator=expected,
             workdir=os.path.join(workdir, "versions"),
+            model_types=model_types,
             task_type=task_type,
         )
         if ev.is_live:

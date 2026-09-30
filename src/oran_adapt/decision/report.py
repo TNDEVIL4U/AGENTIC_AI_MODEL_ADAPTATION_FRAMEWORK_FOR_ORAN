@@ -11,6 +11,7 @@ None otherwise.
 
 from __future__ import annotations
 
+from oran_adapt.adaptation.model_types import supported_frameworks
 from oran_adapt.analysis.reuse import is_shifted
 from oran_adapt.analysis.schemas import DecisionPackage, VersionEvaluation
 from oran_adapt.core.config import Settings
@@ -154,7 +155,7 @@ def explain_decision(decision: Decision, package: DecisionPackage, settings: Set
         "min_drifted_rows": settings.decision_min_drifted_rows,
         "full_retrain_psi": settings.decision_full_retrain_psi_threshold,
         "drifted_feature_psi": settings.analysis_psi_reuse_threshold,
-        "supported_frameworks": list(settings.decision_supported_frameworks),
+        "supported_frameworks": sorted(supported_frameworks(settings)),
         "validation_min_rows": settings.validation_min_rows,
         "gate_policy_version": settings.gate_policy.version,
         "gate_mode": settings.gate_policy.mode,

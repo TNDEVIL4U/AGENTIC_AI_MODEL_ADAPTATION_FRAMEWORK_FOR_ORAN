@@ -6,29 +6,27 @@ once, how the model has been doing, which version is LIVE, and what adapting it 
 
 from __future__ import annotations
 
+from oran_adapt.adaptation.model_types import build_model_types, supported_frameworks
 from oran_adapt.analysis.comparison import ComparisonResult
 from oran_adapt.analysis.merge import MergedSeries
 from oran_adapt.analysis.reuse import is_shifted
 from oran_adapt.analysis.schemas import DriftSummary
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy
-from oran_adapt.core.frameworks import frameworks_for
-
-# Frameworks with a built-in engine for each kind of training (core.frameworks.ENGINES).
-# Fine-tuning also needs the artifact itself to support it (e.g. an sklearn estimator with
-# partial_fit), which is checked on the loaded model at adaptation time.
-FINE_TUNE_FRAMEWORKS = frameworks_for(Strategy.FINE_TUNING)
-FULL_RETRAIN_FRAMEWORKS = frameworks_for(Strategy.FULL_RETRAINING)
 
 
 def framework_capabilities(framework: str | None, settings: Settings) -> dict[str, bool]:
-    """What adapting a model of this framework could use: a built-in fine-tuning engine, a
-    built-in full-retraining engine, and the LLM adapter (needs a configured provider)."""
+    """What adapting a model of this framework could use: an installed model type plugin with a
+    fine-tuning engine, one with a full-retraining engine, and the LLM adapter (needs a
+    configured provider). Fine-tuning also needs the artifact itself to support it (e.g. an
+    sklearn estimator with partial_fit), which is checked on the loaded model at adaptation
+    time."""
     fw = (framework or "").lower()
-    supported = {f.lower() for f in settings.decision_supported_frameworks}
+    types = build_model_types(settings)
+    supported = supported_frameworks(settings, types)
     return {
-        "fine_tuning": fw in supported and fw in FINE_TUNE_FRAMEWORKS,
-        "full_retraining": fw in supported and fw in FULL_RETRAIN_FRAMEWORKS,
+        "fine_tuning": fw in supported and fw in types.frameworks(Strategy.FINE_TUNING),
+        "full_retraining": fw in supported and fw in types.frameworks(Strategy.FULL_RETRAINING),
         "llm_adapter": settings.llm_provider != "none",
     }
 

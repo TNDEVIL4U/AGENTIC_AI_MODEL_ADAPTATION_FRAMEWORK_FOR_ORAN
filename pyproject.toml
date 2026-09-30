@@ -36,6 +36,17 @@ fsspec = "oran_adapt.adapters.registry.artifact_stores:FSSPEC"
 mlflow-flavors = "oran_adapt.adapters.registry.mlflow.flavors:SPEC"
 native = "oran_adapt.adapters.handlers.native:SPEC"
 
+[project.entry-points."oran_adapt.model_type"]
+catboost = "oran_adapt.adapters.model_types.tabular:CATBOOST"
+keras = "oran_adapt.adapters.model_types.sequence:KERAS"
+lightgbm = "oran_adapt.adapters.model_types.tabular:LIGHTGBM"
+onnx = "oran_adapt.adapters.model_types.onnx:SPEC"
+sklearn = "oran_adapt.adapters.model_types.tabular:SKLEARN"
+statsmodels = "oran_adapt.adapters.model_types.forecasters:SPEC"
+torch = "oran_adapt.adapters.model_types.tabular:TORCH"
+torch-sequence = "oran_adapt.adapters.model_types.sequence:TORCH_SEQUENCE"
+xgboost = "oran_adapt.adapters.model_types.tabular:XGBOOST"
+
 [project.entry-points."oran_adapt.llm"]
 anthropic = "oran_adapt.adapters.llm_providers:ANTHROPIC"
 gemini = "oran_adapt.adapters.llm_providers:GEMINI"

@@ -47,7 +47,7 @@ case "$phase" in
     5) scope="datastore cdc analysis adaptation" ;;       # data access by reference
     6) scope="orchestrator api" ;;                        # real execution layer
     7) scope="validation registry orchestrator" ;;        # validation gate, progressive delivery
-    8) scope="adaptation adapters validation" ;;          # model-type plugins
+    8) scope="adaptation.model_types adaptation.sequence adaptation.torch_engine adaptation.inspector validation conformance.model_types adapters.model_types" ;;  # model-type plugins
     9) scope="api adapters" ;;                            # security
     10) scope="llm decision adaptation" ;;                # LLM paths
     11) scope="core api" ;;                               # packaging and deployment
@@ -90,8 +90,11 @@ if (( ${#scoped[@]} == 0 )); then
 fi
 printf '  %s\n' "${scoped[@]}"
 "$py" -m pytest -q -m "not heavy" -n "$workers" --ff "${scoped[@]}"
-step "4/5 smoke tier"
-"$py" -m pytest -q -m smoke -n "$workers" --ff
+step "4/5 smoke tier (files not run above)"
+# The scoped run already ran the smoke tests in its own files; run the rest of the tier.
+ignored=()
+for f in "${scoped[@]}"; do ignored+=(--ignore "$f"); done
+"$py" -m pytest -q -m smoke -n "$workers" --ff "${ignored[@]}"
 
 step "5/5 acceptance ($acceptance)"
 "$py" "$acceptance"

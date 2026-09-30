@@ -1,6 +1,6 @@
 """Member 3 - PyTorch engine: real gradient-descent training for torch.nn.Module models.
-TORCH_FINE_TUNE continues training the current module in place from its existing weights (a
-warm start - never a fresh reinitialization). TORCH_FULL_RETRAIN builds a fresh module with the
+TORCH_FINE_TUNE continues training a copy of the current module from its existing weights (a
+warm start - never a fresh reinitialization; the live module is never trained in place). TORCH_FULL_RETRAIN builds a fresh module with the
 same architecture but reinitialized parameters and trains it from scratch, mirroring how
 full_retrain() clones (never mutates) a sklearn estimator."""
 
@@ -84,16 +84,17 @@ def fine_tune_torch(
     epochs: int,
     lr: float,
 ) -> CandidateModel:
+    tuned = copy.deepcopy(current_model)
     X_t, y_t = _to_tensors(X, y, estimator_type)
     try:
-        _run_training(current_model, X_t, y_t, estimator_type=estimator_type, epochs=epochs, lr=lr)
+        _run_training(tuned, X_t, y_t, estimator_type=estimator_type, epochs=epochs, lr=lr)
     except Exception as exc:
         raise ArtifactError(
             f"torch fine-tuning failed on {type(current_model).__name__}", cause=str(exc)
         ) from exc
 
-    metrics = _compute_metrics(current_model, X_t, y_t, estimator_type)
-    artifact_path = _save(current_model, artifact_dir)
+    metrics = _compute_metrics(tuned, X_t, y_t, estimator_type)
+    artifact_path = _save(tuned, artifact_dir)
 
     return CandidateModel(
         engine=EngineKind.TORCH_FINE_TUNE,

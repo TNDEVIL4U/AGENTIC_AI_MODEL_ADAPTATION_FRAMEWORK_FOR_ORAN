@@ -1,9 +1,11 @@
-"""Member 3 - fine-tuning engine: continue training the current model in place via
+"""Member 3 - fine-tuning engine: continue training a copy of the current model via
 partial_fit(), rather than fitting a fresh estimator. Preserves whatever the model already
-learned instead of discarding it, which is the whole point of fine-tuning over full retraining."""
+learned instead of discarding it, which is the whole point of fine-tuning over full retraining.
+The live model is never trained in place: validation compares the candidate against it."""
 
 from __future__ import annotations
 
+import copy
 import os
 from typing import Protocol, cast
 
@@ -36,7 +38,8 @@ def fine_tune_sklearn(
             f"{type(current_model).__name__} has no partial_fit - cannot fine-tune"
         )
 
-    model = cast(_IncrementalModel, current_model)  # partial_fit checked just above
+    # partial_fit checked just above; the copy keeps the live model untouched.
+    model = cast(_IncrementalModel, copy.deepcopy(current_model))
     try:
         model.partial_fit(X, y)
     except Exception as exc:
@@ -54,7 +57,7 @@ def fine_tune_sklearn(
 
     os.makedirs(artifact_dir, exist_ok=True)
     artifact_path = os.path.join(artifact_dir, "model.joblib")
-    joblib.dump(current_model, artifact_path)
+    joblib.dump(model, artifact_path)
 
     return CandidateModel(
         engine=EngineKind.SKLEARN_PARTIAL_FIT,

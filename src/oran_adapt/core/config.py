@@ -30,7 +30,6 @@ from oran_adapt.core.config_sources import (
     read_config_file,
 )
 from oran_adapt.core.errors import ConfigurationError
-from oran_adapt.core.frameworks import ADAPTABLE_FRAMEWORKS
 from oran_adapt.core.policies import DeliveryPolicy, GatePolicy, load_policy_file
 
 # Adapter selector key -> port. Each selected adapter's Capability.required_keys must be set.
@@ -380,13 +379,12 @@ class Settings(BaseSettings):
 
     # Member 2 (decision) hard constraints. A DecisionPackage needs at least
     # decision_min_drifted_rows drifted rows to be actionable at all; a framework outside
-    # decision_supported_frameworks has no adaptation engine to carry a decision out; a max_psi
-    # at or above decision_full_retrain_psi_threshold rules out incremental fine-tuning.
+    # decision_supported_frameworks has no adaptation engine to carry a decision out (empty, the
+    # default: every framework an installed model type plugin adapts); a max_psi at or above
+    # decision_full_retrain_psi_threshold rules out incremental fine-tuning.
     decision_min_drifted_rows: int = Field(10, ge=1)
     decision_full_retrain_psi_threshold: float = Field(0.5, ge=0)
-    decision_supported_frameworks: list[str] = Field(
-        default_factory=lambda: sorted(ADAPTABLE_FRAMEWORKS)
-    )
+    decision_supported_frameworks: list[str] = Field(default_factory=list)
     # How many copies of a past decision the decision memory keeps per model and strategy.
     decision_memory_copies: int = Field(3, ge=1)
     # Confidence reported for a rule-based decision that carries no score of its own.
@@ -459,6 +457,21 @@ class Settings(BaseSettings):
     torch_fine_tune_epochs: int = Field(5, ge=1)
     torch_full_retrain_epochs: int = Field(300, ge=1)
     torch_learning_rate: float = Field(1e-2, gt=0)  # Adam step size for both torch engines
+
+    # Model type plugins (docs/adapters/model_type.md): which installed plugins handle models, in
+    # the order they are asked (the first that accepts a model handles it). Empty: every
+    # installed plugin, by name.
+    model_types: list[str] = Field(default_factory=list)
+    # Sequence models (torch-sequence, keras): the rows of history one prediction reads when the
+    # model does not declare its own window, the newest share of the training rows held back
+    # (in time order) to pick the best epoch, the epoch budgets and the Adam step size.
+    sequence_window: int = Field(8, ge=1)
+    sequence_validation_fraction: float = Field(0.2, ge=0, lt=1)
+    sequence_fine_tune_epochs: int = Field(20, ge=1)
+    sequence_full_retrain_epochs: int = Field(200, ge=1)
+    sequence_learning_rate: float = Field(1e-2, gt=0)
+    # Where ONNX graphs run: "onnxruntime" or the onnx package's "reference" evaluator.
+    onnx_runtime: Literal["onnxruntime", "reference"] = "onnxruntime"
 
     # Largest request body the API accepts (dataset uploads send their records as JSON); a
     # bigger one is refused with 413 REQUEST_TOO_LARGE before it is read in full.

@@ -246,7 +246,7 @@ def test_full_retrain_fit_failure_raises_artifact_error(session_factory, tmp_pat
         )
 
 
-# ---- fine-tuning: continues from existing weights, in place ------------------------------------
+# ---- fine-tuning: continues from existing weights, on a copy -----------------------------------
 def test_fine_tune_sklearn_continues_from_existing_weights(session_factory, tmp_path) -> None:
     X1, y1 = _fit_frame(session_factory, n=60)
     current = SGDClassifier(random_state=0).fit(X1, y1)
@@ -263,12 +263,14 @@ def test_fine_tune_sklearn_continues_from_existing_weights(session_factory, tmp_
         artifact_dir=str(tmp_path / "artifact"),
     )
 
-    # partial_fit mutates the same object in place - never a fresh clone.
-    assert not np.allclose(coef_before, current.coef_)
+    # partial_fit continues on a copy: the live model (which validation compares the candidate
+    # against) is untouched.
+    assert np.allclose(coef_before, current.coef_)
     assert candidate.artifact_path
     reloaded = joblib.load(candidate.artifact_path)
     # The saved artifact reflects the continued weights, not a reset/re-fit model.
-    assert np.allclose(reloaded.coef_, current.coef_)
+    assert not np.allclose(reloaded.coef_, coef_before)
+    assert reloaded.t_ > current.t_
     assert len(reloaded.predict(X2)) == len(X2)
 
 

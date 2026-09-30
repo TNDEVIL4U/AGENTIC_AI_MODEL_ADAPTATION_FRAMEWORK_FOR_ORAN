@@ -64,7 +64,7 @@ def _reg_frame(n: int, seed: int = 0) -> tuple[pd.DataFrame, pd.Series]:
     return X, y
 
 
-# ---- fine-tuning: continues from existing weights, in place ------------------------------------
+# ---- fine-tuning: continues from existing weights, on a copy -----------------------------------
 def test_fine_tune_torch_continues_from_existing_weights(tmp_path) -> None:
     torch.manual_seed(0)
     model = _TinyClassifier()
@@ -83,13 +83,14 @@ def test_fine_tune_torch_continues_from_existing_weights(tmp_path) -> None:
         lr=1e-2,
     )
 
-    # partial training mutates the same module in place - never a fresh clone.
-    assert not torch.allclose(weight_before, model.linear.weight)
+    # training continues on a copy: the live module (which validation compares the candidate
+    # against) is untouched.
+    assert torch.allclose(weight_before, model.linear.weight)
     assert candidate.engine == EngineKind.TORCH_FINE_TUNE
     assert 0.0 <= candidate.metrics["accuracy"] <= 1.0
 
     reloaded = joblib.load(candidate.artifact_path)
-    assert torch.allclose(reloaded.linear.weight, model.linear.weight)
+    assert not torch.allclose(reloaded.linear.weight, weight_before)
     with torch.no_grad():
         preds = reloaded(torch.tensor(X.to_numpy(), dtype=torch.float32))
     assert preds.shape[0] == len(X)
@@ -218,7 +219,7 @@ def test_run_engine_passes_torch_learning_rate(tmp_path) -> None:
         torch.manual_seed(0)
         model = _TinyClassifier()
         before = model.linear.weight.detach().clone()
-        run_engine(
+        candidate = run_engine(
             EngineKind.TORCH_FINE_TUNE,
             model,
             inspection=inspect_model(model, "torch"),
@@ -228,6 +229,7 @@ def test_run_engine_passes_torch_learning_rate(tmp_path) -> None:
             artifact_dir=str(tmp_path / f"lr-{lr}"),
             torch_budget=TorchBudget(fine_tune_epochs=3, full_retrain_epochs=3, learning_rate=lr),
         )
-        moved[lr] = (model.linear.weight - before).abs().max().item()
+        tuned = joblib.load(candidate.artifact_path)
+        moved[lr] = (tuned.linear.weight - before).abs().max().item()
     # A near-zero learning rate barely moves the weights; a large one clearly does.
     assert moved[1e-8] < 1e-6 < moved[1e-1]

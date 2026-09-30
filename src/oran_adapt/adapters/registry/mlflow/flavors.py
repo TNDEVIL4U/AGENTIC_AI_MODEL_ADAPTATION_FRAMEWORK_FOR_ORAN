@@ -1,6 +1,7 @@
 """Model handler adapter ``mlflow-flavors``: MLflow's flavor format (a directory with an
-``MLmodel`` file). Loads the native model object (an sklearn or xgboost estimator, a
-torch.nn.Module) directly instead of through MLflow's generic pyfunc wrapper, and saves new
+``MLmodel`` file). Loads the native model object (an sklearn, xgboost, LightGBM or CatBoost
+estimator, a torch.nn.Module, an ONNX graph, a statsmodels results object, a Keras model)
+directly instead of through MLflow's generic pyfunc wrapper, and saves new
 versions in the same format so they stay loadable with ``mlflow.<flavor>.load_model``."""
 
 from __future__ import annotations
@@ -23,6 +24,12 @@ FLAVORS: dict[str, str] = {
     "xgboost": "mlflow.xgboost",
     "torch": "mlflow.pytorch",
     "pytorch": "mlflow.pytorch",
+    "lightgbm": "mlflow.lightgbm",
+    "catboost": "mlflow.catboost",
+    "onnx": "mlflow.onnx",
+    "statsmodels": "mlflow.statsmodels",
+    "keras": "mlflow.keras",
+    "tensorflow": "mlflow.tensorflow",
 }
 
 
@@ -32,7 +39,13 @@ def _flavor(framework: str) -> Any:
     name = FLAVORS.get(framework.lower())
     if name is None:
         raise UnsupportedAdaptationError(f"no MLflow flavor for framework {framework!r}")
-    return importlib.import_module(name)
+    try:
+        return importlib.import_module(name)
+    except ImportError as exc:
+        # The flavor imports its framework's library; without it the model cannot be handled.
+        raise UnsupportedAdaptationError(
+            f"the MLflow {name} flavor cannot be used: {exc}", framework=framework
+        ) from exc
 
 
 class MlflowFlavorHandler:
@@ -88,7 +101,7 @@ SPEC = AdapterSpec(
     capability=Capability(
         port="model_handler",
         adapter="mlflow-flavors",
-        description="sklearn, xgboost and torch models stored in MLflow's flavor format",
+        description="models of every MLflow flavor in FLAVORS, stored in MLflow's format",
         features=frozenset({"load", "save", *FLAVORS}),
         config_keys=("mlflow_skops_trusted_types",),
         distributions=("mlflow",),

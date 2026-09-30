@@ -181,6 +181,27 @@ Defaults and assumptions, with the key that changes each:
 | The `api` source is the default: the serving layer posts observations. | Works without a metrics system. | `ROLLOUT_METRICS_BACKEND` |
 | Only `registry-alias`, `webhook` and `kserve` split traffic. `registry-alias` records the split in the canary alias and a tag, which the serving layer must honour. **The splits on real serving systems and the `prometheus` source against a real Prometheus are unverified.** | No serving system or Prometheus in the local gate. | `DEPLOYMENT_CANARY_ALIAS`, `DEPLOYMENT_TRAFFIC_TAG`, `ROLLOUT_PROMETHEUS_*` |
 
+## Model type plugins
+
+Hardening Phase 8 put every model library behind `ModelTypePort` (`oran_adapt.model_type`
+entry points): `sklearn`, `xgboost`, `lightgbm`, `catboost`, `torch`, `torch-sequence`, `keras`,
+`onnx` and `statsmodels`, plus a template. `oran_adapt.conformance.model_types` is the behaviour
+each plugin must show, and `docs/adapters/model_type.md` explains every key.
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| With `MODEL_TYPES` empty, every installed plugin is tried in name order, and the first that serves the framework and accepts the object wins. | Deterministic without configuration; `torch` and `torch-sequence` never both accept a module. | `MODEL_TYPES` |
+| `DECISION_SUPPORTED_FRAMEWORKS` empty means every framework an installed plugin can adapt. With none, the decision is NO_ACTION and the typed `UNSUPPORTED_MODEL_TYPE` reason is recorded as the reuse reason. | The list follows what is installed instead of a vendor list in config. | `DECISION_SUPPORTED_FRAMEWORKS` |
+| On the hold-out, the first `window - 1` rows of a sequence model are scored on edge-padded windows. | Every held-out row gets a prediction, so the paired gate compares the same rows for both models. Training uses only windows of real rows. | `SEQUENCE_WINDOW` (or the model's `sequence_window`) |
+| Sequence training keeps the best epoch on the newest `SEQUENCE_VALIDATION_FRACTION` of training windows; 20 epochs to fine-tune, 200 to retrain, Adam at 0.01. | Small, CPU-friendly budgets; Keras keeps its compiled optimizer. | `SEQUENCE_*` |
+| The gate's bootstrap and slice guardrails resample rows independently, which ignores autocorrelation for temporal models. | A block bootstrap is not implemented; the paired comparison still uses the same newest rows. | `GATE_POLICY` (slices off by default) |
+| statsmodels forecasters are scored by a forecast from the end of their own sample over the hold-out horizon; fine-tuning is a filter update (`apply(refit=False)`), full retraining re-estimates (`apply(refit=True)`). Holt-Winters and other results without `apply` are unsupported. | State space results carry their own time index; exogenous regressors keep their names. | - |
+| ONNX models are scored but never adapted. `ONNX_RUNTIME=onnxruntime` is the default; `reference` uses the `onnx` package's evaluator. | An ONNX graph has no training state. **onnxruntime was not installed locally: only the reference evaluator ran.** | `ONNX_RUNTIME` |
+| Candidates of every plugin are written with joblib (Keras models included); the registry handlers store models natively (skops, `onnx.save_model`, statsmodels `save`, `.keras`). | One candidate format for the sandbox and the gate. | - |
+| **LightGBM, CatBoost and Keras plugins are verified only against test doubles** that mimic their APIs (`tests/unit/model_type_doubles.py`). | The libraries are not installed on the gate machine. | - |
+
 ## Not yet behind a port
 
 - **Sandbox backend** (`SANDBOX_BACKEND`, `subprocess` or `docker`): this is a fixed choice in

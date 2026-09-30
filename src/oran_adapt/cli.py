@@ -42,7 +42,6 @@ import pandas as pd
 
 from oran_adapt.core.config import Settings, get_settings, load_settings
 from oran_adapt.core.errors import AdaptationError, ConfigurationError
-from oran_adapt.core.frameworks import ADAPTABLE_FRAMEWORKS
 
 
 def _print(obj: Any) -> None:
@@ -636,7 +635,9 @@ def build_parser() -> argparse.ArgumentParser:
     c = model.add_parser("onboard", help="register a trusted local joblib model + training data")
     c.add_argument("--model-id", required=True)
     c.add_argument("--model-file", required=True)
-    c.add_argument("--framework", required=True, choices=sorted(ADAPTABLE_FRAMEWORKS))
+    c.add_argument(
+        "--framework", required=True, help="any framework an installed model type plugin serves"
+    )
     c.add_argument("--task-type", required=True, choices=["classifier", "regressor"])
     c.add_argument("--target", required=True)
     c.add_argument("--dataset", required=True)

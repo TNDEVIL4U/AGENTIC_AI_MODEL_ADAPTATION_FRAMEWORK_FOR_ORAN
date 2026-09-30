@@ -150,7 +150,7 @@ references. Validators check that the LLM key is present for the chosen provider
 | MinIO (S3) | MLflow artifact store (compose only). **Removed in Hardening Phase 0**: its public images are gone; MLflow now keeps artifacts on the `mlartifacts` volume | `docker-compose.yml` |
 | Kafka + Debezium | CDC from `kpi_sample` (optional) | `cdc/sources.py`, `deploy/debezium/` |
 | Evidently AI | KS/PSI drift statistics, validation scores | `analysis/comparison.py`, `validation/evaluate.py` |
-| scikit-learn, XGBoost, PyTorch | model inspection, fine-tune and retrain | `adaptation/` |
+| scikit-learn, XGBoost, PyTorch | model inspection, fine-tune and retrain. **Since Hardening Phase 8** every model library sits behind a model type plugin (`ModelTypePort`, `adapters/model_types/`: sklearn, XGBoost, LightGBM, CatBoost, torch tabular, torch sequence, Keras, ONNX, statsmodels), imported lazily; see `docs/adapters/model_type.md` | `adaptation/` |
 | Anthropic / Google GenAI | optional LLM strategy choice and generated adapters | `llm/client.py`, `decision/llm_selector.py`, `adaptation/llm_adapter.py` |
 | Docker CLI | optional sandbox backend | `sandbox/runner.py` |
 | Prometheus | scrapes `/metrics` (compose) | `deploy/prometheus/` |

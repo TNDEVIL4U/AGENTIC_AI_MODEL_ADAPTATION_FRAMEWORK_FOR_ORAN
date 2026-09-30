@@ -364,6 +364,12 @@ server together with its uvicorn worker. Set
 | `MLFLOW_SKOPS_TRUSTED_TYPES` | `["sklearn.tree._tree.Tree", "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor"]` | Extra types skops may serialize and load for sklearn models. Anything else fails fast with a non-retryable `ARTIFACT_ERROR`. |
 | `TORCH_FINE_TUNE_EPOCHS` / `TORCH_FULL_RETRAIN_EPOCHS` | `5` / `300` | Epochs for torch warm-start fine-tuning / from-scratch retraining |
 | `TORCH_LEARNING_RATE` | `0.01` | Adam learning rate for both torch engines |
+| `MODEL_TYPES` | `[]` (every installed plugin, by name) | Model type plugins to use, in the order they are tried (docs/adapters/model_type.md) |
+| `SEQUENCE_WINDOW` | `8` | Rows per window for a sequence model that declares none |
+| `SEQUENCE_VALIDATION_FRACTION` | `0.2` | Newest share of a sequence model's training windows used to keep its best epoch |
+| `SEQUENCE_FINE_TUNE_EPOCHS` / `SEQUENCE_FULL_RETRAIN_EPOCHS` | `20` / `200` | Epochs for sequence models (torch and Keras) |
+| `SEQUENCE_LEARNING_RATE` | `0.01` | Adam learning rate for torch sequence models |
+| `ONNX_RUNTIME` | `onnxruntime` | `onnxruntime`, or `reference` (the onnx package's evaluator) to score ONNX graphs |
 | `LIVE_ALIAS` | `live` | MLflow alias the pipeline promotes candidates to |
 | `LOG_LEVEL` / `LOG_JSON` | `INFO` / `true` | Logging verbosity/format |
 | `JOB_MAX_RETRIES` / `JOB_RETRY_BACKOFF_S` | `2` / `1.0` | Retry policy for transient MLflow/DB errors |
@@ -371,7 +377,7 @@ server together with its uvicorn worker. Set
 | `ANALYSIS_PSI_REUSE_THRESHOLD` / `ANALYSIS_KS_PVALUE_REUSE_THRESHOLD` / `ANALYSIS_DRIFT_SCORE_REUSE_THRESHOLD` | `0.1` / `0.05` / `0.3` | When Member 1 decides the existing model can just be reused |
 | `DECISION_MIN_DRIFTED_ROWS` | `10` | Minimum drifted rows before any strategy is actionable |
 | `DECISION_FULL_RETRAIN_PSI_THRESHOLD` | `0.5` | PSI above which fine-tuning is ruled out in favor of full retraining |
-| `DECISION_SUPPORTED_FRAMEWORKS` | `["sklearn","xgboost","torch","pytorch"]` | Frameworks with a dedicated training engine |
+| `DECISION_SUPPORTED_FRAMEWORKS` | `[]` (every framework an installed model type plugin can adapt) | Frameworks the decision layer may adapt |
 | `VALIDATION_MIN_ROWS` | `5` | Minimum held-out rows to score a candidate at all |
 | `VALIDATION_HOLDOUT_FRACTION` | `0.2` | Share of the newest drifted rows held back for validation and never trained on (at least `VALIDATION_MIN_ROWS`, always leaving one drifted row for training) |
 | `GATE_POLICY` / `GATE_POLICY_FILE` | superiority, margin 0, 95 % | The validation gate's versioned policy: a paired-bootstrap interval of the improvement must clear the margin, and every guardrail (slices, calibration, latency, size) must pass. `config/policies/gate.toml` |

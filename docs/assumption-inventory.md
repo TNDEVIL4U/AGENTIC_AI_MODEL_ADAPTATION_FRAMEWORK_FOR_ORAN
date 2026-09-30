@@ -91,6 +91,18 @@ Parts that already work across processes: idempotency (unique DB constraint) and
 | framework string sets in 6 files (see `hardcoding-inventory.md` A23) | dispatch by `if fw in {...}` instead of a handler registry |
 | `core/enums.py:TaskType` | declares FORECASTING, CLUSTERING and ANOMALY_DETECTION, but no engine exists for forecasting |
 
+**Closed in Hardening Phase 8** (`docs/PHASE8_REPORT.md`): the framework-name tables are gone.
+Inspection, adaptation, scoring, the version reuse check, the decision layer and the drift
+summary go through one model type registry (`adaptation/model_types.py`) of plugins behind
+`ModelTypePort`, found through the `oran_adapt.model_type` entry-point group. Plugins cover
+sklearn, XGBoost, LightGBM, CatBoost, torch tabular models, torch sequence models (RNN, LSTM,
+GRU, TCN, transformer) over sliding windows, Keras, ONNX (scoring only) and statsmodels state
+space forecasters. Temporal models keep rows in time order: the hold-out is the newest rows,
+windowing lives inside the plugin, and the conformance suite adapts them with every random
+reordering disabled. A model no plugin serves gets a typed `unsupported_model_type` result,
+never a crash. LightGBM, CatBoost and Keras are exercised only with test doubles, and ONNX only
+with the `onnx` reference evaluator: unverified locally against the real libraries.
+
 ## 7. Assumes internet access (finding #8, Hardening Phase 10)
 
 | Where | Assumption |

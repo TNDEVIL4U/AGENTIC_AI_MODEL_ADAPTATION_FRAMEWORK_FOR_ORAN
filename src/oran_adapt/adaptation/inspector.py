@@ -1,27 +1,39 @@
 """Member 3 - inspector: look at a real, loaded model object and report what it actually is and
 can do. Never trust ModelMetadata.framework/model_type alone - this is the ground truth check
 against the artifact itself.
+
+Which kind of model it is decides who looks: the model type plugin that recognises it
+(oran_adapt.adaptation.model_types). The helpers here describe the two families the built-in
+plugins share - scikit-learn-API estimators and tabular torch modules.
 """
 
 from __future__ import annotations
 
 from oran_adapt.adaptation.schemas import ModelInspection
 from oran_adapt.core.errors import UnsupportedAdaptationError
-from oran_adapt.core.frameworks import SKLEARN_API_FRAMEWORKS, TORCH_FRAMEWORKS
 
 
-def _inspect_sklearn_like(model: object, framework: str) -> ModelInspection:
+def _sklearn_estimator_type(model: object) -> str:
     from sklearn.base import is_classifier, is_clusterer, is_outlier_detector, is_regressor
 
-    estimator_type = "unknown"
+    if not hasattr(model, "__sklearn_tags__"):
+        # A duck-typed estimator (the scikit-learn API without BaseEstimator) has no tags for
+        # sklearn to read; the declared ``_estimator_type`` is all there is.
+        declared = getattr(model, "_estimator_type", None)
+        return declared if isinstance(declared, str) else "unknown"
     if is_classifier(model):
-        estimator_type = "classifier"
-    elif is_regressor(model):
-        estimator_type = "regressor"
-    elif is_clusterer(model):
-        estimator_type = "clusterer"
-    elif is_outlier_detector(model):
-        estimator_type = "outlier_detector"
+        return "classifier"
+    if is_regressor(model):
+        return "regressor"
+    if is_clusterer(model):
+        return "clusterer"
+    if is_outlier_detector(model):
+        return "outlier_detector"
+    return "unknown"
+
+
+def inspect_sklearn_like(model: object, framework: str) -> ModelInspection:
+    estimator_type = _sklearn_estimator_type(model)
 
     feature_names = getattr(model, "feature_names_in_", None)
     steps = getattr(model, "steps", None)  # sklearn Pipeline: [(name, transformer), ..., final]
@@ -43,7 +55,7 @@ def _inspect_sklearn_like(model: object, framework: str) -> ModelInspection:
     )
 
 
-def _inspect_torch(model: object) -> ModelInspection:
+def inspect_torch(model: object) -> ModelInspection:
     from torch import nn
 
     if not isinstance(model, nn.Module):
@@ -79,9 +91,8 @@ def _inspect_torch(model: object) -> ModelInspection:
 
 
 def inspect_model(model: object, framework: str) -> ModelInspection:
-    fw = framework.lower()
-    if fw in SKLEARN_API_FRAMEWORKS:
-        return _inspect_sklearn_like(model, fw)
-    if fw in TORCH_FRAMEWORKS:
-        return _inspect_torch(model)
-    raise UnsupportedAdaptationError(f"no inspector for framework {framework!r}")
+    """What the process's model type plugins say ``model`` is. Raises
+    UnsupportedModelTypeError (an UnsupportedAdaptationError) when none recognises it."""
+    from oran_adapt.adaptation.model_types import default_model_types
+
+    return default_model_types().require(model, framework)

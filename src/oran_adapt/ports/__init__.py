@@ -3,6 +3,7 @@ and third-party distributions) and are resolved once, by name, at the compositio
 (``oran_adapt.bootstrap``) via the ``oran_adapt.<port>`` entry-point groups."""
 
 from oran_adapt.ports.capability import AdapterSpec, Capability
+from oran_adapt.ports.model_type import ModelTypePort, TrainingSet
 from oran_adapt.ports.registry import (
     ArtifactStorePort,
     ModelHandlerPort,
@@ -37,6 +38,7 @@ PORTS: dict[str, type] = {
     "registry": ModelRegistryPort,
     "artifact_store": ArtifactStorePort,
     "model_handler": ModelHandlerPort,
+    "model_type": ModelTypePort,
     "deployment": DeploymentPort,
     "dataset": DatasetPort,
     "cdc_source": CdcSourcePort,
@@ -69,6 +71,7 @@ __all__ = [
     "LLMPort",
     "ModelHandlerPort",
     "ModelRegistryPort",
+    "ModelTypePort",
     "ModelVersion",
     "NotificationPort",
     "OutboundMessage",
@@ -81,4 +84,5 @@ __all__ = [
     "SourceStat",
     "TrafficSplit",
     "TrafficSplitPort",
+    "TrainingSet",
 ]

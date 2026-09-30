@@ -14,25 +14,28 @@ from __future__ import annotations
 import joblib
 import pandas as pd
 
+from oran_adapt.adaptation.model_types import ModelTypes, build_model_types
 from oran_adapt.adaptation.schemas import CandidateModel
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import TaskType
 from oran_adapt.core.errors import ArtifactError, ValidationFailedError
-from oran_adapt.validation.evaluate import predict, score_predictions, task_of
+from oran_adapt.validation.evaluate import inspection_for, predict, score_predictions, task_of
 from oran_adapt.validation.gate import Scored, decide
 from oran_adapt.validation.metrics import primary_metric
 from oran_adapt.validation.schemas import ValidationReport
 
 
 def _scored(model: object, X: pd.DataFrame, y: pd.Series | None, *, framework: str,
-            estimator_type: str, task: TaskType) -> Scored:
-    predictions, score = predict(model, X, y, framework=framework,
-                                 estimator_type=estimator_type, task=task)
+            estimator_type: str, task: TaskType, model_types: ModelTypes) -> Scored:
+    inspection = inspection_for(model, framework=framework, estimator_type=estimator_type,
+                                model_types=model_types)
+    predictions, score = predict(model, X, y, framework=framework, estimator_type=estimator_type,
+                                 task=task, model_types=model_types, inspection=inspection)
     metrics = score_predictions(task, X, y, predictions, score, estimator_type=estimator_type)
 
     def run(frame: pd.DataFrame) -> object:
         return predict(model, frame, None, framework=framework, estimator_type=estimator_type,
-                       task=task)
+                       task=task, model_types=model_types, inspection=inspection)
 
     return Scored(model=model, predictions=predictions, score=score, metrics=metrics, run=run)
 
@@ -68,10 +71,11 @@ def validate_candidate(
         ) from exc
 
     task = task_of(task_type, estimator_type)
+    model_types = build_model_types(settings)
     current = _scored(current_model, X, y, framework=current_framework,
-                      estimator_type=estimator_type, task=task)
+                      estimator_type=estimator_type, task=task, model_types=model_types)
     challenger = _scored(candidate_model, X, y, framework=candidate.framework,
-                         estimator_type=estimator_type, task=task)
+                         estimator_type=estimator_type, task=task, model_types=model_types)
     metric_name = primary_metric(task)
     decision = decide(settings.gate_policy, task=task, metric=metric_name, X=X, y=y,
                       current=current, candidate=challenger, context=context)

@@ -92,6 +92,13 @@ class UnsupportedAdaptationError(AdaptationError):
     code = "ADAPTATION_UNSUPPORTED"
 
 
+class UnsupportedModelTypeError(UnsupportedAdaptationError):
+    """No installed model type plugin recognises the loaded model; the context carries the
+    typed UnsupportedModelType result."""
+
+    code = "UNSUPPORTED_MODEL_TYPE"
+
+
 class ValidationFailedError(AdaptationError):
     code = "VALIDATION_FAILED"
 
