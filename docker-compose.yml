@@ -1,26 +1,32 @@
 # Full oran-adapt stack: PostgreSQL (app data + CDC source), MLflow (registry; artifacts on a volume),
 # Kafka + Debezium (production CDC), the API, the job worker, the CDC consumer, and Prometheus.
 #
-#   cp .env.example .env      # then set POSTGRES_PASSWORD, API_KEYS, ...
-#   docker compose up -d --build
+#   export POSTGRES_PASSWORD=...   # or put it in .env (cp .env.example .env)
+#   docker compose up -d --build --wait
+#   bash scripts/ci/compose_smoke.sh   # what CI runs from a fresh clone
 #
-# Every image is pinned to a version tag; the two built here (api/cdc-consumer and mlflow) pin
-# their Python packages (requirements.lock, docker/mlflow/Dockerfile). Published ports bind to
-# 127.0.0.1 only. See docs/DEPLOYMENT.md and docs/CDC.md.
+# `migrate` applies the migrations once and exits; the API, the worker and the connector setup
+# start only after it succeeded (the API never migrates). Every pulled image is pinned by tag and
+# digest; the images built here pin their base by digest and their Python packages by
+# requirements.lock. Published ports bind to 127.0.0.1 only. See docs/DEPLOYMENT.md and
+# docs/CDC.md.
 
 x-app: &app
-  build: .
-  image: oran-adapt:0.1.0
-  env_file: .env
+  env_file:
+    - path: .env
+      required: false  # a fresh clone runs on the defaults plus POSTGRES_PASSWORD
   environment: &app-env
     DATABASE_URL: postgresql+psycopg://oran:${POSTGRES_PASSWORD}@postgres:5432/oran_adapt
     MLFLOW_TRACKING_URI: http://mlflow:5000
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
   restart: unless-stopped
 
+x-migrated: &migrated
+  migrate: {condition: service_completed_successfully}
+
 services:
   postgres:
-    image: postgres:16.4-bookworm
+    image: postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412
     environment:
       POSTGRES_USER: oran
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -64,7 +70,7 @@ services:
     restart: unless-stopped
 
   kafka:  # single-node KRaft broker (no ZooKeeper)
-    image: apache/kafka:3.8.0
+    image: apache/kafka:3.8.0@sha256:c89f315cff967322c5d2021434b32271393cb193aa7ec1d43e97341924e57069
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -86,7 +92,7 @@ services:
     restart: unless-stopped
 
   debezium:  # Kafka Connect with the Debezium PostgreSQL connector
-    image: quay.io/debezium/connect:2.7.3.Final
+    image: quay.io/debezium/connect:2.7.3.Final@sha256:a51bbb3a08d0de2cd56f76b956060bdaa3beb112ec13dac2668886b92dd5dd0b
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: oran-connect
@@ -112,44 +118,58 @@ services:
     restart: unless-stopped
 
   debezium-init:  # one-shot: create or update the kpi_sample connector (PUT is idempotent)
-    image: curlimages/curl:8.10.1
+    image: curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b
     depends_on:
+      <<: *migrated  # the migrations create kpi_sample
       debezium: {condition: service_healthy}
-      api: {condition: service_healthy}  # the API runs the migrations that create kpi_sample
     volumes: ["./deploy/debezium/kpi-connector.json:/connector.json:ro"]
     command: ["-fsS", "-X", "PUT", "-H", "Content-Type: application/json",
               "--data", "@/connector.json",
               "http://debezium:8083/connectors/oran-kpi-sample/config"]
     restart: "no"
 
-  api:
+  migrate:  # one-shot: `oran-adapt db upgrade` (expand-only migrations: docs/operations/migrations.md)
     <<: *app
-    ports: ["127.0.0.1:8000:8000"]
+    build: {context: ., target: migrator}
+    image: oran-adapt-migrator:0.1.0
+    restart: "no"
     depends_on:
       postgres: {condition: service_healthy}
+
+  api:
+    <<: *app
+    build: {context: ., target: api}
+    image: oran-adapt-api:0.1.0
+    ports: ["127.0.0.1:8000:8000"]
+    stop_grace_period: 30s  # > UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN
+    depends_on:
+      <<: *migrated
       mlflow: {condition: service_healthy}
 
   cdc-consumer:  # reads Debezium's topic into cdc_event (CDC_MODE=kafka)
     <<: *app
+    build: {context: ., target: worker}
+    image: oran-adapt-worker:0.1.0
     environment:
       <<: *app-env
       CDC_MODE: kafka
     command: ["oran-adapt", "cdc", "run", "--mode", "kafka"]
-    healthcheck: {disable: true}
+    healthcheck: {disable: true}  # the image's check is the job worker's liveness file
     depends_on:
-      api: {condition: service_healthy}
+      <<: *migrated
       kafka: {condition: service_healthy}
 
   worker:  # claims and runs the adaptation jobs the API queues (docs/adapters/job_queue.md)
     <<: *app
-    command: ["oran-adapt", "worker", "run"]
-    healthcheck: {disable: true}
+    build: {context: ., target: worker}
+    image: oran-adapt-worker:0.1.0
     stop_grace_period: 45s  # > JOB_DRAIN_TIMEOUT_S: a stopping worker requeues its job
     depends_on:
-      api: {condition: service_healthy}
+      <<: *migrated
+      mlflow: {condition: service_healthy}
 
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - promdata:/prometheus

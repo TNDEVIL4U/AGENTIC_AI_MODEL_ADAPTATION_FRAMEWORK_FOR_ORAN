@@ -50,7 +50,7 @@ case "$phase" in
     8) scope="adaptation.model_types adaptation.sequence adaptation.torch_engine adaptation.inspector validation conformance.model_types adapters.model_types" ;;  # model-type plugins
     9) scope="api.security api.ratelimit adapters.auth adapters.jwt adapters.vault adapters.access core.outbound" ;;  # security
     10) scope="llm adapters.llm_providers conformance.llm decision.llm_selector" ;;  # LLM paths
-    11) scope="core api" ;;                               # packaging and deployment
+    11) scope="core.liveness db.migrate" ;;  # packaging: liveness, schema status, migrations
     12) scope="core api orchestrator" ;;                  # observability
     13) scope="core api orchestrator registry" ;;         # test and conformance consolidation
     14) scope="core api" ;;                               # documentation, migration, samples

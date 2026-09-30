@@ -328,6 +328,20 @@ class JobWorkerLostError(JobWorkerError):
     code = "JOB_WORKER_LOST"
 
 
+class WorkerUnhealthyError(AdaptationError):
+    """The worker's liveness file is missing or older than WORKER_HEALTH_MAX_AGE_S: its loop
+    has stopped turning (the exec probe behind ``oran-adapt worker health``)."""
+
+    code = "WORKER_UNHEALTHY"
+
+
+class SchemaNotReadyError(AdaptationError):
+    """The database schema is behind this release's migrations and did not catch up in time
+    (``oran-adapt db wait``, the init container that runs before the API and the workers)."""
+
+    code = "SCHEMA_NOT_READY"
+
+
 class RolloutNotFoundError(AdaptationError):
     code = "ROLLOUT_NOT_FOUND"
 

@@ -1,7 +1,10 @@
 # CI for every commit and pull request (Hardening Phase 0).
 #
 #   quality            ruff, mypy (ratchet at 0 errors), full pytest suite (heavy tier included)
-#   build-images       builds the api, mlflow and sandbox images
+#   build-images       builds the api, worker and migrator targets (with an SPDX SBOM each) and
+#                      the mlflow and sandbox images
+#   packaging          helm lint + helm template for every example values file, kubeconform on
+#                      the output, kustomize build of every overlay (Hardening Phase 11)
 #   supply-chain       secret-leak scan, bandit, pip-audit of requirements.lock (known CVEs) and a
 #                      CycloneDX SBOM (scripts/security_check.py; uploaded as an artifact)
 #   phase-0-baseline   compose stack from a clean checkout -> health, readiness, metrics,
@@ -113,8 +116,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build api image
-        run: docker build --tag oran-adapt:ci .
+      # One image per Dockerfile target, each with an SBOM (buildx's SPDX attestation, written to
+      # a local directory and uploaded) and loaded for the smoke below.
+      - name: Build api, worker and migrator targets with SBOMs
+        run: |
+          for target in api worker migrator; do
+            docker buildx build --target "$target" --sbom=true \
+              --output "type=local,dest=reports/sbom-$target" .
+            docker buildx build --target "$target" --load --tag "oran-adapt-$target:ci" .
+          done
+          docker tag oran-adapt-api:ci oran-adapt:ci
+      - name: Upload image SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-sboms
+          path: reports/sbom-*/sbom*.spdx.json
+      - name: Image healthchecks and users
+        run: |
+          for target in api worker migrator; do
+            docker image inspect "oran-adapt-$target:ci" \
+              --format "$target user={{.Config.User}} health={{json .Config.Healthcheck}}"
+          done
       - name: Build mlflow image
         run: docker build --tag oran-adapt-mlflow:ci docker/mlflow
       - name: Build sandbox image
@@ -125,6 +147,40 @@ jobs:
         run: |
           docker run --rm --entrypoint sh oran-adapt:ci -c \
             'test "$(id -u)" != "0" && python -c "import oran_adapt, oran_adapt.api.app, oran_adapt.cli, torch, mlflow, xgboost, sklearn, evidently; print(oran_adapt.__version__, torch.__version__)"'
+
+  packaging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: helm lint and template, every example values file
+        run: |
+          chart=deploy/helm/oran-adapt
+          helm lint "$chart"
+          mkdir -p reports/rendered
+          for values in "$chart"/examples/values-*.yaml; do
+            name="$(basename "$values" .yaml)"
+            helm lint "$chart" --values "$values"
+            helm template ci "$chart" --values "$values" > "reports/rendered/$name.yaml"
+          done
+      - name: kustomize build, every overlay
+        run: |
+          for overlay in deploy/kustomize/overlays/*/; do
+            kubectl kustomize "$overlay" > "reports/rendered/kustomize-$(basename "$overlay").yaml"
+          done
+      - name: Validate rendered manifests against the Kubernetes schemas
+        run: |
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+          "$(go env GOPATH)/bin/kubeconform" -strict -summary -ignore-missing-schemas \
+            -kubernetes-version 1.30.0 reports/rendered/*.yaml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendered-manifests
+          path: reports/rendered/
 
   phase-0-baseline:
     runs-on: ubuntu-24.04

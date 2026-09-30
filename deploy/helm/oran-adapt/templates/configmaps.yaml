@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "oran-adapt.fullname" . }}-config
+  labels:
+    {{- include "oran-adapt.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.config.env }}
+  {{ $key }}: {{ $value | toString | quote }}
+  {{- end }}
+{{- range $port, $spec := .Values.adapters }}
+---
+# The adapter chosen for the {{ $port }} port and its keys (docs/adapters/{{ $port }}.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "oran-adapt.fullname" $ }}-adapter-{{ $port | replace "_" "-" }}
+  labels:
+    {{- include "oran-adapt.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: adapter-config
+data:
+  {{- range $key, $value := $spec.env }}
+  {{ $key }}: {{ $value | toString | quote }}
+  {{- end }}
+{{- end }}

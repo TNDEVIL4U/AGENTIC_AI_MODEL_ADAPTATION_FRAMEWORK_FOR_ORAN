@@ -1,0 +1,58 @@
+{{- if .Values.migrations.enabled }}
+# `oran-adapt db upgrade`, before install and before every upgrade, so the schema is in place
+# before any pod of the release starts (they also wait in `db wait`, which covers migrations run
+# outside Helm). The old pods keep running through an upgrade because migrations only expand
+# (docs/operations/migrations.md). Its settings are inlined from values: a pre-* hook runs
+# before this release's ConfigMaps exist. Its Secret is either existing or the ExternalSecret,
+# which is an earlier hook (weight -10); until it has synced, the pod waits in
+# CreateContainerConfigError and the kubelet retries (bounded by activeDeadlineSeconds).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "oran-adapt.fullname" . }}-migrate
+  labels:
+    {{- include "oran-adapt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrator
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.migrations.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "oran-adapt.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrator
+    spec:
+      restartPolicy: Never
+      # The namespace's default ServiceAccount: the release's own does not exist yet at
+      # pre-install, and the Job needs no API access.
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "oran-adapt.image" (dict "root" . "image" .Values.image.migrator) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["oran-adapt", "db", "upgrade"]
+          env:
+            {{- include "oran-adapt.envInline" . | nindent 12 }}
+          envFrom:
+            - secretRef:
+                name: {{ include "oran-adapt.secretName" . }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        {{- include "oran-adapt.tmpVolume" . | nindent 8 }}
+{{- end }}

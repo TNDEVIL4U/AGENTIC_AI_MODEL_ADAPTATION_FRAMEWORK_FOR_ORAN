@@ -1,0 +1,20 @@
+# The kustomize alternative to the Helm chart (docs/operations/kustomize.md). The base names no
+# environment: images, settings, the Secret and scaling come from an overlay. Without Helm hooks,
+# the migration is a plain Job and every pod waits for the schema in its init container.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/name: oran-adapt
+    includeSelectors: true
+resources:
+  - serviceaccount.yaml
+  - migration-job.yaml
+  - api.yaml
+  - worker.yaml
+  - networkpolicy.yaml
+configMapGenerator:
+  - name: oran-adapt-config
+    literals:
+      - ARTIFACT_WORKDIR=/tmp/oran-adapt/artifacts
+      - SANDBOX_BACKEND=subprocess

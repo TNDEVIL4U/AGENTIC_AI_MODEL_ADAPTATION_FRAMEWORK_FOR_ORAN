@@ -3,7 +3,8 @@
 # server (--serve-artifacts proxies artifact uploads/downloads), so it needs no storage access.
 #
 # mlflow and psycopg match requirements.lock.
-FROM python:3.13.7-slim-bookworm
+# Pinned by digest, the same base as the application images (docs/operations/images.md).
+FROM python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf183395f0ebc4d3428bd22d92d
 # An empty named volume mounted at /mlartifacts inherits the ownership set here.
 RUN pip install --no-cache-dir --upgrade "pip>=26.2" \
  && pip install --no-cache-dir \

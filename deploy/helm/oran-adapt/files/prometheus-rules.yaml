@@ -1,0 +1,36 @@
+# Alert rules as code. Rendered into the chart's PrometheusRule (metrics.prometheusRule.enabled)
+# and loadable as a plain Prometheus rule file. Every alert names its runbook (docs/runbooks/),
+# and tests check that the file exists. Thresholds are defaults: copy the file to change them.
+groups:
+  - name: oran-adapt.availability
+    rules:
+      - alert: OranAdaptApiDown
+        expr: up{job=~".*oran-adapt.*"} == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: An oran-adapt API target has not been scraped for 5 minutes.
+          runbook: docs/runbooks/OranAdaptApiDown.md
+  - name: oran-adapt.jobs
+    rules:
+      - alert: OranAdaptJobQueueStalled
+        expr: max by (worker_class) (job_queue_oldest_age_seconds) > 1800
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "The oldest queued job of class {{ $labels.worker_class }} has waited over 30 minutes."
+          runbook: docs/runbooks/OranAdaptJobQueueStalled.md
+      - alert: OranAdaptJobQuarantined
+        expr: increase(job_quarantined_total[1h]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: A poison job was quarantined in the last hour.
+          runbook: docs/runbooks/OranAdaptJobQuarantined.md
+  - name: oran-adapt.rollouts
+    rules:
+      - alert: OranAdaptRolloutRolledBack
+        expr: increase(rollouts_finished_total{state="ROLLED_BACK"}[1h]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "A {{ $labels.strategy }} rollout was rolled back in the last hour."
+          runbook: docs/runbooks/OranAdaptRolloutRolledBack.md

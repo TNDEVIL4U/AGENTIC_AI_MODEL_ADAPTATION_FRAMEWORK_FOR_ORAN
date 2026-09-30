@@ -67,7 +67,7 @@ from oran_adapt.bootstrap import (
     build_llm,
     build_registry,
 )
-from oran_adapt.core import metrics
+from oran_adapt.core import liveness, metrics
 from oran_adapt.core.config import Settings, get_settings
 from oran_adapt.core.enums import TERMINAL_STATUSES, JobStatus
 from oran_adapt.core.errors import (
@@ -240,6 +240,7 @@ class _Supervisor:
         self.renewed_until = _now() + timedelta(seconds=self.settings.job_lease_ttl_s)
 
     def __call__(self) -> Exception | None:
+        self.worker.beat()
         now = _now()
         c = self.claim
         try:
@@ -384,6 +385,10 @@ class Worker:
             self._draining.set()
             log_event(logger, "worker draining", lease_owner=self.owner)
 
+    def beat(self) -> None:
+        """Touch the liveness file (WORKER_HEALTH_FILE, core/liveness.py)."""
+        liveness.beat(self.settings.worker_health_file)
+
     @property
     def draining(self) -> bool:
         return self._draining.is_set()
@@ -400,6 +405,7 @@ class Worker:
         last_reap: float | None = None
         last_tick: float | None = None
         while not self.draining:
+            self.beat()
             if last_reap is None or time.monotonic() - last_reap >= self.settings.job_reap_interval_s:
                 self.reap()
                 last_reap = time.monotonic()

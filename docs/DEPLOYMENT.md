@@ -4,6 +4,12 @@
 > (the YAML parses, and paths and settings match the code), but they have **not been built or
 > run**. None of the image tags below has been pulled. Treat the first `docker compose up` as
 > a test run.
+>
+> **Hardening Phase 11:** Kubernetes packaging lives in [operations/helm.md](operations/helm.md)
+> (Helm chart) and [operations/kustomize.md](operations/kustomize.md). The image targets are in
+> [operations/images.md](operations/images.md), and the migration model in
+> [operations/migrations.md](operations/migrations.md). Every image is now pinned by digest,
+> and a one-shot `migrate` service applies the schema; the API no longer migrates on start.
 
 ## Services (`docker-compose.yml`)
 
@@ -14,8 +20,10 @@
 | `kafka` | `apache/kafka:3.8.0` | Single-node broker (KRaft) | none |
 | `debezium` | `quay.io/debezium/connect:2.7.3.Final` | Kafka Connect with the PostgreSQL connector | 127.0.0.1:8083 |
 | `debezium-init` | `curlimages/curl:8.10.1` | Registers `deploy/debezium/kpi-connector.json` once the API is healthy | none |
-| `api` | built from `Dockerfile` | FastAPI app. Applies the migrations on start | 127.0.0.1:8000 |
-| `cdc-consumer` | same image as `api` | `oran-adapt cdc run --mode kafka` (see [CDC.md](CDC.md)) | none |
+| `migrate` | `Dockerfile` target `migrator` | `oran-adapt db upgrade` once; every app service waits for it to complete (Hardening Phase 11) | none |
+| `api` | `Dockerfile` target `api` | FastAPI app. Starts after `migrate`; never changes the schema | 127.0.0.1:8000 |
+| `worker` | `Dockerfile` target `worker` | Claims and runs adaptation jobs; liveness via `oran-adapt worker health` | none |
+| `cdc-consumer` | `Dockerfile` target `worker` | `oran-adapt cdc run --mode kafka` (see [CDC.md](CDC.md)) | none |
 | `prometheus` | `prom/prometheus:v2.54.1` | Scrapes `api:8000/api/v1/metrics` (`deploy/prometheus/prometheus.yml`) | 127.0.0.1:9090 |
 
 Named volumes: `pgdata`, `mlartifacts`, `kafkadata`, `promdata`. Every published port binds to
@@ -99,6 +107,9 @@ The local development virtualenv's pip was upgraded from 25.2, which pip-audit f
   Docker, `POSTGRES_PASSWORD` and `E2E_API_KEY` are available.
 - The Debezium → Kafka → consumer path, and connector registration.
 - MLflow with the PostgreSQL backend and volume-backed artifacts.
+- The Helm chart and the kustomize overlays: `helm lint`/`template`, `kubectl kustomize`,
+  kubeconform, image SBOMs and the kind install/upgrade/rollback run only in CI (Hardening
+  Phase 11). None of it has been run on the development laptop.
 
 MinIO was the artifact store until Hardening Phase 0. It was removed because its public Docker
 images are no longer published, so the stack could not start. S3-style storage returns as a

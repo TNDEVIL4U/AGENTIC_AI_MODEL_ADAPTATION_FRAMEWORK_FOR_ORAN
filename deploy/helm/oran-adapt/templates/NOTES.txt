@@ -1,0 +1,8 @@
+oran-adapt {{ .Chart.AppVersion }} is installed as {{ include "oran-adapt.fullname" . }}.
+
+API service:  {{ include "oran-adapt.fullname" . }}-api (port {{ .Values.api.service.port }})
+Health:       /api/v1/health   Readiness: /api/v1/ready   Metrics: {{ .Values.metrics.path }}
+Worker pools: {{ range .Values.workers }}{{ .name }} ({{ join "," .classes }}) {{ end }}
+
+The schema was migrated by the {{ include "oran-adapt.fullname" . }}-migrate hook Job; pods wait
+for it in their wait-for-schema init container. See docs/operations/helm.md.

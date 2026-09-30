@@ -82,9 +82,9 @@ Hardening Phase 1 has to decide, for each one, whether it stays a schema default
 
 | # | file:line | Value | Proposed |
 |---|---|---|---|
-| D1 | `Dockerfile:12` | `python:3.13.7-slim-bookworm` (tag, not digest) | build arg pinned by digest |
-| D2 | `Dockerfile:26` | `https://download.pytorch.org/whl/cpu` | build arg `TORCH_INDEX_URL` |
-| D3 | `Dockerfile:36-37,51-53` | uid/gid `10001`, port `8000`, healthcheck URL and timings | build args / compose and Helm values |
+| D1 | `Dockerfile:12` | `python:3.13.7-slim-bookworm` (tag, not digest) | build arg pinned by digest; **closed in Hardening Phase 11** |
+| D2 | `Dockerfile:26` | `https://download.pytorch.org/whl/cpu` | build arg `TORCH_INDEX_URL`; **closed in Hardening Phase 11** |
+| D3 | `Dockerfile:36-37,51-53` | uid/gid `10001`, port `8000`, healthcheck URL and timings | build args / compose and Helm values; **closed in Hardening Phase 11** (Helm values, kustomize fields, `UVICORN_PORT`) |
 | D4 | `docker-compose.yml:13-18` | image tag `oran-adapt:0.1.0`, DB user `oran`, DB name `oran_adapt`, hosts `postgres:5432`, `mlflow:5000`, `kafka:9092` | `.env`-driven variables |
 | D5 | `docker-compose.yml` (mlflow) | artifact path `/mlartifacts` (was bucket `mlflow` + MinIO ports `9000`, `9001` until removed in Hardening Phase 0), `--allowed-hosts` list, port `5000` | `.env` variables |
 | D6 | `docker-compose.yml` (debezium) | group and topic names, connector name `oran-kpi-sample` | `.env` variables |
@@ -286,11 +286,26 @@ literal, and why:
 | `llm/guard.py`, `decision/llm_selector.py` | fallback reason names | the recorded vocabulary (`docs/adapters/llm.md`) |
 | `adapters/registry/mlflow/registry.py` | `MLFLOW_DISABLE_TELEMETRY` | MLflow's own switch; whether it is set is `MLFLOW_TELEMETRY` |
 
+## Hardening Phase 11 status
+
+D1, D2 and D3 are closed: every image base and every image compose pulls is pinned by digest;
+the torch index is the build arg `TORCH_INDEX_URL`; the UID, port, probes and grace periods are
+Helm values and kustomize fields (`docs/operations/helm.md`). D4-D6 stay open: they are the
+development compose stack's own topology. D7 (the MLflow image's pins) and D8 (the Debezium
+connector) are unchanged. What is still a literal, and why:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `Dockerfile` | UID/GID 10001, `/tmp/oran-adapt/...` paths | the image's identity and layout; the chart's `podSecurityContext` and the `/tmp` volume set them per deployment |
+| `deploy/helm/oran-adapt/values.yaml`, `deploy/kustomize/base/` | replicas, resources, probe timings, grace periods | defaults, each a value or a patchable field |
+| `deploy/helm/oran-adapt/examples/`, `deploy/kustomize/overlays/` | namespaces, `example.com` hosts, all-zero digests | examples of one environment, marked as placeholders |
+| `deploy/helm/oran-adapt/files/prometheus-rules.yaml` | alert thresholds and `for:` windows | alerts as code, each with a runbook in `docs/runbooks/` |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 | Open after Phase 10 |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 | 7 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 | Open after Phase 10 | Open after Phase 11 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 | 7 | 7 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 5 |

@@ -1,0 +1,39 @@
+{{- with .Values.metrics.serviceMonitor }}
+{{- if .enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "oran-adapt.fullname" $ }}-api
+  labels:
+    {{- include "oran-adapt.labels" $ | nindent 4 }}
+    {{- with .labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "oran-adapt.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: api
+  endpoints:
+    - port: http
+      path: {{ $.Values.metrics.path }}
+      interval: {{ .interval }}
+{{- end }}
+{{- end }}
+{{- with .Values.metrics.prometheusRule }}
+{{- if .enabled }}
+---
+# The alert rules as code (files/prometheus-rules.yaml); each alert names its runbook.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "oran-adapt.fullname" $ }}
+  labels:
+    {{- include "oran-adapt.labels" $ | nindent 4 }}
+    {{- with .labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- $.Files.Get "files/prometheus-rules.yaml" | nindent 2 }}
+{{- end }}
+{{- end }}

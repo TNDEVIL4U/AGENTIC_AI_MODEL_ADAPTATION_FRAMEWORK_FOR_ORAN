@@ -249,6 +249,27 @@ Defaults and assumptions, with the key that changes each:
 | MLflow infers each saved model's pip requirements (a subprocess per save) unless a list is given. | Correct by default; pin the list to save seconds per save. | `MLFLOW_PIP_REQUIREMENTS` |
 | **Unverified locally:** the live Anthropic, Gemini and OpenAI-compatible services (local wire-format doubles only). | The gate runs with egress blocked. | - |
 
+## Packaging and deployment
+
+Hardening Phase 11 added one Dockerfile with `api`, `worker` and `migrator` targets, a Helm
+chart (`deploy/helm/oran-adapt`), a kustomize alternative (`deploy/kustomize`) and a one-shot
+migrator. `docs/operations/` explains every value.
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| Migrations only expand; a contraction ships a release later. | Old and new pods share the schema during a rollout and after a rollback. | - (checked by `test_every_migration_upgrade_only_expands_the_schema`) |
+| Pods wait up to 600 s for the schema, looking every 2 s. | Long enough for a large migration; the migration Job's own deadline is 900 s. | `MIGRATION_WAIT_TIMEOUT_S`, `MIGRATION_WAIT_INTERVAL_S`, `migrations.waitTimeoutS`, `migrations.activeDeadlineSeconds` |
+| A worker that has not beaten for 120 s is restarted. | More than twice the slower of heartbeat and poll interval, so a healthy worker never fails. | `WORKER_HEALTH_MAX_AGE_S`, `worker.probes.liveness` |
+| The API drains for 20 s after a 5 s preStop pause, inside a 40 s grace period; workers get 60 s. | Endpoints drop the pod before it stops accepting; a worker's running job gets `JOB_DRAIN_TIMEOUT_S` (30 s) and is requeued. | `api.gracefulShutdownS`, `api.preStopSleepS`, `api.terminationGracePeriodS`, `worker.terminationGracePeriodS` |
+| Two API replicas, autoscaled to 6 at 70 % CPU, at least one available. | A single node drain never takes the API down. | `api.replicas`, `api.autoscaling.*`, `api.pdb.*` |
+| NetworkPolicy denies all ingress except the listed peers; egress is open unless rules are given. | Egress targets (database, registry, serving) are the operator's. | `networkPolicy.*` |
+| The migration Job runs under the namespace's default ServiceAccount, without a token. | The release's ServiceAccount does not exist at pre-install. | - |
+| The ExternalSecret's Secret is orphaned and stays after uninstall. | Recreating the ExternalSecret on upgrade must not delete the Secret under running pods. | - |
+| The GPU pool only schedules; in-tree training is CPU only. | The framework has no device setting; plugins choose their own device. | `workers[]`, `JOB_CLASS_BY_FRAMEWORK` |
+| **Unverified locally:** compose up, the image builds and SBOMs, helm lint/template, kustomize build, kubeconform, the kind install/upgrade/rollback. | No Docker, Helm or cluster on the development laptop; CI runs them. | - |
+
 ## Not yet behind a port
 
 - **Sandbox backend** (`SANDBOX_BACKEND`, `subprocess` or `docker`): this is a fixed choice in

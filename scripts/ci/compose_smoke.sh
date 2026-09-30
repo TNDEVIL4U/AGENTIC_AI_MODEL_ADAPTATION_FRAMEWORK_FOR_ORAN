@@ -2,6 +2,9 @@
 # Hardening Phase 0 exit gate: bring the full compose stack up from a clean checkout, check that
 # every service converged, hit health + readiness + metrics, submit one drift event (and its
 # duplicate), read the job back, then tear everything down (volumes included).
+# Since Phase 11 it also checks that the one-shot `migrate` service applied the schema (the API
+# never migrates), that `oran-adapt db status` reports at_head and that the worker's liveness
+# probe (`oran-adapt worker health`, the image HEALTHCHECK) passes.
 #
 # Runs in CI (.github/workflows/ci.yml, job phase-0-baseline). It writes a throwaway .env with
 # random credentials; it refuses to run if a .env already exists, so it never overwrites one.
@@ -13,7 +16,7 @@ set -euo pipefail
 
 BASE_URL="${SMOKE_BASE_URL:-http://127.0.0.1:8000/api/v1}"
 TIMEOUT_S="${SMOKE_TIMEOUT_S:-600}"
-ONE_SHOT_SERVICES="debezium-init"
+ONE_SHOT_SERVICES="migrate debezium-init"
 
 if [[ -e .env ]]; then
   echo "compose_smoke: .env already exists; refusing to overwrite it" >&2
@@ -86,7 +89,7 @@ until curl -fsS "${BASE_URL}/readiness" >/dev/null 2>&1; do
   sleep 5
 done
 
-# debezium-init starts only after the API is healthy; give it time to finish.
+# The one-shot services: migrate (before the API could start) and debezium-init.
 for svc in $ONE_SHOT_SERVICES; do
   deadline=$((SECONDS + 180))
   while :; do
@@ -117,6 +120,15 @@ for r in rows:
 if bad:
     sys.exit("not converged:\n  " + "\n  ".join(bad))
 ' "$ONE_SHOT_SERVICES"
+
+# ---- schema and worker liveness (Phase 11) ---------------------------------------------------
+docker compose exec -T api oran-adapt db status | python3 -c '
+import json, sys
+body = json.load(sys.stdin)
+assert body["state"] == "at_head", body
+print("db status:", body)'
+docker compose exec -T worker oran-adapt worker health
+echo "worker: liveness probe OK"
 
 # ---- endpoint checks ------------------------------------------------------------------------
 auth=(-H "X-API-Key: ${API_KEY}")

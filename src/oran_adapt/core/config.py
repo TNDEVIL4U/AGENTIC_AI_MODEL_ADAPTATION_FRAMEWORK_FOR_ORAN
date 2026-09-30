@@ -361,6 +361,15 @@ class Settings(BaseSettings):
     job_default_class: str = "default"
     job_class_by_framework: dict[str, str] = {}
     job_worker_classes: list[str] = ["default"]
+    # Liveness file: the worker touches it on every loop turn and every job checkpoint, and
+    # `oran-adapt worker health` (the image HEALTHCHECK, a Kubernetes exec probe) fails when it
+    # is older than WORKER_HEALTH_MAX_AGE_S. Unset: no file is written.
+    worker_health_file: str | None = None
+    worker_health_max_age_s: float = Field(120.0, gt=0)
+    # `oran-adapt db wait` (the init container before the API and the workers): how long to
+    # wait for the migration job to bring the schema up to this release, and how often to look.
+    migration_wait_timeout_s: float = Field(600.0, gt=0)
+    migration_wait_interval_s: float = Field(2.0, gt=0)
     # Claim order: higher first, then oldest first. Taken from the event's severity.
     job_priority_by_severity: dict[str, int] = {"CRITICAL": 30, "HIGH": 20, "MEDIUM": 10, "LOW": 0}
     job_default_priority: int = 0
@@ -820,6 +829,15 @@ class Settings(BaseSettings):
                 key="JOB_LEASE_TTL_S",
                 job_lease_ttl_s=self.job_lease_ttl_s,
                 job_heartbeat_s=self.job_heartbeat_s,
+            )
+        slowest_beat = max(self.job_heartbeat_s, self.job_poll_interval_s)
+        if self.worker_health_max_age_s <= 2 * slowest_beat:
+            raise ConfigurationError(
+                "WORKER_HEALTH_MAX_AGE_S must be more than twice the slower of JOB_HEARTBEAT_S "
+                "and JOB_POLL_INTERVAL_S, or a healthy worker fails its liveness probe",
+                key="WORKER_HEALTH_MAX_AGE_S",
+                worker_health_max_age_s=self.worker_health_max_age_s,
+                slowest_beat_s=slowest_beat,
             )
         return self
 

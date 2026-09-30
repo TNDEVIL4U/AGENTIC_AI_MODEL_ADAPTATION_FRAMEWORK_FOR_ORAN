@@ -73,6 +73,21 @@ def _cmd_db_upgrade(args, settings: Settings) -> Any:
     return {"database": "upgraded to head"}
 
 
+def _cmd_db_status(args, settings: Settings) -> Any:
+    from oran_adapt.db.migrate import schema_status
+
+    return schema_status(settings.database_url)
+
+
+def _cmd_db_wait(args, settings: Settings) -> Any:
+    """Wait until the schema is at or beyond this release's head (an init container)."""
+    from oran_adapt.db.migrate import wait_for_schema
+
+    return wait_for_schema(settings.database_url,
+                           timeout_s=args.timeout_s or settings.migration_wait_timeout_s,
+                           interval_s=settings.migration_wait_interval_s)
+
+
 def _cmd_data_create(args, settings: Settings) -> Any:
     from oran_adapt.datastore import get_or_create_dataset
     from oran_adapt.db.base import session_scope
@@ -402,6 +417,13 @@ def _cmd_worker_run(args, settings: Settings) -> Any:
     return {"worker": worker.owner, "classes": worker.classes, "jobs_run": ran}
 
 
+def _cmd_worker_health(args, settings: Settings) -> Any:
+    """The liveness probe: fails when the worker's loop has stopped turning."""
+    from oran_adapt.core.liveness import check
+
+    return check(settings.worker_health_file, settings.worker_health_max_age_s)
+
+
 def _cmd_worker_run_job(args, settings: Settings) -> Any:
     """One attempt of one job: what a broker message (celery, rq, a Kubernetes Job) runs."""
     from oran_adapt.orchestrator.worker import install_drain_handlers, worker_from_settings
@@ -531,6 +553,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     db = top.add_parser("db").add_subparsers(dest="cmd", required=True)
     db.add_parser("upgrade", help="apply all database migrations").set_defaults(fn=_cmd_db_upgrade)
+    db.add_parser("status", help="the schema against this release: at_head, behind or ahead"
+                  ).set_defaults(fn=_cmd_db_status)
+    c = db.add_parser("wait", help="wait until the schema is at or beyond this release")
+    c.add_argument("--timeout-s", type=float, help="default MIGRATION_WAIT_TIMEOUT_S")
+    c.set_defaults(fn=_cmd_db_wait)
 
     data = top.add_parser("data").add_subparsers(dest="cmd", required=True)
     c = data.add_parser("create-dataset")
@@ -674,6 +701,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--once", action="store_true", help="stop when nothing is claimable")
     c.add_argument("--max-jobs", type=int)
     c.set_defaults(fn=_cmd_worker_run)
+    worker.add_parser("health", help="liveness: the worker's loop is turning (WORKER_HEALTH_FILE)"
+                      ).set_defaults(fn=_cmd_worker_health)
     c = worker.add_parser("run-job", help="run one attempt of one queued job")
     c.add_argument("--job-id", required=True)
     c.set_defaults(fn=_cmd_worker_run_job)

@@ -151,3 +151,15 @@ IdP, Vault and proxy, and the CI-only CVE scan and SBOM, are unverified locally.
 | `Dockerfile`, `docker/*/Dockerfile`, `docker-compose.yml` | never built or run |
 | `requirements.lock` | generated on Windows and applied as constraints on Linux |
 | none | no Helm chart, Kubernetes manifests or CI before Hardening Phase 0 |
+
+**Closed in Hardening Phase 11** (`docs/PHASE11_REPORT.md`): one Dockerfile builds the `api`,
+`worker` and `migrator` targets, non-root and pinned by digest, each with a health check; CI
+builds them with SBOMs. Compose runs a one-shot `migrate` service before anything reads the
+schema, and needs only `POSTGRES_PASSWORD` from a fresh clone. A Helm chart (API + HPA + PDB,
+worker Deployments per queue class including a GPU pool, a pre-install/pre-upgrade migration
+hook, ConfigMaps per adapter, ExternalSecret, Ingress + TLS, NetworkPolicy, ServiceMonitor,
+PrometheusRule with a runbook per alert) and a kustomize alternative deploy it. Migrations are
+expand-only, pods wait for the schema in an init container, and workers have a liveness file.
+Every manifest is checked for environment-specific literals. The builds, compose up, helm
+lint/template, kustomize build and the kind install/upgrade/rollback run in CI and are
+unverified locally.

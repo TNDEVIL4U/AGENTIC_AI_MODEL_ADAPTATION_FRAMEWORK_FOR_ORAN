@@ -1,0 +1,8 @@
+# Deny all ingress to the release's pods; an overlay adds the peers allowed to reach the API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: oran-adapt-default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]

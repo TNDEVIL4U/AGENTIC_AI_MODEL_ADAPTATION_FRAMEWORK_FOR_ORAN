@@ -171,3 +171,9 @@ Phase 10, only when `LLM_ENABLED=true`, which also requires a provider) and that
 - `requirements.lock` was generated on Windows. The Linux image build applies it as a
   constraints file.
 - There was no CI before Hardening Phase 0.
+- **Since Hardening Phase 11:** the `Dockerfile` has three targets (`api`, `worker`,
+  `migrator`), its base is pinned by digest, and compose runs a one-shot `migrate` service and a
+  separate `worker`; the API no longer applies migrations. Kubernetes packaging: the Helm chart
+  `deploy/helm/oran-adapt` and the kustomize tree `deploy/kustomize` (`docs/operations/`). Both
+  are checked statically in the gate and rendered only in CI; nothing has been deployed from
+  the development laptop.

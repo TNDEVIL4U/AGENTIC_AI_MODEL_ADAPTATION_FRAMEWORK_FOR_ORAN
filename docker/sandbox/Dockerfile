@@ -8,7 +8,8 @@
 #
 # Build:  docker build -t oran-adapt-sandbox:latest -f docker/sandbox/Dockerfile docker/sandbox
 # (the tag must match Settings.sandbox_docker_image, default "oran-adapt-sandbox:latest")
-FROM python:3.13.7-slim-bookworm
+# Pinned by digest, the same base as the application images (docs/operations/images.md).
+FROM python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf183395f0ebc4d3428bd22d92d
 
 # Pinned to the same versions as requirements.lock; torch is the CPU-only wheel.
 RUN apt-get update \

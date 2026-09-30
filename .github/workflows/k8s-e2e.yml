@@ -1,0 +1,29 @@
+# Heavy gate of Hardening Phase 11: the Helm chart installed, upgraded and rolled back on a kind
+# cluster (scripts/ci/kind_e2e.sh). Scheduled and on demand only; too heavy for every push.
+name: k8s-e2e
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: oran-e2e
+          version: v0.24.0
+      - name: Install, upgrade and roll back the chart
+        env:
+          KIND_CLUSTER: oran-e2e
+        run: bash scripts/ci/kind_e2e.sh
