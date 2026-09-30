@@ -162,6 +162,8 @@ class AdaptationJob(Base):
     lost_count: Mapped[int] = mapped_column(Integer, default=0)
     quarantined: Mapped[bool] = mapped_column(Boolean, default=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # W3C traceparent of the intake span (core.tracing): the worker continues this trace.
+    trace_context: Mapped[str | None] = mapped_column(String(128))
     events: Mapped[list[AdaptationEvent]] = relationship(back_populates="job")
 
 

@@ -163,3 +163,9 @@ expand-only, pods wait for the schema in an init container, and workers have a l
 Every manifest is checked for environment-specific literals. The builds, compose up, helm
 lint/template, kustomize build and the kind install/upgrade/rollback run in CI and are
 unverified locally.
+
+**Closed in Hardening Phase 12** (`docs/PHASE12_REPORT.md`), for the per-process metrics
+registry of section 5: the job, stage, adapter and rollout metrics are recorded in the worker
+(and forwarded from attempt processes), and each worker now serves them on
+`WORKER_METRICS_PORT`, scraped by the chart's PodMonitor, a kustomize port and the compose
+Prometheus. Before, only the API was scraped and the worker's metrics were never collected.

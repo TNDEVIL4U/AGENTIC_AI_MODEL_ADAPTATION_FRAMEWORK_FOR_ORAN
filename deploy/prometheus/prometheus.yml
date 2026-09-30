@@ -1,4 +1,5 @@
-# Scrapes the API's Prometheus endpoint. /api/v1/metrics needs no API key while
+# Scrapes the API's Prometheus endpoint and the worker's metrics port (WORKER_METRICS_PORT:
+# the job, queue, stage, adapter and rollout metrics live in the worker process). /api/v1/metrics needs no API key while
 # METRICS_PUBLIC=true (the default); with METRICS_PUBLIC=false, add an authorization block
 # with a key whose role may read metrics.
 global:
@@ -10,6 +11,10 @@ scrape_configs:
     metrics_path: /api/v1/metrics
     static_configs:
       - targets: ["api:8000"]
+
+  - job_name: oran-adapt-worker
+    static_configs:
+      - targets: ["worker:9100"]
 
   - job_name: prometheus
     static_configs:

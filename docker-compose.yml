@@ -164,6 +164,9 @@ services:
     build: {context: ., target: worker}
     image: oran-adapt-worker:0.1.0
     stop_grace_period: 45s  # > JOB_DRAIN_TIMEOUT_S: a stopping worker requeues its job
+    environment:
+      <<: *app-env
+      WORKER_METRICS_PORT: "9100"  # job, queue and rollout metrics; scraped by prometheus
     depends_on:
       <<: *migrated
       mlflow: {condition: service_healthy}

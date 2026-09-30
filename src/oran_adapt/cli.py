@@ -413,6 +413,12 @@ def _cmd_worker_run(args, settings: Settings) -> Any:
 
     worker = worker_from_settings(settings, classes=_classes(args.classes))
     install_drain_handlers(worker)
+    if settings.worker_metrics_port is not None:
+        from oran_adapt.core import metrics
+
+        metrics.serve(settings.worker_metrics_port, settings.worker_metrics_addr)
+        for worker_class in worker.classes:
+            metrics.WORKER_INFO.labels(worker_class).set(1)
     ran = worker.run(once=args.once, max_jobs=args.max_jobs)
     return {"worker": worker.owner, "classes": worker.classes, "jobs_run": ran}
 
@@ -767,12 +773,20 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
     try:
         settings = get_settings() if getattr(args, "needs_settings", True) else None
+        if settings is not None:
+            from oran_adapt.bootstrap import configure_tracing
+
+            configure_tracing(settings)
         result = args.fn(args, settings)
         if result is not None:
             _print(result)
     except AdaptationError as exc:
         _print(exc.to_dict())
         return 1
+    finally:
+        from oran_adapt.core import tracing
+
+        tracing.flush()
     return 0
 
 

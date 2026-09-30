@@ -166,6 +166,11 @@ jobs:
             helm lint "$chart" --values "$values"
             helm template ci "$chart" --values "$values" > "reports/rendered/$name.yaml"
           done
+      - name: promtool check rules (the alert rules as code)
+        run: |
+          docker run --rm -v "$PWD/deploy/helm/oran-adapt/files:/rules:ro" --entrypoint promtool \
+            prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94 \
+            check rules /rules/prometheus-rules.yaml
       - name: kustomize build, every overlay
         run: |
           for overlay in deploy/kustomize/overlays/*/; do

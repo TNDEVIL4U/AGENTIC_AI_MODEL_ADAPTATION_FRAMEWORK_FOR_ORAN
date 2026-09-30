@@ -42,11 +42,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from opentelemetry.trace import SpanKind
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
+from oran_adapt import bootstrap
 from oran_adapt.bootstrap import build_job_queue
-from oran_adapt.core import metrics
+from oran_adapt.core import metrics, observed, tracing
 from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
 from oran_adapt.core.correlation import get_correlation_id, set_correlation_id
@@ -297,9 +299,16 @@ def _placement(session: Session, event: DriftEvent, settings: Settings,
     }
 
 
+def trace_key(event_id: str | None, idempotency_key: str) -> str:
+    """What an event's trace id is derived from (core.tracing): the caller's event_id when it
+    gave one, else the event's idempotency key."""
+    return event_id or idempotency_key
+
+
 def queued_job(job: AdaptationJob) -> QueuedJob:
     return QueuedJob(job_id=job.job_id, worker_class=job.worker_class, tenant=job.tenant,
-                     priority=job.priority, attempt=job.attempt)
+                     priority=job.priority, attempt=job.attempt,
+                     trace_context=job.trace_context)
 
 
 def publish(session_factory, queue: JobQueuePort, job_id: str) -> bool:
@@ -310,8 +319,12 @@ def publish(session_factory, queue: JobQueuePort, job_id: str) -> bool:
         if JobStatus(job.status) != JobStatus.QUEUED:
             return False
         message = queued_job(job)
+        key = trace_key(job.event.get("event_id"), job.idempotency_key)
     try:
-        queue.publish(message)
+        with tracing.continued("job.publish", message.trace_context, key=key,
+                               kind=SpanKind.PRODUCER, job_id=job_id,
+                               worker_class=message.worker_class):
+            queue.publish(message)
     except JobQueueUnavailableError as exc:
         log_event(logger, f"could not publish queued job: {exc.message}",
                   level=logging.WARNING, adaptation_job_id=job_id)
@@ -342,7 +355,27 @@ def submit_adaptation_job(
 
     ``queue`` is the JobQueuePort adapter (built from JOB_QUEUE_BACKEND when not given). With
     the ``inline`` adapter the job runs here, with ``registry``, ``llm_client`` and
-    ``workdir``, and its outcome is returned."""
+    ``workdir``, and its outcome is returned.
+
+    The call is the ``intake`` span, the root of the event's trace (core.tracing); its
+    traceparent is stored on the job, so every later span of the job joins that trace."""
+    with tracing.event_span("intake", trace_key(event.event_id, event.idempotency_key()),
+                            event_id=event.event_id, model_id=event.model_id, actor=actor):
+        return _submit(session_factory, event, settings, registry=registry,
+                       llm_client=llm_client, workdir=workdir, actor=actor, queue=queue)
+
+
+def _submit(
+    session_factory,
+    event: DriftEvent,
+    settings: Settings,
+    *,
+    registry: ModelRegistryPort | None,
+    llm_client: LlmClient | None,
+    workdir: str,
+    actor: str,
+    queue: JobQueuePort | None,
+) -> JobResponse:
     key = event.idempotency_key()
     job_id = uuid.uuid4().hex
     queue = queue if queue is not None else build_job_queue(settings)
@@ -361,6 +394,7 @@ def submit_adaptation_job(
             status=JobStatus.RECEIVED,
             event=event.model_dump(mode="json"),
             correlation_id=get_correlation_id(),
+            trace_context=tracing.inject(),
             **_placement(session, event, settings, actor),
         )
         session.add(job)
@@ -512,40 +546,65 @@ def _attempt(payload: dict) -> dict:
     """One pipeline attempt, wherever the job executor runs it. Returns the JobResult as JSON.
 
     In a fresh worker process (``payload["in_process"]`` false) it first rebuilds what the
-    parent process holds: logging, the correlation id and a database engine. Every stage it
-    reports is fenced by the attempt's lease token."""
+    parent process holds: logging, tracing, the registry's instrumentation, the correlation id
+    and a database engine. Every stage it reports is fenced by the attempt's lease token.
+
+    The attempt is the ``job.attempt.run`` span, a child of the worker's ``job.attempt`` span
+    (``payload["trace_context"]``), and each stage it reports opens a ``stage <STATUS>`` span
+    whose duration is recorded in adaptation_stage_duration_seconds."""
     settings: Settings = payload["settings"]
     engine = None
+    registry = payload["registry"]
     if payload["in_process"]:
         factory = payload["session_factory"]
     else:
         configure_logging(settings.log_level, settings.log_json)
+        bootstrap.configure_tracing(settings)
         set_correlation_id(payload["correlation_id"])
         engine = create_db_engine(payload["db_url"])
         factory = make_session_factory(engine)
+        # An adapter that pickles only its settings arrives without its measured methods.
+        registry = observed.observe(registry, port="registry", name=settings.registry_backend)
     job_id = payload["job_id"]
     fence = payload["lease_token"]
+    stages = tracing.StageSpans(
+        on_stage_end=lambda stage, seconds, outcome: metrics.STAGE_DURATION.labels(
+            stage, outcome).observe(seconds)
+    )
 
     def _on_stage(status: JobStatus, message: str) -> None:
         _transition(factory, job_id, settings=settings, to_status=status, message=message,
                     fence=fence)
+        stages.enter(status.value)
 
+    error: BaseException | None = None
     try:
-        current_job.set(JobContext(job_id=job_id, on_stage=_on_stage))
-        with session_scope(factory) as session:
-            result = payload["pipeline"](
-                session,
-                payload["event"],
-                settings,
-                registry=payload["registry"],
-                llm_client=payload["llm_client"],
-                workdir=payload["workdir"],
-            )
+        with tracing.continued("job.attempt.run", payload.get("trace_context"),
+                               key=payload["trace_key"], job_id=job_id):
+            try:
+                current_job.set(JobContext(job_id=job_id, on_stage=_on_stage))
+                stages.enter(JobStatus.DATA_PREPARING.value)
+                with session_scope(factory) as session:
+                    result = payload["pipeline"](
+                        session,
+                        payload["event"],
+                        settings,
+                        registry=registry,
+                        llm_client=payload["llm_client"],
+                        workdir=payload["workdir"],
+                    )
+            except BaseException as exc:
+                error = exc
+                raise
+            finally:
+                stages.close(error)
         dumped: dict = result.model_dump(mode="json")
         return dumped
     finally:
         if engine is not None:
             engine.dispose()
+        if not payload["in_process"]:
+            tracing.flush()
 
 
 def _run_once(
@@ -573,6 +632,9 @@ def _run_once(
         "job_id": job_id,
         "lease_token": lease_token,
         "correlation_id": get_correlation_id(),
+        # The worker's attempt span; the attempt's spans are its children.
+        "trace_context": tracing.inject(),
+        "trace_key": trace_key(event.event_id, event.idempotency_key()),
         "db_url": session_factory.kw["bind"].url.render_as_string(hide_password=False),
         "registry": registry,
         "llm_client": llm_client,

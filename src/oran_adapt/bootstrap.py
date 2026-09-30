@@ -4,6 +4,9 @@
 exactly once and returns them together. The API app, the CLI and the CDC worker each call it at
 startup; nothing below this layer names an adapter or a vendor. An unknown adapter name, or an
 adapter whose required keys are unset, fails here with a ConfigurationError naming the key.
+
+Every adapter built here, except the job executor, is measured (core.observed): latency, errors
+and a span per call. ``configure_tracing`` installs the TRACING_EXPORTER span exporter.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from oran_adapt import plugins
+from oran_adapt.core import observed
 from oran_adapt.core.config import selected_adapters
 from oran_adapt.core.errors import ConfigurationError
 from oran_adapt.datastore.access import DataAccess
@@ -40,12 +44,26 @@ if TYPE_CHECKING:
     )
 
 CDC_DISABLED = "disabled"
+# Not measured per call: an executor call is a whole job attempt (stage metrics cover it).
+UNOBSERVED_PORTS = frozenset({"job_executor"})
 
 
 def _make(port: str, settings: Settings, config_key: str) -> Any:
     """The adapter that ``settings.<config_key>`` names for ``port``, built from the settings."""
-    spec = plugins.resolve(port, getattr(settings, config_key), config_key=config_key)
-    return spec.factory(settings)
+    name = getattr(settings, config_key)
+    spec = plugins.resolve(port, name, config_key=config_key)
+    adapter = spec.factory(settings)
+    if port in UNOBSERVED_PORTS:
+        return adapter
+    return observed.observe(adapter, port=port, name=name)
+
+
+def configure_tracing(settings: Settings) -> bool:
+    """Install the span exporter TRACING_EXPORTER names (once per process). Returns whether
+    spans are recorded."""
+    from oran_adapt.adapters import tracing as tracing_sdk
+
+    return tracing_sdk.configure(settings)
 
 
 @dataclass(frozen=True)
@@ -77,7 +95,7 @@ def build_deployment(settings: Settings, registry: ModelRegistryPort) -> Deploym
     spec = plugins.resolve("deployment", settings.deployment_backend,
                            config_key="deployment_backend")
     deployment = cast("DeploymentPort", spec.factory(settings, registry))
-    return deployment
+    return observed.observe(deployment, port="deployment", name=settings.deployment_backend)
 
 
 def needs_traffic_split(settings: Settings) -> bool:
@@ -173,10 +191,13 @@ def build_cdc_source(settings: Settings) -> CdcSourcePort:
 def build_notifiers(settings: Settings) -> dict[str, NotificationPort]:
     """Every notification sink NOTIFICATION_BACKEND names (none for "none"), by name."""
     return {
-        name: cast(
-            "NotificationPort",
-            plugins.resolve("notification", name, config_key="notification_backend")
-            .factory(settings),
+        name: observed.observe(
+            cast(
+                "NotificationPort",
+                plugins.resolve("notification", name, config_key="notification_backend")
+                .factory(settings),
+            ),
+            port="notification", name=name,
         )
         for name in selected_adapters(settings, "notification_backend")
     }
@@ -186,9 +207,12 @@ def build_data_access(settings: Settings) -> DataAccess:
     """Row access for every data version, reading referenced objects through each dataset
     adapter DATASET_BACKENDS names (none by default: only database-stored rows)."""
     backends = [
-        cast(
-            "DatasetPort",
-            plugins.resolve("dataset", name, config_key="dataset_backends").factory(settings),
+        observed.observe(
+            cast(
+                "DatasetPort",
+                plugins.resolve("dataset", name, config_key="dataset_backends").factory(settings),
+            ),
+            port="dataset", name=name,
         )
         for name in selected_adapters(settings, "dataset_backends")
     ]

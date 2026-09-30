@@ -301,11 +301,21 @@ connector) are unchanged. What is still a literal, and why:
 | `deploy/helm/oran-adapt/examples/`, `deploy/kustomize/overlays/` | namespaces, `example.com` hosts, all-zero digests | examples of one environment, marked as placeholders |
 | `deploy/helm/oran-adapt/files/prometheus-rules.yaml` | alert thresholds and `for:` windows | alerts as code, each with a runbook in `docs/runbooks/` |
 
+## Hardening Phase 12 status
+
+No category count changes. New literals, and why they are not keys:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `src/oran_adapt/core/tracing.py` | the trace-id salt `"oran-adapt:"`, span names | the trace-id derivation and the span tree are documented contracts (`docs/operations/observability.md`) |
+| `deploy/helm/oran-adapt/files/dashboards/*.json` | panel layout and queries | dashboards as code |
+| `deploy/helm/oran-adapt/values.yaml`, `deploy/kustomize/base/worker.yaml`, `docker-compose.yml`, `deploy/prometheus/prometheus.yml` | worker metrics port 9100 | a default: `worker.metricsPort` in Helm, a patchable field in kustomize |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 | Open after Phase 10 | Open after Phase 11 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 | 7 | 7 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 5 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 | Open after Phase 10 | Open after Phase 11 | Open after Phase 12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 | 7 | 7 | 7 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 5 | 5 |

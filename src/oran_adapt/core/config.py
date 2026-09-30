@@ -317,6 +317,23 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
 
+    # Tracing (core.tracing, docs/operations/observability.md): one trace per drift event, from
+    # intake to deployment verification. TRACING_EXPORTER: "none" (default; the OpenTelemetry
+    # API stays a no-op), "console" (spans as JSON on stderr), "jsonl" (one JSON line per span
+    # appended to TRACING_JSONL_PATH, safe across worker processes) or "otlp" (OTLP/HTTP to
+    # TRACING_OTLP_ENDPOINT; needs the opentelemetry-exporter-otlp-proto-http package).
+    tracing_exporter: Literal["none", "console", "jsonl", "otlp"] = "none"
+    tracing_service_name: str = "oran-adapt"
+    tracing_sample_ratio: float = Field(1.0, ge=0, le=1)
+    tracing_jsonl_path: str | None = None
+    tracing_otlp_endpoint: str | None = None
+    tracing_otlp_timeout_s: float = Field(10.0, gt=0)
+    # A worker serves its own /metrics on this port (unset: none). The API serves /api/v1/metrics;
+    # a worker process is a separate pod, so without this its job metrics are never scraped.
+    worker_metrics_port: int | None = Field(None, ge=1, le=65535)
+    # The address it binds; empty means every interface (a pod's own port).
+    worker_metrics_addr: str = ""
+
     # The job wrapper retries a job up to job_max_retries times (exponential backoff starting at
     # job_retry_backoff_s) on a transient error (registry or database unreachable), and gives the
     # whole pipeline run at most job_timeout_s wall-clock seconds before recording it TIMED_OUT.
@@ -838,6 +855,17 @@ class Settings(BaseSettings):
                 key="WORKER_HEALTH_MAX_AGE_S",
                 worker_health_max_age_s=self.worker_health_max_age_s,
                 slowest_beat_s=slowest_beat,
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _tracing_complete(self) -> Settings:
+        needed = {"jsonl": "tracing_jsonl_path", "otlp": "tracing_otlp_endpoint"}
+        key = needed.get(self.tracing_exporter)
+        if key is not None and not getattr(self, key):
+            raise ConfigurationError(
+                f"TRACING_EXPORTER={self.tracing_exporter} requires {key.upper()}",
+                key=key.upper(),
             )
         return self
 

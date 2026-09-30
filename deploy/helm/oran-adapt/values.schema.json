@@ -503,6 +503,11 @@
         },
         "podAnnotations": {
           "type": "object"
+        },
+        "metricsPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
         }
       },
       "additionalProperties": false
@@ -592,6 +597,37 @@
             },
             "labels": {
               "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
+        "podMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "type": "string"
+            },
+            "labels": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
+        "dashboards": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1
+            },
+            "labelValue": {
+              "type": "string"
             }
           },
           "additionalProperties": false

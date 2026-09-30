@@ -36,6 +36,7 @@ from oran_adapt.bootstrap import (
     build_policy,
     build_registry,
     build_rollout_metrics,
+    configure_tracing,
 )
 from oran_adapt.core import correlation, metrics
 from oran_adapt.core.config import Settings, get_settings
@@ -188,6 +189,7 @@ class RequestContextMiddleware:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level, settings.log_json)
+    configure_tracing(settings)
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:

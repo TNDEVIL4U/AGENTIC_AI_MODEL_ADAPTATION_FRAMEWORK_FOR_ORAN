@@ -58,6 +58,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
+from opentelemetry.trace import SpanKind
 from sqlalchemy import CursorResult, and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -66,8 +67,9 @@ from oran_adapt.bootstrap import (
     build_job_queue,
     build_llm,
     build_registry,
+    configure_tracing,
 )
-from oran_adapt.core import liveness, metrics
+from oran_adapt.core import liveness, metrics, tracing
 from oran_adapt.core.config import Settings, get_settings
 from oran_adapt.core.enums import TERMINAL_STATUSES, JobStatus
 from oran_adapt.core.errors import (
@@ -126,6 +128,9 @@ class Claim:
     model_id: str
     event: dict[str, Any]
     deadline_at: datetime | None
+    # The job's trace (core.tracing): the intake span's traceparent and the event's trace key.
+    trace_context: str | None = None
+    trace_key: str = ""
 
 
 class _NoSlot(Exception):
@@ -189,7 +194,10 @@ def _try_claim(session_factory, settings: Settings, job_id: str, owner: str) -> 
             )
             claim = Claim(job_id=job_id, lease_token=token, attempt=job.attempt,
                           tenant=job.tenant, slot=slot, model_id=job.model_id,
-                          event=dict(job.event), deadline_at=jobs.aware(job.deadline_at))
+                          event=dict(job.event), deadline_at=jobs.aware(job.deadline_at),
+                          trace_context=job.trace_context,
+                          trace_key=jobs.trace_key(job.event.get("event_id"),
+                                                   job.idempotency_key))
     except _NoSlot:
         return None
     log_event(logger, f"job claimed, attempt {claim.attempt}", adaptation_job_id=job_id,
@@ -492,11 +500,15 @@ class Worker:
             time.sleep(wait)
 
     def run_claim(self, claim_: Claim) -> None:
-        """Run one attempt of a claimed job and record its outcome (module docstring)."""
+        """Run one attempt of a claimed job and record its outcome (module docstring). The
+        attempt is the ``job.attempt`` span, continuing the trace stored on the job."""
         started = time.perf_counter()
         metrics.ADAPTATION_IN_PROGRESS.inc()
         try:
-            self._run_claim(claim_)
+            with tracing.continued("job.attempt", claim_.trace_context,
+                                   key=claim_.trace_key or claim_.job_id, kind=SpanKind.CONSUMER,
+                                   job_id=claim_.job_id, attempt=claim_.attempt):
+                self._run_claim(claim_)
         finally:
             metrics.ADAPTATION_IN_PROGRESS.dec()
             metrics.ADAPTATION_DURATION.observe(time.perf_counter() - started)
@@ -764,6 +776,7 @@ def worker_from_settings(settings: Settings | None = None, *,
                          classes: Iterable[str] | None = None) -> Worker:
     """A worker built from the configuration alone (the CLI and the broker entry points)."""
     settings = settings or get_settings()
+    configure_tracing(settings)
     factory = make_session_factory(create_db_engine(settings.database_url))
     return Worker(factory, settings, registry=build_registry(settings),
                   llm_client=build_llm(settings), workdir=settings.artifact_workdir,

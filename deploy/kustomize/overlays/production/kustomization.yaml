@@ -6,6 +6,7 @@ namespace: oran-adapt
 resources:
   - ../../base
   - api-ingress-policy.yaml
+  - worker-metrics-policy.yaml
 images:
   - name: oran-adapt-api
     newName: registry.example.com/oran/oran-adapt-api

@@ -1,6 +1,9 @@
 # Alert rules as code. Rendered into the chart's PrometheusRule (metrics.prometheusRule.enabled)
 # and loadable as a plain Prometheus rule file. Every alert names its runbook (docs/runbooks/),
-# and tests check that the file exists. Thresholds are defaults: copy the file to change them.
+# and tests check that the file exists and that every metric an expression reads is exported
+# (tests/unit/test_phase12_observability.py). Thresholds are defaults: copy the file to change
+# them. Job, queue and rollout metrics come from the workers' metrics port (WORKER_METRICS_PORT,
+# scraped by the chart's PodMonitor); API metrics from the API's /api/v1/metrics.
 groups:
   - name: oran-adapt.availability
     rules:
@@ -10,7 +13,16 @@ groups:
         labels: {severity: critical}
         annotations:
           summary: An oran-adapt API target has not been scraped for 5 minutes.
+          description: "Target {{ $labels.instance }} is down; drift events cannot be submitted through it."
           runbook: docs/runbooks/OranAdaptApiDown.md
+      - alert: OranAdaptNoWorker
+        expr: absent(worker_up == 1)
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: No oran-adapt worker has reported for 10 minutes.
+          description: No worker serves its metrics port, so nothing claims jobs, reaps lost ones or ticks rollouts.
+          runbook: docs/runbooks/OranAdaptNoWorker.md
   - name: oran-adapt.jobs
     rules:
       - alert: OranAdaptJobQueueStalled
@@ -19,13 +31,59 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: "The oldest queued job of class {{ $labels.worker_class }} has waited over 30 minutes."
+          description: "{{ $value | humanizeDuration }} is the age of the oldest queued job of class {{ $labels.worker_class }}."
           runbook: docs/runbooks/OranAdaptJobQueueStalled.md
       - alert: OranAdaptJobQuarantined
         expr: increase(job_quarantined_total[1h]) > 0
         labels: {severity: warning}
         annotations:
           summary: A poison job was quarantined in the last hour.
+          description: A job was lost JOB_POISON_THRESHOLD times and will not run again until released.
           runbook: docs/runbooks/OranAdaptJobQuarantined.md
+      - alert: OranAdaptJobFailureRate
+        expr: >-
+          sum(increase(adaptation_jobs_total{status="FAILED"}[1h]))
+          / clamp_min(sum(increase(adaptation_jobs_total[1h])), 1) > 0.25
+          and sum(increase(adaptation_jobs_total[1h])) >= 4
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: More than a quarter of the adaptation jobs of the last hour failed.
+          description: "{{ $value | humanizePercentage }} of the finished jobs failed; adaptation_failure_total by reason names the error codes."
+          runbook: docs/runbooks/OranAdaptJobFailureRate.md
+      - alert: OranAdaptStageSlow
+        expr: >-
+          histogram_quantile(0.95, sum by (stage, le)
+          (rate(adaptation_stage_duration_seconds_bucket[1h]))) > 1800
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Pipeline stage {{ $labels.stage }} takes over 30 minutes at p95."
+          description: "p95 of stage {{ $labels.stage }} is {{ $value | humanizeDuration }}; jobs near JOB_TIMEOUT_S will time out."
+          runbook: docs/runbooks/OranAdaptStageSlow.md
+  - name: oran-adapt.adapters
+    rules:
+      - alert: OranAdaptAdapterErrors
+        expr: >-
+          sum by (port, adapter) (rate(adapter_errors_total[10m]))
+          / clamp_min(sum by (port, adapter) (rate(adapter_call_duration_seconds_count[10m])), 1e-9)
+          > 0.2
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 20 % of the calls to the {{ $labels.port }} adapter {{ $labels.adapter }} fail."
+          description: "adapter_errors_total by code names the error; the traces of the failing jobs show the calls."
+          runbook: docs/runbooks/OranAdaptAdapterErrors.md
+      - alert: OranAdaptAdapterSlow
+        expr: >-
+          histogram_quantile(0.95, sum by (port, adapter, le)
+          (rate(adapter_call_duration_seconds_bucket[10m]))) > 30
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Calls to the {{ $labels.port }} adapter {{ $labels.adapter }} take over 30 s at p95."
+          description: "p95 is {{ $value | humanizeDuration }}; the external system behind the adapter is slow."
+          runbook: docs/runbooks/OranAdaptAdapterSlow.md
   - name: oran-adapt.rollouts
     rules:
       - alert: OranAdaptRolloutRolledBack
@@ -33,4 +91,29 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: "A {{ $labels.strategy }} rollout was rolled back in the last hour."
+          description: The candidate breached a health rule, lost its A/B test or could not be promoted; the stable version serves.
           runbook: docs/runbooks/OranAdaptRolloutRolledBack.md
+      - alert: OranAdaptDeliveryFailures
+        expr: sum by (strategy, reason) (increase(delivery_failures_total[30m])) >= 3
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.strategy }} rollouts failed a step ({{ $labels.reason }}) 3 times in 30 minutes."
+          description: "reason is first_split, serving, metrics or promotion; see the runbook for each."
+          runbook: docs/runbooks/OranAdaptDeliveryFailures.md
+  - name: oran-adapt.integrations
+    rules:
+      - alert: OranAdaptLlmBudgetExhausted
+        expr: sum by (provider, reason) (increase(llm_calls_refused_total{reason=~"token_budget|cost_budget"}[1h])) > 0
+        labels: {severity: info}
+        annotations:
+          summary: "LLM calls to {{ $labels.provider }} were refused: {{ $labels.reason }} reached."
+          description: Decisions fall back to the rule-based path until the budget window rolls over.
+          runbook: docs/runbooks/OranAdaptLlmBudgetExhausted.md
+      - alert: OranAdaptNotificationDeadLetters
+        expr: max(notification_backlog{status="DEAD"}) > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Notification deliveries are dead-lettered.
+          description: "{{ $value }} deliveries exhausted their retries; subscribers missed events."
+          runbook: docs/runbooks/OranAdaptNotificationDeadLetters.md

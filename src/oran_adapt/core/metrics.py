@@ -206,6 +206,43 @@ DATASET_READ_REFUSED = Counter(
     "not_allowed (URI outside the configured allow-lists).",
     ["reason"],
 )
+STAGE_DURATION = Histogram(
+    "adaptation_stage_duration_seconds",
+    "Time a job attempt spent in each pipeline stage, by stage and outcome (ok, error).",
+    ["stage", "outcome"],
+    buckets=_JOB_BUCKETS,
+)
+# Adapter calls (core.observed): the port, the adapter name the configuration chose and the
+# port method - three closed sets, so the series stay bounded.
+_ADAPTER_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300)
+ADAPTER_CALL_DURATION = Histogram(
+    "adapter_call_duration_seconds",
+    "Latency of calls to a port's adapter, by port, adapter and operation.",
+    ["port", "adapter", "operation"],
+    buckets=_ADAPTER_BUCKETS,
+)
+ADAPTER_ERRORS = Counter(
+    "adapter_errors_total",
+    "Adapter calls that raised, by port, adapter, operation and error code (the AdaptationError "
+    "code, else UNEXPECTED).",
+    ["port", "adapter", "operation", "code"],
+)
+ROLLOUT_STEPS = Counter(
+    "rollout_steps_total",
+    "Rollout transitions that did not end the rollout (canary steps, shadow to canary, "
+    "approval waits), by strategy and the state entered.",
+    ["strategy", "state"],
+)
+DELIVERY_FAILURES = Counter(
+    "delivery_failures_total",
+    "Progressive delivery steps that could not complete, by strategy and reason: first_split "
+    "(the first traffic change did not read back), serving (a split or undo failed), metrics "
+    "(the rollout metrics source was unavailable), promotion (LIVE could not move).",
+    ["strategy", "reason"],
+)
+WORKER_INFO = Gauge(
+    "worker_up", "1 while this worker process serves its metrics port.", ["worker_class"]
+)
 
 # The metrics a job's worker process can move. A worker runs in its own process with its own
 # registry, so it reports how far each of these moved (delta_since) and the parent, which
@@ -238,6 +275,11 @@ _FORWARDED = (
     DATASET_BYTES_READ,
     DATASET_READ_DURATION,
     DATASET_READ_REFUSED,
+    STAGE_DURATION,
+    ADAPTER_CALL_DURATION,
+    ADAPTER_ERRORS,
+    ROLLOUT_STEPS,
+    DELIVERY_FAILURES,
 )
 _BY_NAME = {family.name: metric for metric in _FORWARDED for family in metric.describe()}
 
@@ -300,6 +342,14 @@ def apply_delta(delta: MetricDelta) -> None:
                 child._buckets[i].inc(count - cumulative)
             cumulative = max(cumulative, count)
         child._sum.inc(entry["sum"])
+
+
+def serve(port: int, addr: str = "") -> None:
+    """Serve this process's metrics on ``port`` (a worker: WORKER_METRICS_PORT), in a daemon
+    thread that ends with the process."""
+    from prometheus_client import start_http_server
+
+    start_http_server(port, addr=addr)
 
 
 def render() -> tuple[bytes, str]:

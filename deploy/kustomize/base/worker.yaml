@@ -41,9 +41,12 @@ spec:
           env:
             - {name: JOB_WORKER_CLASSES, value: '["default"]'}
             - {name: WORKER_HEALTH_FILE, value: /tmp/oran-adapt/worker.alive}
+            - {name: WORKER_METRICS_PORT, value: "9100"}
           envFrom:
             - configMapRef: {name: oran-adapt-config}
             - secretRef: {name: oran-adapt-env}
+          ports:
+            - {name: metrics, containerPort: 9100, protocol: TCP}
           livenessProbe:
             exec: {command: ["oran-adapt", "worker", "health"]}
             initialDelaySeconds: 30

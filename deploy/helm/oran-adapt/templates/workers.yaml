@@ -48,11 +48,14 @@ spec:
           env:
             - {name: JOB_WORKER_CLASSES, value: {{ $w.classes | toJson | quote }}}
             - {name: WORKER_HEALTH_FILE, value: {{ $.Values.worker.healthFile | quote }}}
+            - {name: WORKER_METRICS_PORT, value: {{ $.Values.worker.metricsPort | quote }}}
             {{- range $key, $value := $w.env }}
             - {name: {{ $key }}, value: {{ $value | toString | quote }}}
             {{- end }}
           envFrom:
             {{- include "oran-adapt.envFrom" $ | nindent 12 }}
+          ports:
+            - {name: metrics, containerPort: {{ $.Values.worker.metricsPort }}, protocol: TCP}
           livenessProbe:
             exec:
               command: ["oran-adapt", "worker", "health"]

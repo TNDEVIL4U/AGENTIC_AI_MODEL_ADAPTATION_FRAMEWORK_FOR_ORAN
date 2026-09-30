@@ -270,6 +270,24 @@ Defaults and assumptions, with the key that changes each:
 | The GPU pool only schedules; in-tree training is CPU only. | The framework has no device setting; plugins choose their own device. | `workers[]`, `JOB_CLASS_BY_FRAMEWORK` |
 | **Unverified locally:** compose up, the image builds and SBOMs, helm lint/template, kustomize build, kubeconform, the kind install/upgrade/rollback. | No Docker, Helm or cluster on the development laptop; CI runs them. | - |
 
+## Observability
+
+Hardening Phase 12 added one OpenTelemetry trace per drift event, per-stage and per-adapter
+metrics, redacted structured logs, a Grafana dashboard, 12 alert rules and a runbook for each
+(`docs/operations/observability.md`).
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| Tracing is off; spans are no-ops until an exporter is chosen. | No collector is assumed; a no-op span costs almost nothing. | `TRACING_EXPORTER` |
+| The trace id is sha256("oran-adapt:" + event key), first 128 bits. | An operator finds an event's trace from the event alone, and a duplicate submission joins it. | - (a contract) |
+| Every span is sampled. | One trace per event is cheap; the keyed id makes a lower ratio drop whole events, never parts. | `TRACING_SAMPLE_RATIO` |
+| Workers serve their own metrics on a separate port, off unless set. | Job metrics live in the worker process, not the API's. | `WORKER_METRICS_PORT`, `WORKER_METRICS_ADDR`, `worker.metricsPort` |
+| Alert thresholds: queue age 30 min, failure rate 25 %, stage p95 30 min, adapter errors 20 %, adapter p95 30 s, 3 delivery failures in 30 min. | Defaults for a small fleet, each explained in its runbook. | copy `files/prometheus-rules.yaml` |
+| The Grafana sidecar finds dashboards by `grafana_dashboard: "1"`. | The kube-prometheus-stack default. | `metrics.dashboards.label`, `metrics.dashboards.labelValue` |
+| **Unverified locally:** OTLP export, promtool, Grafana import, the PodMonitor in a cluster. | No collector, Prometheus, Grafana or cluster on the development laptop. | - |
+
 ## Not yet behind a port
 
 - **Sandbox backend** (`SANDBOX_BACKEND`, `subprocess` or `docker`): this is a fixed choice in

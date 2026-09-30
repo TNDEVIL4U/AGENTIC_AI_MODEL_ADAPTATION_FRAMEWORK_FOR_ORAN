@@ -41,7 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from oran_adapt.core import metrics
+from oran_adapt.core import metrics, tracing
 from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import AuditAction, PromotionKind
@@ -57,7 +57,7 @@ from oran_adapt.core.errors import (
 )
 from oran_adapt.core.logging import log_event
 from oran_adapt.core.policies import DeliveryPolicy, policy_hash
-from oran_adapt.db.models import ModelMetadata, Rollout, RolloutObservation
+from oran_adapt.db.models import AdaptationJob, ModelMetadata, Rollout, RolloutObservation
 from oran_adapt.delivery.health import BREACH, HEALTHY, ab_test, evaluate_health
 from oran_adapt.notifications.events import record_event
 from oran_adapt.orchestrator.locks import add_lock, release_lock, take_over_expired_lock
@@ -241,6 +241,8 @@ def _record(session: Session, delivery: Delivery, rollout: Rollout, *, to: str, 
     if final:
         rollout.finished_at = now
         metrics.ROLLOUTS_FINISHED.labels(strategy=rollout.strategy, state=to).inc()
+    else:
+        metrics.ROLLOUT_STEPS.labels(strategy=rollout.strategy, state=to).inc()
     record_audit(
         session,
         AuditAction.ROLLOUT_FINISHED if final else AuditAction.ROLLOUT_ADVANCED,
@@ -328,6 +330,7 @@ def _promote(session: Session, delivery: Delivery, rollout: Rollout, *, reason: 
         )
     except (PromotionError, ConflictError) as exc:
         session.rollback()
+        metrics.DELIVERY_FAILURES.labels(strategy=rollout.strategy, reason="promotion").inc()
         why = f"promotion failed, candidate not live: {exc.message}"
         _end_without_promotion(session, delivery, rollout, to=ROLLED_BACK, reason=why, now=now,
                                actor=actor, detail={**(detail or {}), "error": exc.to_dict()})
@@ -431,6 +434,7 @@ def start_rollout(session: Session, delivery: Delivery, *, model_id: str, strate
             _split(session, delivery, rollout, percent)
         except DeploymentError as exc:
             # The split never read back: make sure no candidate traffic is left, then end.
+            metrics.DELIVERY_FAILURES.labels(strategy=strategy, reason="first_split").inc()
             try:
                 _end_without_promotion(
                     session, delivery, rollout, to=ROLLED_BACK,
@@ -560,6 +564,19 @@ def _advance(session: Session, delivery: Delivery, rollout: Rollout, now: dateti
     return ROLLED_BACK
 
 
+def _job_trace(session: Session, rollout: Rollout) -> tuple[str | None, str]:
+    """The trace a rollout's ticks join: that of the job that started it (core.tracing)."""
+    if rollout.job_id is None:
+        return None, f"rollout:{rollout.rollout_id}"
+    row = session.execute(
+        select(AdaptationJob.trace_context, AdaptationJob.idempotency_key, AdaptationJob.event)
+        .where(AdaptationJob.job_id == rollout.job_id)
+    ).one_or_none()
+    if row is None:
+        return None, f"rollout:{rollout.rollout_id}"
+    return row.trace_context, (row.event or {}).get("event_id") or row.idempotency_key
+
+
 def tick(session: Session, delivery: Delivery, rollout_id: str,
          now: datetime | None = None) -> str:
     """Advance one rollout under its model's lock. Returns ``busy`` when the model is locked
@@ -578,9 +595,17 @@ def tick(session: Session, delivery: Delivery, rollout_id: str,
         rollout = get_rollout(session, rollout_id)
         if rollout.state not in ACTIVE_STATES:
             return "ended"
+        traceparent, key = _job_trace(session, rollout)
         try:
-            return _advance(session, delivery, rollout, now)
+            with tracing.continued("rollout.tick", traceparent, key=key,
+                                   rollout_id=rollout_id, strategy=rollout.strategy,
+                                   state=rollout.state) as span:
+                outcome = _advance(session, delivery, rollout, now)
+                span.set_attribute("oran.outcome", outcome)
+                return outcome
         except (RolloutMetricsUnavailableError, DeploymentError) as exc:
+            reason = "metrics" if isinstance(exc, RolloutMetricsUnavailableError) else "serving"
+            metrics.DELIVERY_FAILURES.labels(strategy=rollout.strategy, reason=reason).inc()
             session.rollback()
             rollout = get_rollout(session, rollout_id)
             _note(rollout, now, "tick could not complete", error=exc.to_dict())

@@ -221,6 +221,8 @@ class QueuedJob:
     tenant: str
     priority: int
     attempt: int
+    # W3C traceparent of the job's trace (core.tracing), for a broker that carries headers.
+    trace_context: str | None = None
 
 
 @runtime_checkable

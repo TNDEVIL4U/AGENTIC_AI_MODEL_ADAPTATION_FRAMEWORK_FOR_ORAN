@@ -177,3 +177,9 @@ Phase 10, only when `LLM_ENABLED=true`, which also requires a provider) and that
   `deploy/helm/oran-adapt` and the kustomize tree `deploy/kustomize` (`docs/operations/`). Both
   are checked statically in the gate and rendered only in CI; nothing has been deployed from
   the development laptop.
+- **Since Hardening Phase 12:** `adaptation_job` has a `trace_context` column (migration 0011,
+  the intake span's W3C traceparent) and the API, workers and CLI configure OpenTelemetry
+  tracing (`TRACING_EXPORTER`, off by default). Workers serve their own `/metrics` on
+  `WORKER_METRICS_PORT`. Log lines carry `trace_id`/`span_id` and are redacted. Dashboards live
+  in `deploy/helm/oran-adapt/files/dashboards/`, and each of the 12 alerts has a runbook
+  (`docs/operations/observability.md`).

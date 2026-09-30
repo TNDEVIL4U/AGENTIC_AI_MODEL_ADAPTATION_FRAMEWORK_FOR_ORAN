@@ -107,6 +107,9 @@ workers:
     env: {}
 worker:
   healthFile: /tmp/oran-adapt/worker.alive
+  # WORKER_METRICS_PORT: each worker serves /metrics here (the job, queue, stage, adapter and
+  # rollout metrics); scraped by metrics.podMonitor.
+  metricsPort: 9100
   # > JOB_DRAIN_TIMEOUT_S: a stopping worker requeues its job before it is killed.
   terminationGracePeriodS: 60
   probes:
@@ -144,3 +147,13 @@ metrics:
   prometheusRule:
     enabled: false
     labels: {}
+  # Scrapes the workers' metrics port (worker.metricsPort).
+  podMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  # A ConfigMap of files/dashboards/*.json with the Grafana sidecar's discovery label.
+  dashboards:
+    enabled: false
+    label: grafana_dashboard
+    labelValue: "1"

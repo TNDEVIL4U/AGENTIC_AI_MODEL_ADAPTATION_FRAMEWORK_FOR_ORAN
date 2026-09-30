@@ -51,7 +51,7 @@ case "$phase" in
     9) scope="api.security api.ratelimit adapters.auth adapters.jwt adapters.vault adapters.access core.outbound" ;;  # security
     10) scope="llm adapters.llm_providers conformance.llm decision.llm_selector" ;;  # LLM paths
     11) scope="core.liveness db.migrate" ;;  # packaging: liveness, schema status, migrations
-    12) scope="core api orchestrator" ;;                  # observability
+    12) scope="core.logging orchestrator.jobs orchestrator.worker delivery.controller registry.deployment" ;;  # observability
     13) scope="core api orchestrator registry" ;;         # test and conformance consolidation
     14) scope="core api" ;;                               # documentation, migration, samples
     15) scope="core api orchestrator registry sandbox" ;;

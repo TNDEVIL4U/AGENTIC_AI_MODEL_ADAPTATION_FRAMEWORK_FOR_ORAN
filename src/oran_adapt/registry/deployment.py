@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
-from oran_adapt.core import metrics
+from oran_adapt.core import metrics, tracing
 from oran_adapt.core.errors import AdaptationError, DeploymentError
 from oran_adapt.core.logging import log_event
 from oran_adapt.ports import (
@@ -94,7 +94,15 @@ class Deployer:
         if candidate is None or percent == 0:
             candidate, percent = None, 0
         want = None if candidate is None else candidate.version
-        port.set_traffic(model, stable=stable, candidate=candidate, percent=percent)
+        with tracing.span("deployment.split", backend=self.backend, model=model,
+                          stable=stable.version, candidate=want, percent=percent):
+            port.set_traffic(model, stable=stable, candidate=candidate, percent=percent)
+            with tracing.span("deployment.verify", backend=self.backend, model=model,
+                              version=want or stable.version, percent=percent):
+                return self._read_back_split(port, model, stable, want, percent)
+
+    def _read_back_split(self, port: TrafficSplitPort, model: str, stable: DeploymentTarget,
+                         want: str | None, percent: int) -> TrafficSplit:
         deadline = self._clock() + self.timeout_s
         while True:
             state = self.port.status(model)
@@ -132,7 +140,13 @@ class Deployer:
     def _wait(self, model: str, version: str | None, *, fail_on_other: bool) -> DeploymentState:
         """Poll ``status`` until it reads back settled at ``version``. Raises DeploymentError
         on a reported failure, on the timeout, or (``fail_on_other``) when the system settles at
-        a different version, which means it rejected or rolled back the request."""
+        a different version, which means it rejected or rolled back the request. The polling is
+        the ``deployment.verify`` span."""
+        with tracing.span("deployment.verify", backend=self.backend, model=model,
+                          version=version):
+            return self._poll(model, version, fail_on_other=fail_on_other)
+
+    def _poll(self, model: str, version: str | None, *, fail_on_other: bool) -> DeploymentState:
         deadline = self._clock() + self.timeout_s
         while True:
             state = self.port.status(model)
@@ -169,6 +183,13 @@ class Deployer:
     def rollout(self, target: DeploymentTarget, previous: DeploymentTarget | None) -> DeploymentState:
         """Serve ``target`` and read it back. On any failure put ``previous`` back (None =
         undeploy), read that back, and raise DeploymentError with ``restored`` in its context."""
+        with tracing.span("deployment.rollout", backend=self.backend, model=target.model,
+                          version=target.version,
+                          previous=previous.version if previous else None):
+            return self._rollout(target, previous)
+
+    def _rollout(self, target: DeploymentTarget,
+                 previous: DeploymentTarget | None) -> DeploymentState:
         started = self._clock()
         try:
             self.port.deploy(target)

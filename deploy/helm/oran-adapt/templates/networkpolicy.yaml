@@ -38,4 +38,25 @@ spec:
       ports:
         - {port: {{ .Values.api.port }}, protocol: TCP}
 {{- end }}
+{{- with .Values.networkPolicy.metricsFrom }}
+---
+# The metrics peers may scrape the workers' metrics port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "oran-adapt.fullname" $ }}-worker-metrics
+  labels:
+    {{- include "oran-adapt.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "oran-adapt.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: worker
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - {port: {{ $.Values.worker.metricsPort }}, protocol: TCP}
+{{- end }}
 {{- end }}
