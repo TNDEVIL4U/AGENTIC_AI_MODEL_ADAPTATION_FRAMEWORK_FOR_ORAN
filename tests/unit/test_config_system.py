@@ -134,7 +134,7 @@ def test_effective_config_redacts_secrets_and_url_passwords(isolated) -> None:
     settings = Settings(
         _env_file=None,
         anthropic_api_key=SecretStr(SECRET),
-        database_url="postgresql://app:hunter2@db:5432/oran?sslkey=x",
+        database_url="postgresql://app:hunter2@db:5432/oran?sslkey=x",  # secret-scan: allow
     )
     effective = effective_config(settings)
     assert effective["anthropic_api_key"] == {"value": REDACTED, "source": "init"}

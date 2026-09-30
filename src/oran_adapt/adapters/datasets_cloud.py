@@ -24,6 +24,7 @@ from oran_adapt.core.errors import (
     DatasetNotFoundError,
     DataSourceUnavailableError,
 )
+from oran_adapt.core.outbound import OutboundPolicy
 from oran_adapt.ports import AdapterSpec, Capability, SourceStat
 
 if TYPE_CHECKING:
@@ -241,7 +242,9 @@ def _gcs(settings: Settings) -> GcsDataset:
     return GcsDataset(
         buckets,
         endpoint=settings.dataset_gcs_endpoint,
-        client=httpx.Client(timeout=settings.dataset_http_timeout_s, follow_redirects=False),
+        client=OutboundPolicy.from_settings(settings).client(
+            timeout=settings.dataset_http_timeout_s
+        ),
         token=token,
         max_bytes=settings.dataset_max_source_bytes,
         spool_dir=settings.dataset_spool_dir,

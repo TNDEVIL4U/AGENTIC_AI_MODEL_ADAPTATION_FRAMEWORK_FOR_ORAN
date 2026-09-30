@@ -15,6 +15,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from oran_adapt import __version__
+from oran_adapt.api.ratelimit import TokenBuckets
 from oran_adapt.api.routes_adaptation import router as adaptation_router
 from oran_adapt.api.routes_config import router as config_router
 from oran_adapt.api.routes_data import current_router as current_data_router
@@ -23,7 +24,7 @@ from oran_adapt.api.routes_health import router as health_router
 from oran_adapt.api.routes_models import router as models_router
 from oran_adapt.api.routes_notifications import router as notifications_router
 from oran_adapt.api.routes_rollouts import router as rollouts_router
-from oran_adapt.api.security import READ, require
+from oran_adapt.api.security import DOCS_PATHS, READ, enforce_route_policies, require
 from oran_adapt.bootstrap import (
     build_auth,
     build_data_access,
@@ -99,6 +100,40 @@ class BodySizeLimitMiddleware:
         await JSONResponse(status_code=413, content=body)(scope, receive, send)
 
 
+class SecurityHeadersMiddleware:
+    """Hardening headers on every response: no MIME sniffing, no framing, no referrer, no
+    caching of API answers, a restrictive Content-Security-Policy (except on the docs pages,
+    which load their own scripts) and, when API_HSTS_MAX_AGE_S is set, Strict-Transport-Security.
+    """
+
+    def __init__(self, app: ASGIApp, hsts_max_age_s: int) -> None:
+        self.app = app
+        self.hsts_max_age_s = hsts_max_age_s
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        docs = scope.get("path", "") in DOCS_PATHS
+
+        async def _send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers.setdefault("X-Content-Type-Options", "nosniff")
+                headers.setdefault("X-Frame-Options", "DENY")
+                headers.setdefault("Referrer-Policy", "no-referrer")
+                headers.setdefault("Cache-Control", "no-store")
+                if not docs:
+                    headers.setdefault("Content-Security-Policy",
+                                       "default-src 'none'; frame-ancestors 'none'")
+                if self.hsts_max_age_s:
+                    headers.setdefault("Strict-Transport-Security",
+                                       f"max-age={self.hsts_max_age_s}")
+            await send(message)
+
+        await self.app(scope, receive, _send)
+
+
 class RequestContextMiddleware:
     """Gives every request a correlation id (the caller's ``header`` - API_CORRELATION_HEADER -
     when it is a safe token, otherwise a new one), echoes it in the response, and records HTTP metrics labelled by
@@ -158,6 +193,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         # The outbox dispatcher runs beside the API while NOTIFICATION_DISPATCH_ENABLED; with
         # several replicas each runs one, and the claim protocol keeps them from double-sending.
+        enforce_route_policies(app)  # also covers routes added after create_app
         thread = app.state.dispatcher
         if thread is not None:
             thread.start()
@@ -169,10 +205,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     settings.notification_timeout_s + settings.notification_dispatch_interval_s
                 )
 
+    docs = (settings.api_docs_enabled if settings.api_docs_enabled is not None
+            else settings.environment != "production")
     app = FastAPI(
-        title="O-RAN Model Adaptation Framework", version=__version__, lifespan=_lifespan
+        title="O-RAN Model Adaptation Framework",
+        version=__version__,
+        lifespan=_lifespan,
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
     )
     app.state.settings = settings
+    app.state.rate_limits = TokenBuckets(
+        settings.api_rate_limit_per_minute,
+        settings.api_rate_limit_burst,
+        max_keys=settings.api_rate_limit_max_keys,
+    )
+    app.state.auth_failures = TokenBuckets(
+        settings.api_auth_failure_limit_per_minute,
+        settings.api_auth_failure_limit_per_minute,
+        max_keys=settings.api_rate_limit_max_keys,
+    )
     app.state.engine = create_db_engine(settings.database_url)
     app.state.session_factory = make_session_factory(app.state.engine)
     app.state.registry = build_registry(settings)
@@ -196,10 +249,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # is counted in the HTTP metrics by RequestContextMiddleware.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.api_max_request_bytes)
     app.add_middleware(RequestContextMiddleware, header=settings.api_correlation_header)
+    # Outermost, so even the 500 answer RequestContextMiddleware writes carries the headers.
+    app.add_middleware(SecurityHeadersMiddleware, hsts_max_age_s=settings.api_hsts_max_age_s)
 
     @app.exception_handler(AdaptationError)
     async def _adaptation_error(_: Request, exc: AdaptationError) -> JSONResponse:
-        return JSONResponse(status_code=_status_for(exc), content=exc.to_dict())
+        headers = None
+        if exc.code == "RATE_LIMITED":
+            headers = {"Retry-After": str(exc.context.get("retry_after_s", 1))}
+        return JSONResponse(status_code=_status_for(exc), content=exc.to_dict(), headers=headers)
 
     @app.exception_handler(RequestValidationError)
     async def _invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -225,6 +283,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(config_router, prefix="/api/v1", dependencies=authenticated)
     app.include_router(notifications_router, prefix="/api/v1", dependencies=authenticated)
     app.include_router(rollouts_router, prefix="/api/v1", dependencies=authenticated)
+    enforce_route_policies(app)
     return app
 
 
@@ -232,6 +291,8 @@ def _status_for(exc: AdaptationError) -> int:
     return {
         "UNAUTHENTICATED": 401,
         "FORBIDDEN": 403,
+        "RATE_LIMITED": 429,
+        "OUTBOUND_BLOCKED": 422,
         "MODEL_NOT_FOUND": 404,
         "JOB_NOT_FOUND": 404,
         "DATASET_NOT_FOUND": 404,

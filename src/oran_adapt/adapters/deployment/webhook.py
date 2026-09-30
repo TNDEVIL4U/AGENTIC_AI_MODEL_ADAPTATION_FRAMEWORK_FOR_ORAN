@@ -20,10 +20,9 @@ from __future__ import annotations
 from functools import partial
 from typing import TYPE_CHECKING
 
-import httpx
-
 from oran_adapt.adapters.deployment._common import HttpApi, StaticToken, parse_status, required
 from oran_adapt.core.errors import DeploymentError
+from oran_adapt.core.outbound import OutboundPolicy
 from oran_adapt.ports import (
     AdapterSpec,
     Capability,
@@ -49,7 +48,10 @@ class WebhookDeployment:
             HttpApi(
                 url,
                 service=service,
-                http_factory=partial(httpx.Client, timeout=settings.deployment_http_timeout_s),
+                http_factory=partial(
+                    OutboundPolicy.from_settings(settings).client,
+                    timeout=settings.deployment_http_timeout_s,
+                ),
                 token=StaticToken(getattr(settings, token_key)),
             )
         )

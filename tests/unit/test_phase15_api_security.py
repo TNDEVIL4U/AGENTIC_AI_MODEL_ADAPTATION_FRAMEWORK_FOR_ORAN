@@ -89,7 +89,7 @@ def test_each_role_reaches_exactly_the_routes_its_policy_allows(secured, secured
 
 
 def test_errors_are_structured_and_echo_no_input_or_secret(secured) -> None:
-    secret = "sk-ant-should-never-be-echoed"
+    secret = "sk-ant-should-never-be-echoed"  # secret-scan: allow
     r = secured.post(
         "/api/v1/adaptation/events",
         json={"model_id": 12345, "note": secret},

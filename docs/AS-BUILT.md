@@ -42,6 +42,9 @@ own earlier "Phase 1–15" commit labels are a different, older numbering.
 Authentication: `X-API-Key` or `Authorization: Bearer <key>`, checked against SHA-256 digests
 in `API_KEYS` (`api/security.py`). Every router except health requires a read role; write routes
 add stricter roles. With `AUTH_ENABLED=false`, every caller is `anonymous`/ADMIN.
+(Since Hardening Phase 9: identity comes from `AUTH_BACKEND` (`api-key`, `oidc`, `gateway`,
+`mtls`), every route must declare a policy or the API refuses to start, and the Roles column
+is generated in `docs/security/authz-matrix.md`; see `docs/security.md`.)
 
 | Method | Path | Roles | Request | Response |
 |---|---|---|---|---|
@@ -137,7 +140,8 @@ base, on SQLite only.
 
 A single `pydantic-settings` class, `core/config.py:Settings` (about 60 keys). Sources are field
 defaults, then `.env`, then environment variables; there is no YAML/TOML layer and no secret
-references. Validators check that the LLM key is present for the chosen provider and that
+references (since Hardening Phase 9, secret-typed settings can come from `SECRETS_BACKEND`:
+`env`, `file` or `vault`). Validators check that the LLM key is present for the chosen provider and that
 `API_KEYS` is well formed. There is no effective-config endpoint and no `config-lint` CLI.
 `.env.example` lists every key with its default.
 

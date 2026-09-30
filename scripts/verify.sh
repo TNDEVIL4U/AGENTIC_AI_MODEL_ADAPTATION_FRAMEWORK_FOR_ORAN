@@ -48,7 +48,7 @@ case "$phase" in
     6) scope="orchestrator api" ;;                        # real execution layer
     7) scope="validation registry orchestrator" ;;        # validation gate, progressive delivery
     8) scope="adaptation.model_types adaptation.sequence adaptation.torch_engine adaptation.inspector validation conformance.model_types adapters.model_types" ;;  # model-type plugins
-    9) scope="api adapters" ;;                            # security
+    9) scope="api.security api.ratelimit adapters.auth adapters.jwt adapters.vault adapters.access core.outbound" ;;  # security
     10) scope="llm decision adaptation" ;;                # LLM paths
     11) scope="core api" ;;                               # packaging and deployment
     12) scope="core api orchestrator" ;;                  # observability

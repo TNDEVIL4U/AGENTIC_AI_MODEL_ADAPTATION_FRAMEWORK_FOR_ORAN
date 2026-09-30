@@ -21,8 +21,6 @@ from pathlib import Path
 from string import Template
 from typing import TYPE_CHECKING
 
-import httpx
-
 from oran_adapt.adapters.deployment._common import (
     HttpApi,
     StaticToken,
@@ -32,6 +30,7 @@ from oran_adapt.adapters.deployment._common import (
     required,
 )
 from oran_adapt.core.errors import ConfigurationError, DeploymentError, DeploymentUnavailableError
+from oran_adapt.core.outbound import OutboundPolicy
 from oran_adapt.ports import AdapterSpec, Capability, DeploymentState, DeploymentTarget
 
 if TYPE_CHECKING:
@@ -97,7 +96,10 @@ class GitOpsDeployment:
             status_api=HttpApi(
                 required(settings.gitops_status_url, "gitops_status_url"),
                 service="the GitOps status endpoint",
-                http_factory=partial(httpx.Client, timeout=settings.deployment_http_timeout_s),
+                http_factory=partial(
+                    OutboundPolicy.from_settings(settings).client,
+                    timeout=settings.deployment_http_timeout_s,
+                ),
                 token=StaticToken(settings.gitops_status_token),
             ),
         )

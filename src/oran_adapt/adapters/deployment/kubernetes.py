@@ -36,6 +36,7 @@ from oran_adapt.adapters.deployment._common import (
     required,
 )
 from oran_adapt.core.errors import ConfigurationError, DeploymentError
+from oran_adapt.core.outbound import OutboundPolicy
 from oran_adapt.ports import (
     AdapterSpec,
     Capability,
@@ -74,9 +75,9 @@ def kube_api(settings: Settings) -> HttpApi:
         required(settings.k8s_api_url, "k8s_api_url"),
         service="the Kubernetes API",
         http_factory=partial(
-            httpx.Client,
+            OutboundPolicy.from_settings(settings).client,
             timeout=settings.deployment_http_timeout_s,
-            verify=settings.k8s_ca_file or True,
+            ca_file=settings.k8s_ca_file,
         ),
         token=token,
     )

@@ -50,7 +50,7 @@ class ApiKeyAuth:
             return token.strip()
         return None
 
-    def authenticate(self, headers: Mapping[str, str]) -> Principal:
+    def authenticate(self, headers: Mapping[str, str], *, peer: str | None = None) -> Principal:
         key = self.presented_key(headers)
         if not key:
             raise AuthenticationError(f"an API key is required ({self.header} header)")

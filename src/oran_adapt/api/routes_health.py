@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 
 from oran_adapt import __version__
-from oran_adapt.api.security import READ, require
+from oran_adapt.api.security import READ, public, require
 from oran_adapt.core import metrics
 from oran_adapt.core.errors import AdaptationError
 from oran_adapt.core.schemas import ComponentHealth, HealthResponse, ReadyResponse
@@ -14,14 +14,14 @@ from oran_adapt.db.health import check_database
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.get("/health", response_model=HealthResponse, dependencies=[Depends(public)])
 def health() -> HealthResponse:
     """Liveness: the process is up. Does not touch dependencies."""
     return HealthResponse(status="ok", version=__version__)
 
 
-@router.get("/ready", response_model=ReadyResponse)
-@router.get("/readiness", response_model=ReadyResponse)
+@router.get("/ready", response_model=ReadyResponse, dependencies=[Depends(public)])
+@router.get("/readiness", response_model=ReadyResponse, dependencies=[Depends(public)])
 def ready(request: Request, response: Response) -> ReadyResponse:
     """Readiness: the database, the model registry and the serving system must be reachable."""
     checks = {
@@ -42,10 +42,12 @@ def ready(request: Request, response: Response) -> ReadyResponse:
     return ReadyResponse(ready=all_ok, components=components)
 
 
-@router.get("/metrics", include_in_schema=False)
-def prometheus_metrics(request: Request) -> Response:
+@router.get(
+    "/metrics",
+    include_in_schema=False,
+    dependencies=[Depends(require(READ, unless="metrics_public"))],
+)
+def prometheus_metrics() -> Response:
     """Prometheus scrape endpoint. Needs a key (any role) unless ``metrics_public`` is set."""
-    if not request.app.state.settings.metrics_public:
-        require(READ)(request)
     body, content_type = metrics.render()
     return Response(content=body, media_type=content_type)

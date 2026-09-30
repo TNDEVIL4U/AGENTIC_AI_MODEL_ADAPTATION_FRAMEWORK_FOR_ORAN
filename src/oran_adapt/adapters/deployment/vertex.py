@@ -17,11 +17,10 @@ import time
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-import httpx
-
 from oran_adapt.adapters.deployment._common import HttpApi, dns_name, required
 from oran_adapt.adapters.registry.vertex import AdcToken, model_id
 from oran_adapt.core.errors import ConfigurationError, DeploymentError
+from oran_adapt.core.outbound import OutboundPolicy
 from oran_adapt.ports import AdapterSpec, Capability, DeploymentState, DeploymentTarget
 
 if TYPE_CHECKING:
@@ -75,7 +74,10 @@ class VertexDeployment:
             HttpApi(
                 f"{endpoint.rstrip('/')}/v1",
                 service="Vertex AI",
-                http_factory=partial(httpx.Client, timeout=settings.deployment_http_timeout_s),
+                http_factory=partial(
+                    OutboundPolicy.from_settings(settings).client,
+                    timeout=settings.deployment_http_timeout_s,
+                ),
                 token=AdcToken(),
             ),
             project=required(settings.vertex_project, "vertex_project"),

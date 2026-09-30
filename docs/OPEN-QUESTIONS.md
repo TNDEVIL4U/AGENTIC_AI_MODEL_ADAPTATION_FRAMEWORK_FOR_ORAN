@@ -202,6 +202,29 @@ Defaults and assumptions, with the key that changes each:
 | Candidates of every plugin are written with joblib (Keras models included); the registry handlers store models natively (skops, `onnx.save_model`, statsmodels `save`, `.keras`). | One candidate format for the sandbox and the gate. | - |
 | **LightGBM, CatBoost and Keras plugins are verified only against test doubles** that mimic their APIs (`tests/unit/model_type_doubles.py`). | The libraries are not installed on the gate machine. | - |
 
+## Security
+
+Hardening Phase 9 put identity behind `AuthPort` (`api-key`, `oidc`, `gateway`, `mtls`) and
+secrets behind `SecretsPort` (`env`, `file`, `vault`), made authorization deny-by-default, and
+sent every outbound HTTP client through one SSRF/TLS policy (`core/outbound.py`).
+`docs/security.md` is the model; `docs/adapters/auth.md` explains every key.
+
+Defaults and assumptions, with the key that changes each:
+
+| Assumption | Why | Key |
+|---|---|---|
+| `AUTH_BACKEND=api-key` stays the default. | Works with no identity provider; existing deployments keep working. | `AUTH_BACKEND` |
+| Roles come from the `roles` claim, mapped through `AUTH_ROLE_MAP`; the most privileged mapped role wins, and a valid token with no mapped role is a 403. | Nothing is granted by an unmapped claim value. | `AUTH_ROLE_CLAIM`, `AUTH_ROLE_MAP` |
+| JWTs: RS256 and ES256, 60 s leeway, JWKS cached 300 s, unknown `kid` refetch at most every 30 s. `none` and HMAC are always refused. | Common IdP defaults; the refusal is the security rule, not a default. | `AUTH_JWT_*`, `AUTH_JWKS_*` |
+| `gateway` and `mtls` believe their header only from `AUTH_TRUSTED_PROXIES` (empty by default, so nothing is believed). | A direct client cannot forge the header. | `AUTH_TRUSTED_PROXIES` |
+| Rate limits are **per replica**, keyed by principal (600/min, burst 100) and by TCP peer for auth failures (30/min). | No shared store is assumed; a global limit belongs in the gateway. | `API_RATE_LIMIT_*`, `API_AUTH_FAILURE_LIMIT_PER_MINUTE` |
+| `/metrics` stays public by default. | An in-cluster Prometheus scrapes without a key; restrict with a NetworkPolicy. | `METRICS_PUBLIC` |
+| API docs are off when `ENVIRONMENT=production`; HSTS is off. | HSTS is only safe when every client uses HTTPS. | `API_DOCS_ENABLED`, `API_HSTS_MAX_AGE_S` |
+| Secrets are read once at startup; rotation takes a restart. The Vault token comes from a file. | No background refresh thread. | `SECRETS_BACKEND`, `SECRETS_VAULT_*` |
+| Outbound: non-public destinations are refused unless allowlisted or configured; names are resolved and checked; plain HTTP is refused in production; TLS ≥ 1.2, always verified; no redirects. | SSRF protection by default. **DNS rebinding between check and connect is left to an egress NetworkPolicy.** | `OUTBOUND_*` |
+| `AUTH_ENABLED=false` makes every caller an anonymous ADMIN. | Local development only. | `AUTH_ENABLED` |
+| **Unverified locally:** a real IdP, Vault/OpenBao, Envoy/ingress and API gateway (local doubles only); `pip-audit`, `bandit` and the SBOM run in CI only. | Not available on the gate machine. | - |
+
 ## Not yet behind a port
 
 - **Sandbox backend** (`SANDBOX_BACKEND`, `subprocess` or `docker`): this is a fixed choice in

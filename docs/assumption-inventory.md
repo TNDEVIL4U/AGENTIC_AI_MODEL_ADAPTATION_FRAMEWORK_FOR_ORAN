@@ -122,6 +122,15 @@ with the `onnx` reference evaluator: unverified locally against the real librari
 | `core/config.py` | secrets come from env or `.env` only; there is no secret manager |
 | none | no egress allowlist or SSRF checks (no outbound URLs are user-supplied yet) |
 
+**Closed in Hardening Phase 9** (`docs/PHASE9_REPORT.md`): identity is behind `AuthPort`, with
+`oidc` (JWTs verified against the issuer's JWKS), `gateway` (signed assertions from a trusted
+proxy) and `mtls` (forwarded client certificates) beside `api-key`. Authorization is
+deny-by-default: every route declares `public` or `require(action)` or the API refuses to start,
+and `docs/security/authz-matrix.md` is generated from the routes served. Secrets come from
+`SecretsPort` (`env`, `file`, `vault`). Every outbound HTTP client goes through one SSRF/TLS
+policy (`core/outbound.py`). Rate limits, security headers and a secret scan were added. A real
+IdP, Vault and proxy, and the CI-only CVE scan and SBOM, are unverified locally.
+
 ## 9. Assumes it was never packaged (finding #7, Hardening Phases 0 and 11)
 
 | Where | Assumption |

@@ -491,6 +491,44 @@ class Settings(BaseSettings):
     auth_api_key_header: str = Field("X-API-Key", min_length=1)
     api_keys: dict[str, str] = Field(default_factory=dict)
     metrics_public: bool = True
+    # oidc / gateway (JWT) auth: roles come from the AUTH_ROLE_CLAIM claim (a dotted path)
+    # mapped through AUTH_ROLE_MAP (claim value -> role); the caller's name from
+    # AUTH_NAME_CLAIM. Signature algorithms are an allowlist (asymmetric only).
+    auth_oidc_issuer: str | None = None
+    auth_oidc_audience: str | None = None
+    auth_oidc_jwks_url: str | None = None  # None: from the issuer's discovery document
+    auth_gateway_issuers: dict[str, str] = Field(default_factory=dict)  # issuer -> JWKS URL
+    auth_gateway_header: str = Field("X-Jwt-Assertion", min_length=1)
+    auth_gateway_audience: str | None = None
+    auth_jwt_algorithms: list[str] = Field(default_factory=lambda: ["RS256", "ES256"],
+                                           min_length=1)
+    auth_jwt_leeway_s: float = Field(60.0, ge=0)
+    auth_role_claim: str = Field("roles", min_length=1)
+    auth_role_map: dict[str, str] = Field(default_factory=dict)
+    auth_name_claim: str = Field("sub", min_length=1)
+    auth_http_timeout_s: float = Field(5.0, gt=0)
+    auth_jwks_cache_ttl_s: float = Field(300.0, gt=0)
+    auth_jwks_min_refetch_s: float = Field(30.0, ge=0)
+    # mtls: a TLS-terminating proxy forwards the client certificate in AUTH_MTLS_CERT_HEADER;
+    # it must be issued by AUTH_MTLS_CA_FILE and its identity (CN or SAN) listed in
+    # AUTH_MTLS_IDENTITIES (identity -> role).
+    auth_mtls_ca_file: str | None = None
+    auth_mtls_cert_header: str = Field("X-Forwarded-Client-Cert", min_length=1)
+    auth_mtls_identities: dict[str, str] = Field(default_factory=dict)
+    # Peers (CIDRs) whose forwarded identity headers (gateway assertion, client certificate)
+    # are believed; from anyone else those headers are refused.
+    auth_trusted_proxies: list[str] = Field(default_factory=list)
+    # Per-replica token-bucket limits (0 turns a limit off): requests per authenticated caller,
+    # and failed authentications per client address; refused requests get 429 + Retry-After.
+    api_rate_limit_per_minute: int = Field(600, ge=0)
+    api_rate_limit_burst: int = Field(100, ge=1)
+    api_auth_failure_limit_per_minute: int = Field(30, ge=0)
+    api_rate_limit_max_keys: int = Field(10_000, ge=1)
+    # Serve /docs, /redoc and /openapi.json; None: on except in production.
+    api_docs_enabled: bool | None = None
+    # Strict-Transport-Security max-age on every response (0: header not sent; set it when the
+    # API is only reachable over HTTPS).
+    api_hsts_max_age_s: int = Field(0, ge=0)
     policy_backend: str = "static-rbac"
     # Action -> roles allowed to do it. An action missing here is allowed to nobody.
     policy_roles: dict[str, list[str]] = Field(
@@ -575,9 +613,35 @@ class Settings(BaseSettings):
     notification_nats_token: SecretStr | None = None
 
     # Where secret-typed keys (API keys of providers) come from besides the environment
-    # (oran_adapt.secrets): "env" or "file" (one file per secret in secrets_dir).
+    # (oran_adapt.secrets): "env", "file" (one file per secret in secrets_dir) or "vault"
+    # (HashiCorp Vault / OpenBao KV v2: one document at <mount>/data/<path>, the token read
+    # from secrets_vault_token_file).
     secrets_backend: str = "env"
     secrets_dir: str | None = None
+    secrets_vault_url: str | None = None
+    secrets_vault_mount: str = Field("secret", min_length=1)
+    secrets_vault_path: str = Field("oran-adapt", min_length=1)
+    secrets_vault_token_file: str | None = None
+    secrets_vault_namespace: str | None = None
+    secrets_vault_timeout_s: float = Field(10.0, gt=0)
+
+    # Outbound HTTP policy (core/outbound.py, docs/security.md), applied to every HTTP client
+    # the framework builds. Destinations that are not public addresses are refused unless
+    # trusted: OUTBOUND_ALLOWLIST entries (host, ".suffix" or CIDR) and the hosts of every
+    # configured endpoint (*_url, *_uri, *_endpoint settings, DATASET_HTTP_ALLOWED_HOSTS).
+    outbound_allowlist: list[str] = Field(default_factory=list)
+    # Refused even when name resolution is off: loopback names and cloud metadata services.
+    outbound_blocked_hosts: list[str] = Field(
+        default_factory=lambda: ["localhost", "metadata.google.internal", "metadata",
+                                 "instance-data"]
+    )
+    # Resolve host names and refuse any that resolve to a non-public address.
+    outbound_resolve_hosts: bool = True
+    # Refuse plain http (except to configured http:// endpoints); None: on in production.
+    outbound_require_https: bool | None = None
+    outbound_tls_min_version: Literal["TLSv1.2", "TLSv1.3"] = "TLSv1.2"
+    # A private CA bundle for every outbound client (per-adapter CA files still apply).
+    outbound_ca_file: str | None = None
 
     # Data by reference (docs/adapters/dataset.md). A data version is either rows stored in the
     # database (sent inline) or a URI to a Parquet/CSV/JSONL object that stays where it is and is

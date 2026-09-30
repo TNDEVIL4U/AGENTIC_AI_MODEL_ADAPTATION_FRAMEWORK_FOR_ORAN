@@ -44,6 +44,7 @@ from oran_adapt.core.errors import (
 )
 from oran_adapt.core.integrity import ArtifactPolicy
 from oran_adapt.core.model_uri import check_model_name
+from oran_adapt.core.outbound import OutboundPolicy
 from oran_adapt.ports import AdapterSpec, Capability
 from oran_adapt.ports.registry import READY, ModelVersion, RegisteredModel
 
@@ -149,7 +150,10 @@ class VertexRegistry:
             operation_poll_s=settings.vertex_operation_poll_s,
             tag_update_attempts=settings.vertex_tag_update_attempts,
             artifact_policy=ArtifactPolicy.from_settings(settings),
-            http_factory=partial(httpx.Client, timeout=settings.vertex_http_timeout_s),
+            http_factory=partial(
+                OutboundPolicy.from_settings(settings).client,
+                timeout=settings.vertex_http_timeout_s,
+            ),
             token_provider=AdcToken(),
         )
 

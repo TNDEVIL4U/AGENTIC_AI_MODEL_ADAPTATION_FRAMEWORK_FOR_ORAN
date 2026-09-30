@@ -384,6 +384,14 @@ server together with its uvicorn worker. Set
 | `DELIVERY_STRATEGY` | `shadow` | How an accepted candidate reaches traffic: `shadow`, `canary`, `blue_green`, `ab`, `manual` (see `docs/adapters/rollout_metrics.md`) |
 | `DELIVERY_POLICY` / `DELIVERY_POLICY_FILE` | see `core/policies.py` | Canary steps and holds, health rules, A/B test, approval deadline. `config/policies/delivery.toml` |
 | `ROLLOUT_METRICS_BACKEND` / `ROLLOUT_TICK_S` | `api` / `30` | Where rollouts read online metrics, and how often they are advanced |
+| `AUTH_BACKEND` | `api-key` | `api-key`, `oidc`, `gateway` or `mtls` (docs/adapters/auth.md). The OIDC/gateway/mTLS settings are listed in `.env.example` |
+| `AUTH_TRUSTED_PROXIES` | `[]` | Addresses/CIDRs whose identity headers (gateway assertion, forwarded client certificate) are believed |
+| `API_RATE_LIMIT_PER_MINUTE` / `API_RATE_LIMIT_BURST` | `600` / `100` | Requests per caller per replica; 429 with `Retry-After` beyond it (0 = off) |
+| `API_AUTH_FAILURE_LIMIT_PER_MINUTE` | `30` | Failed authentications per client address before it is refused (0 = off) |
+| `API_DOCS_ENABLED` / `API_HSTS_MAX_AGE_S` | unset (off in production) / `0` | Interactive API docs; Strict-Transport-Security max-age |
+| `SECRETS_BACKEND` | `env` | `env`, `file` (`SECRETS_DIR`) or `vault` (`SECRETS_VAULT_*`) |
+| `OUTBOUND_ALLOWLIST` | `[]` | Extra hosts, `.suffixes` or CIDRs outbound calls may reach besides the configured endpoints (docs/security.md §5) |
+| `OUTBOUND_REQUIRE_HTTPS` / `OUTBOUND_TLS_MIN_VERSION` / `OUTBOUND_CA_FILE` | on in production / `TLSv1.2` / unset | Outbound TLS policy; certificates are always verified |
 
 Full authoritative list: `src/oran_adapt/core/config.py`.
 

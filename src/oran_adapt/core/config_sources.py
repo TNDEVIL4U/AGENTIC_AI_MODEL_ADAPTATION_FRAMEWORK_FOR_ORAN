@@ -135,8 +135,13 @@ class SecretsSource(PydanticBaseSettingsSource):
         if backend == "env":
             return {}
         spec = plugins.resolve("secrets", backend, config_key="secrets_backend")
-        # Only the keys the secrets adapter reads; the rest of the settings are not known yet.
-        known: dict[str, Any] = {"secrets_backend": backend, "secrets_dir": self._setting("secrets_dir")}
+        # Only the keys the secrets adapter declares it reads; the rest of the settings are not
+        # known yet (they default).
+        known: dict[str, Any] = {"secrets_backend": backend}
+        for key in spec.capability.config_keys:
+            value = self._setting(key)
+            if value is not None:
+                known[key] = value
         partial = self.settings_cls.model_construct(**known)
         store = spec.factory(partial)
         found: dict[str, Any] = {}

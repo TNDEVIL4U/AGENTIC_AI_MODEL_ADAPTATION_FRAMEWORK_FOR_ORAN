@@ -17,10 +17,13 @@ class Principal:
 
 @runtime_checkable
 class AuthPort(Protocol):
-    """Identifies the caller from the request headers (names are case-insensitive). Raises
+    """Identifies the caller from the request headers (names are case-insensitive). ``peer`` is
+    the address of the connection's other end (a proxy, when one is in front); adapters that
+    believe identity headers set by a proxy check it against AUTH_TRUSTED_PROXIES. Raises
     AuthenticationError when no valid credential was presented."""
 
-    def authenticate(self, headers: Mapping[str, str]) -> Principal: ...
+    def authenticate(self, headers: Mapping[str, str], *, peer: str | None = None) -> Principal:
+        ...
 
 
 @runtime_checkable

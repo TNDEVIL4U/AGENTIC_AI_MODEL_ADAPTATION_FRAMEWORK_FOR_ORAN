@@ -16,11 +16,17 @@ from __future__ import annotations
 
 import math
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy import select
 
-from oran_adapt.core.errors import ConfigurationError, RolloutMetricsUnavailableError
+from oran_adapt.core.errors import (
+    ConfigurationError,
+    OutboundBlockedError,
+    RolloutMetricsUnavailableError,
+)
+from oran_adapt.core.outbound import OutboundPolicy
 from oran_adapt.db.models import RolloutObservation
 from oran_adapt.ports import AdapterSpec, ArmStats, ArmWindow, Capability
 
@@ -73,8 +79,11 @@ def fill(template: str, window: ArmWindow) -> str:
 class PrometheusRolloutMetrics:
     def __init__(self, url: str, *, queries: dict[str, str], requests_query: str | None,
                  step_s: float, timeout_s: float, token: SecretStr | None = None,
-                 transport: httpx.BaseTransport | None = None) -> None:
+                 transport: httpx.BaseTransport | None = None,
+                 policy: OutboundPolicy | None = None) -> None:
         self.url = url.rstrip("/")
+        # Without a policy from the settings, only the configured Prometheus host is trusted.
+        self.policy = policy or OutboundPolicy([urlsplit(self.url).hostname or ""])
         self.queries = queries
         self.requests_query = requests_query
         self.step_s = step_s
@@ -102,6 +111,7 @@ class PrometheusRolloutMetrics:
             step_s=settings.rollout_prometheus_step_s,
             timeout_s=settings.rollout_prometheus_timeout_s,
             token=settings.rollout_prometheus_token,
+            policy=OutboundPolicy.from_settings(settings),
         )
 
     def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -109,9 +119,9 @@ class PrometheusRolloutMetrics:
         if self.token is not None:
             headers["Authorization"] = f"Bearer {self.token.get_secret_value()}"
         try:
-            with httpx.Client(timeout=self.timeout_s, transport=self.transport) as client:
+            with self.policy.client(timeout=self.timeout_s, transport=self.transport) as client:
                 response = client.get(f"{self.url}{path}", params=params, headers=headers)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, OutboundBlockedError) as exc:
             raise RolloutMetricsUnavailableError(
                 "Prometheus could not be reached", url=self.url, cause=str(exc)
             ) from exc

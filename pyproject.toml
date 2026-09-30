@@ -68,6 +68,9 @@ kubernetes = "oran_adapt.adapters.job_queues:KUBERNETES"
 
 [project.entry-points."oran_adapt.auth"]
 api-key = "oran_adapt.adapters.access:API_KEY"
+oidc = "oran_adapt.adapters.auth:OIDC"
+gateway = "oran_adapt.adapters.auth:GATEWAY"
+mtls = "oran_adapt.adapters.auth:MTLS"
 
 [project.entry-points."oran_adapt.policy"]
 static-rbac = "oran_adapt.adapters.access:STATIC_RBAC"
@@ -87,6 +90,7 @@ nats = "oran_adapt.adapters.notify_brokers:NATS"
 [project.entry-points."oran_adapt.secrets"]
 env = "oran_adapt.adapters.secrets:ENV"
 file = "oran_adapt.adapters.secrets:FILE"
+vault = "oran_adapt.adapters.vault:VAULT"
 
 [project.entry-points."oran_adapt.deployment"]
 registry-alias = "oran_adapt.adapters.deployment.alias:SPEC"

@@ -28,6 +28,7 @@ import httpx
 from oran_adapt.adapters.deployment._common import HttpApi, StaticToken, required
 from oran_adapt.core.errors import ConfigurationError, DeploymentError
 from oran_adapt.core.model_uri import check_model_name
+from oran_adapt.core.outbound import OutboundPolicy
 from oran_adapt.ports import AdapterSpec, Capability, DeploymentState, DeploymentTarget
 
 if TYPE_CHECKING:
@@ -65,7 +66,10 @@ class TritonDeployment:
             HttpApi(
                 required(settings.triton_url, "triton_url"),
                 service="the Triton server",
-                http_factory=partial(httpx.Client, timeout=settings.deployment_http_timeout_s),
+                http_factory=partial(
+                    OutboundPolicy.from_settings(settings).client,
+                    timeout=settings.deployment_http_timeout_s,
+                ),
                 token=StaticToken(None),
             ),
             repository=repository,

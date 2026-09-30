@@ -252,11 +252,28 @@ new framework is a new plugin, not a row in that table. The plugins, their order
 | `adapters/model_types/onnx.py` | output names `label`/`probabilities` and ArgMax as the classifier signal | ONNX conventions (skl2onnx, onnxmltools) |
 | `adapters/model_types/tabular.py` | continued boosting via `init_model` | the LightGBM and CatBoost API |
 
+## Hardening Phase 9 status
+
+No baseline item reopened, and the counts do not move: no C or D item is about security.
+Identity (`AUTH_BACKEND` and the `AUTH_*` keys), secrets (`SECRETS_BACKEND`, `SECRETS_VAULT_*`),
+rate limits (`API_RATE_LIMIT_*`), docs and HSTS (`API_DOCS_ENABLED`, `API_HSTS_MAX_AGE_S`) and
+the outbound policy (`OUTBOUND_*`) are keys. What is still a literal, and why:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `api/app.py` | security header values (`nosniff`, `DENY`, `no-referrer`, `no-store`, CSP `default-src 'none'`) | the hardening itself; only HSTS depends on the deployment |
+| `api/security.py` | `DOCS_PATHS` | FastAPI's docs routes; whether they are served is `API_DOCS_ENABLED` |
+| `adapters/jwt.py` | supported algorithm families; `none` and HMAC refused | the security rule; the allowed set is `AUTH_JWT_ALGORITHMS` |
+| `adapters/auth.py` | `/.well-known/openid-configuration`, Envoy XFCC `Cert=` | OpenID Connect Discovery and Envoy formats |
+| `adapters/vault.py` | `/v1/<mount>/data/<path>`, `X-Vault-Token`, `X-Vault-Namespace` | the Vault KV v2 API; mount and path are keys |
+| `core/outbound.py` | non-public address classes | `ipaddress` classification; exceptions go in `OUTBOUND_ALLOWLIST` |
+| `scripts/secret_scan.py` | credential patterns | the scanner's rules, in one table |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 |
-|---|---|---|---|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |

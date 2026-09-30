@@ -256,6 +256,21 @@ class PermissionDeniedError(AdaptationError):
     code = "FORBIDDEN"
 
 
+class RateLimitedError(AdaptationError):
+    """Too many requests from this caller, or too many failed authentications from this client
+    address (HTTP 429 with Retry-After: ``retry_after_s`` in the context)."""
+
+    code = "RATE_LIMITED"
+
+
+class OutboundBlockedError(AdaptationError):
+    """The outbound policy refused a URL before anything was sent: a non-public destination not
+    on OUTBOUND_ALLOWLIST, a blocked host name, a scheme other than http(s), or plain http while
+    https is required (core/outbound.py)."""
+
+    code = "OUTBOUND_BLOCKED"
+
+
 class NotificationDeliveryError(AdaptationError):
     """A notification sink did not take a message. ``retryable`` in the context says whether
     sending it again later may succeed (the receiver was down, timed out, answered 5xx or 429)

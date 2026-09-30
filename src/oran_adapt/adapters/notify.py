@@ -17,8 +17,13 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from oran_adapt.core.errors import ConfigurationError, NotificationDeliveryError
+from oran_adapt.core.errors import (
+    ConfigurationError,
+    NotificationDeliveryError,
+    OutboundBlockedError,
+)
 from oran_adapt.core.logging import log_event
+from oran_adapt.core.outbound import OutboundPolicy
 from oran_adapt.ports import AdapterSpec, Capability, OutboundMessage
 
 if TYPE_CHECKING:
@@ -48,6 +53,10 @@ def post(client: httpx.Client, url: str, *, sink: str, content: bytes,
         raise NotificationDeliveryError(
             f"{sink} unreachable: {type(exc).__name__}", retryable=True, sink=sink,
             reason="transport",
+        ) from exc
+    except OutboundBlockedError as exc:
+        raise NotificationDeliveryError(
+            f"{sink}: {exc.message}", retryable=False, sink=sink, reason="outbound-blocked",
         ) from exc
     if response.status_code >= 300:
         raise NotificationDeliveryError(
@@ -175,7 +184,8 @@ class PagerDutySink:
 
 
 def http_client(settings: Settings) -> httpx.Client:
-    return httpx.Client(timeout=settings.notification_timeout_s, follow_redirects=False)
+    """A client checked against the outbound policy (core/outbound.py)."""
+    return OutboundPolicy.from_settings(settings).client(timeout=settings.notification_timeout_s)
 
 
 def _required(settings: Settings, key: str, adapter: str) -> Any:

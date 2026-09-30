@@ -13,6 +13,14 @@ from oran_adapt.core.config import Settings
 from oran_adapt.core.policies import GatePolicy
 from oran_adapt.db.migrate import upgrade_to_head
 
+# The suite drives the API far faster than any real caller: per-replica rate limits are off
+# unless a test sets them, and the outbound policy does not resolve names (hosts in tests are
+# placeholders; the SSRF tests resolve through a patched resolver).
+for _key, _value in (("API_RATE_LIMIT_PER_MINUTE", "0"),
+                     ("API_AUTH_FAILURE_LIMIT_PER_MINUTE", "0"),
+                     ("OUTBOUND_RESOLVE_HOSTS", "false")):
+    os.environ.setdefault(_key, _value)
+
 
 @pytest.fixture(autouse=True)
 def _isolate_mlflow_global_uris(monkeypatch) -> Iterator[None]:
