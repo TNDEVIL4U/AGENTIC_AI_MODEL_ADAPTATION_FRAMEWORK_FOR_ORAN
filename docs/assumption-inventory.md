@@ -169,3 +169,10 @@ registry of section 5: the job, stage, adapter and rollout metrics are recorded 
 (and forwarded from attempt processes), and each worker now serves them on
 `WORKER_METRICS_PORT`, scraped by the chart's PodMonitor, a kustomize port and the compose
 Prometheus. Before, only the API was scraped and the worker's metrics were never collected.
+
+**Closed in Hardening Phase 13** (`docs/PHASE13_REPORT.md`): the assumption that an adapter
+behaves like its port says because its own unit tests pass. Every installed adapter now runs
+its port's conformance suite, and the gate fails an adapter with no passing cases. Two adapters
+broke the contract and were fixed: an unreachable filesystem artifact root raised a raw
+`OSError`, and the native handler raised `FileExistsError`. The assumption that the gate and
+state-machine tests would catch a regression is now measured: the mutation score is 1.0.

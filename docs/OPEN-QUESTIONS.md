@@ -288,6 +288,21 @@ Defaults and assumptions, with the key that changes each:
 | The Grafana sidecar finds dashboards by `grafana_dashboard: "1"`. | The kube-prometheus-stack default. | `metrics.dashboards.label`, `metrics.dashboards.labelValue` |
 | **Unverified locally:** OTLP export, promtool, Grafana import, the PodMonitor in a cluster. | No collector, Prometheus, Grafana or cluster on the development laptop. | - |
 
+## Testing
+
+Hardening Phase 13 made the test suite a gate: a conformance suite per port that every installed
+adapter must pass, mutation testing of the validation gate and the job state machine, a scenario
+matrix, a skip policy and a testcontainers tier (`docs/testing.md`).
+
+| Assumption | Why | Key |
+|---|---|---|
+| An adapter without passing conformance cases fails the gate unless `EXEMPT` names an owner and an unexpired date. | No adapter is registered untested; an exemption is visible and dated. | `tests/unit/conformance_coverage.py` |
+| Only the gate and the state machine are mutated; the two latency timing helpers are not. | They decide promotions; a timing assertion would make the kill tests flaky. | `scripts/mutation.py` `TARGETS`, `NOT_MUTATED` |
+| An equivalent mutant needs a written reason and must still survive on its line. | A stale entry would hide a real survivor. | `scripts/mutation.py` `EQUIVALENT` |
+| Non-heavy scenario tests must finish in under 5 min on 2 workers. | The spec's budget and the laptop's worker cap. | - |
+| Every skip carries `[owner=... expires=YYYY-MM-DD]`; all current ones expire on 2027-03-31. | A skip is reviewed by a date, not forgotten. | edit the reason |
+| **Unverified locally:** the testcontainers tier (PostgreSQL, Kafka) and the heavy scenario tests. | No Docker daemon on the development laptop; CI's `containers` and `quality` jobs run them. | - |
+
 ## Not yet behind a port
 
 - **Sandbox backend** (`SANDBOX_BACKEND`, `subprocess` or `docker`): this is a fixed choice in

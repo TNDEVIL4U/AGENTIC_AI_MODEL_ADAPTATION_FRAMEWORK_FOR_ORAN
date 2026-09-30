@@ -34,7 +34,7 @@ pytestmark = [
         reason=(
             "requires the docker CLI, RUN_DOCKER_E2E=1, POSTGRES_PASSWORD "
             "and E2E_API_KEY set - this brings "
-            "up real containers and is not run by default"
+            "up real containers and is not run by default [owner=TNDEVIL4U expires=2027-03-31]"
         ),
     ),
 ]

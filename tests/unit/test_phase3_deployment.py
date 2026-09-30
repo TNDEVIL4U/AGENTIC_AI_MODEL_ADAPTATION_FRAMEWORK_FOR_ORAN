@@ -567,7 +567,8 @@ def _live(backend: str) -> Settings:
     keys = plugins.adapters("deployment")[backend].capability.required_keys
     missing = [k for k in keys if not os.environ.get(k.upper())]
     if missing:
-        pytest.skip(f"live {backend} run needs {', '.join(k.upper() for k in missing)}")
+        pytest.skip(f"live {backend} run needs {', '.join(k.upper() for k in missing)}"
+                    " [owner=TNDEVIL4U expires=2027-03-31]")
     return Settings(deployment_backend=backend)
 
 

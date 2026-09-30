@@ -366,7 +366,7 @@ def _render_template(out: Path, **names: str) -> Path:
     """Render templates/registry-adapter the way cookiecutter does; returns the project dir."""
     import json
 
-    jinja2 = pytest.importorskip("jinja2", reason="rendering the template needs jinja2")
+    jinja2 = pytest.importorskip("jinja2", reason="rendering the template needs jinja2 [owner=TNDEVIL4U expires=2027-03-31]")
     env = jinja2.Environment(keep_trailing_newline=True, undefined=jinja2.StrictUndefined)
     cc: dict[str, str] = {}
     for key, value in json.loads((TEMPLATE / "cookiecutter.json").read_text()).items():
@@ -413,7 +413,8 @@ def _live(backend: str) -> Settings:
     keys = plugins.adapters("registry")[backend].capability.required_keys
     missing = [k for k in keys if getattr(settings, k) in (None, "")]
     if missing:
-        pytest.skip(f"live {backend} run needs {', '.join(k.upper() for k in missing)}")
+        pytest.skip(f"live {backend} run needs {', '.join(k.upper() for k in missing)}"
+                    " [owner=TNDEVIL4U expires=2027-03-31]")
     return settings
 
 

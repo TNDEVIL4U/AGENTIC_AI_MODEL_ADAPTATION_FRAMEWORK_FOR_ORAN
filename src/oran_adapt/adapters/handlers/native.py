@@ -111,7 +111,11 @@ class NativeHandler:
 
     def save(self, model: object, framework: str, dst_dir: str) -> str:
         fw = _canonical(framework)
-        os.makedirs(dst_dir, exist_ok=False)
+        try:
+            os.makedirs(dst_dir, exist_ok=False)
+        except FileExistsError as exc:
+            raise ArtifactError("refusing to save into an existing directory",
+                                path=dst_dir) from exc
         target = os.path.join(dst_dir, _FILES[fw])
         manifest: dict[str, Any] = {"format": FORMAT, "framework": fw, "file": _FILES[fw]}
         try:

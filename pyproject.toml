@@ -120,6 +120,8 @@ prometheus = "oran_adapt.adapters.rollout_metrics:PROMETHEUS"
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "pytest-xdist>=3.8", "ruff"]
 # CDC_MODE=kafka (production CDC from Debezium). Not needed for the polling fallback.
 kafka = ["confluent-kafka>=2.3"]
+# tests/integration/test_testcontainers.py: real PostgreSQL and Kafka (CI job "containers").
+containers = ["testcontainers[postgres,kafka]>=4.8", "confluent-kafka>=2.3"]
 # ARTIFACT_STORE_BACKEND=fsspec; add the filesystem driver for the URL (s3fs, gcsfs, adlfs).
 object-store = ["fsspec>=2023.1"]
 # REGISTRY_BACKEND=sagemaker.

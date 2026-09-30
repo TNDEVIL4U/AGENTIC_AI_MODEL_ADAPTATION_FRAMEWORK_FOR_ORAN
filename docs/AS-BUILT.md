@@ -183,3 +183,9 @@ Phase 10, only when `LLM_ENABLED=true`, which also requires a provider) and that
   `WORKER_METRICS_PORT`. Log lines carry `trace_id`/`span_id` and are redacted. Dashboards live
   in `deploy/helm/oran-adapt/files/dashboards/`, and each of the 12 alerts has a runbook
   (`docs/operations/observability.md`).
+- **Since Hardening Phase 13:** conformance suites for `artifact_store`, `model_handler`,
+  `cdc_source`, `job_executor` and `policy` (`oran_adapt.conformance`), and every installed
+  adapter must pass its port's suite. The filesystem artifact store reports an unreachable root
+  as `RegistryUnavailableError`, and the native handler refuses an existing directory with
+  `ArtifactError`. The test suite gained mutation testing (`scripts/mutation.py`), a scenario
+  matrix, an owner-and-expiry skip policy and a testcontainers tier (`docs/testing.md`).

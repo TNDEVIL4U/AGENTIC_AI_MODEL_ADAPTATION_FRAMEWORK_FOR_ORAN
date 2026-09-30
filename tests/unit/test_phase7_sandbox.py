@@ -154,7 +154,7 @@ def test_run_in_sandbox_raises_on_timeout(tmp_path) -> None:
 
 @pytest.mark.skipif(
     sys.platform != "win32" and not sys.platform.startswith("linux"),
-    reason="the resident-memory watchdog reads RSS on Linux and Windows only",
+    reason="the resident-memory watchdog reads RSS on Linux and Windows only [owner=TNDEVIL4U expires=2027-03-31]",
 )
 def test_run_in_sandbox_enforces_memory_limit(tmp_path) -> None:
     # Written, not just reserved, memory - 16 MB at a time, up to 1.5 GB against a 600 MB limit -

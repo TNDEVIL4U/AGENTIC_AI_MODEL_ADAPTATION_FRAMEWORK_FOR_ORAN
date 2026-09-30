@@ -393,7 +393,7 @@ def test_trigger_sql_refuses_unsafe_identifiers() -> None:
 def test_polling_cdc_follows_a_table_with_its_own_columns(migrated_settings,
                                                          session_factory) -> None:
     if not migrated_settings.database_url.startswith("sqlite"):
-        pytest.skip("creates a SQLite source table")
+        pytest.skip("creates a SQLite source table [owner=TNDEVIL4U expires=2027-03-31]")
     with session_scope(session_factory) as s:
         s.execute(text("CREATE TABLE cell_kpi (sample_id INTEGER PRIMARY KEY, cell TEXT, "
                        "ts TEXT, prb_util REAL)"))

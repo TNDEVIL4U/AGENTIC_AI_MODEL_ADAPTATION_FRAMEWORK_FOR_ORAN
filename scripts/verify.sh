@@ -52,7 +52,9 @@ case "$phase" in
     10) scope="llm adapters.llm_providers conformance.llm decision.llm_selector" ;;  # LLM paths
     11) scope="core.liveness db.migrate" ;;  # packaging: liveness, schema status, migrations
     12) scope="core.logging orchestrator.jobs orchestrator.worker delivery.controller registry.deployment" ;;  # observability
-    13) scope="core api orchestrator registry" ;;         # test and conformance consolidation
+    # 13: the new suites and the mutation tests ("." also matches the space in "X import Y");
+    # the acceptance runs every conformance test, the scenario matrix and the skip policy.
+    13) scope="conformance.import.artifact_store core.import.state_machine" ;;
     14) scope="core api" ;;                               # documentation, migration, samples
     15) scope="core api orchestrator registry sandbox" ;;
     *) echo "unknown phase '$phase' (expected 1-15)" >&2; exit 2 ;;

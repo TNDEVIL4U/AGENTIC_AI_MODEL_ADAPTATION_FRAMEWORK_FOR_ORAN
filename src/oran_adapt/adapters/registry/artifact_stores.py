@@ -42,9 +42,10 @@ class FilesystemArtifactStore:
         if os.path.exists(target):
             raise ArtifactError(f"artifact key {key!r} already exists", key=key)
         parent = os.path.dirname(target)
-        os.makedirs(parent, exist_ok=True)
         staging = os.path.join(parent, f".staging-{uuid.uuid4().hex}")
         try:
+            # Inside the try: an unwritable or missing volume is the store being unavailable.
+            os.makedirs(parent, exist_ok=True)
             if os.path.isdir(local_path):
                 shutil.copytree(local_path, staging)
             else:

@@ -1,0 +1,262 @@
+{
+  "accuracy_all_rows": {
+    "candidate_value": 0.95,
+    "ci_high": 0.2128125,
+    "ci_low": 0.0875,
+    "confidence": 0.95,
+    "current_value": 0.8,
+    "delta": 0.15,
+    "guardrails": [],
+    "higher_is_better": true,
+    "metric": "accuracy",
+    "mode": "superiority",
+    "n_rows": 80,
+    "policy_hash": "e7c9b1d4fd5b0a8c69e2d658b49f6dfac75eedb0d6120b9a5c49a3ea3c60228d",
+    "policy_version": "1",
+    "reasons": [
+      "accuracy: candidate 0.9500 vs current 0.8000, improvement +0.1500 with 95% interval [+0.0875, +0.2128] passes superiority; all guardrails passed"
+    ],
+    "resamples": 200,
+    "test": "paired_bootstrap",
+    "threshold": 0.0,
+    "verdict": "ACCEPT"
+  },
+  "accuracy_slices": {
+    "candidate_value": 0.8,
+    "ci_high": -0.0875,
+    "ci_low": -0.2128125,
+    "confidence": 0.95,
+    "current_value": 0.95,
+    "delta": -0.15,
+    "guardrails": [
+      {
+        "detail": "regressed slices: A (worse by 0.1500 > 0.1000), B (worse by 0.1500 > 0.1000)",
+        "evaluated": true,
+        "name": "slice:cell",
+        "passed": false,
+        "values": {
+          "drop_by_slice": {
+            "A": 0.15,
+            "B": 0.15
+          }
+        }
+      }
+    ],
+    "higher_is_better": true,
+    "metric": "accuracy",
+    "mode": "superiority",
+    "n_rows": 80,
+    "policy_hash": "785c55d9e2b88c348481624e89789841c2a40090244e77c05231eb26610af07d",
+    "policy_version": "1",
+    "reasons": [
+      "accuracy: candidate 0.8000 vs current 0.9500, improvement -0.1500 with 95% interval [-0.2128, -0.0875]; superiority improvement interval must lie above 0.0000",
+      "guardrail slice:cell failed: regressed slices: A (worse by 0.1500 > 0.1000), B (worse by 0.1500 > 0.1000)"
+    ],
+    "resamples": 200,
+    "test": "paired_bootstrap",
+    "threshold": 0.0,
+    "verdict": "REJECT"
+  },
+  "accuracy_slices_pass": {
+    "candidate_value": 0.8,
+    "ci_high": -0.0875,
+    "ci_low": -0.2128125,
+    "confidence": 0.95,
+    "current_value": 0.95,
+    "delta": -0.15,
+    "guardrails": [
+      {
+        "detail": "3 slices within 0.5",
+        "evaluated": true,
+        "name": "slice:cell",
+        "passed": true,
+        "values": {
+          "drop_by_slice": {
+            "A": 0.148148,
+            "B": 0.148148,
+            "C": 0.153846
+          }
+        }
+      }
+    ],
+    "higher_is_better": true,
+    "metric": "accuracy",
+    "mode": "non_inferiority",
+    "n_rows": 80,
+    "policy_hash": "fd15598fae623ee0f1e741a2a0b273a3c0049322c98469dc6a2d4d211dd938e3",
+    "policy_version": "1",
+    "reasons": [
+      "accuracy: candidate 0.8000 vs current 0.9500, improvement -0.1500 with 95% interval [-0.2128, -0.0875] passes non_inferiority; all guardrails passed"
+    ],
+    "resamples": 200,
+    "test": "paired_bootstrap",
+    "threshold": -0.5,
+    "verdict": "ACCEPT"
+  },
+  "accuracy_slices_relative": {
+    "candidate_value": 0.625,
+    "ci_high": -0.1,
+    "ci_low": -0.275,
+    "confidence": 0.95,
+    "current_value": 0.8,
+    "delta": -0.175,
+    "guardrails": [
+      {
+        "detail": "regressed slices: A (worse by 0.1481 > 0.0778), B (worse by 0.1852 > 0.0815), C (worse by 0.1923 > 0.0808)",
+        "evaluated": true,
+        "name": "slice:cell",
+        "passed": false,
+        "values": {
+          "drop_by_slice": {
+            "A": 0.148148,
+            "B": 0.185185,
+            "C": 0.192308
+          }
+        }
+      }
+    ],
+    "higher_is_better": true,
+    "metric": "accuracy",
+    "mode": "non_inferiority",
+    "n_rows": 80,
+    "policy_hash": "effdd085af34904347ba193a40c57fe3625be1711fb2aa9e4386c0d310dc0939",
+    "policy_version": "1",
+    "reasons": [
+      "guardrail slice:cell failed: regressed slices: A (worse by 0.1481 > 0.0778), B (worse by 0.1852 > 0.0815), C (worse by 0.1923 > 0.0808)"
+    ],
+    "resamples": 200,
+    "test": "paired_bootstrap",
+    "threshold": -0.5,
+    "verdict": "REJECT"
+  },
+  "accuracy_subsampled": {
+    "candidate_value": 0.95,
+    "ci_high": 0.159166667,
+    "ci_low": 0.0,
+    "confidence": 0.95,
+    "current_value": 0.8,
+    "delta": 0.15,
+    "guardrails": [],
+    "higher_is_better": true,
+    "metric": "accuracy",
+    "mode": "superiority",
+    "n_rows": 80,
+    "policy_hash": "275afef3c59a9a0e5267ac42dff4e0208404ae721f1af8f349d2e314a3fd7f39",
+    "policy_version": "1",
+    "reasons": [
+      "accuracy: candidate 0.9500 vs current 0.8000, improvement +0.1500 with 95% interval [+0.0000, +0.1592]; superiority improvement interval must lie above 0.0000"
+    ],
+    "resamples": 130,
+    "test": "paired_bootstrap",
+    "threshold": 0.0,
+    "verdict": "REJECT"
+  },
+  "accuracy_superiority": {
+    "candidate_value": 0.95,
+    "ci_high": 0.2128125,
+    "ci_low": 0.0875,
+    "confidence": 0.95,
+    "current_value": 0.8,
+    "delta": 0.15,
+    "guardrails": [],
+    "higher_is_better": true,
+    "metric": "accuracy",
+    "mode": "superiority",
+    "n_rows": 80,
+    "policy_hash": "b0151b3719e2e2c8a9a28c4c4743cdaa70debe536e38bbd694ae86ed2dfb209e",
+    "policy_version": "1",
+    "reasons": [
+      "accuracy: candidate 0.9500 vs current 0.8000, improvement +0.1500 with 95% interval [+0.0875, +0.2128] passes superiority; all guardrails passed"
+    ],
+    "resamples": 200,
+    "test": "paired_bootstrap",
+    "threshold": 0.02,
+    "verdict": "ACCEPT"
+  },
+  "calibration": {
+    "candidate_value": 0.8,
+    "ci_high": -0.1246875,
+    "ci_low": -0.275,
+    "confidence": 0.95,
+    "current_value": 1.0,
+    "delta": -0.2,
+    "guardrails": [
+      {
+        "detail": "ECE rose by 0.0625 > 0.05",
+        "evaluated": true,
+        "name": "calibration",
+        "passed": false,
+        "values": {
+          "ece_candidate": 0.325328,
+          "ece_current": 0.262854
+        }
+      }
+    ],
+    "higher_is_better": true,
+    "metric": "accuracy",
+    "mode": "non_inferiority",
+    "n_rows": 80,
+    "policy_hash": "ec612cdc2aa39cec7e66d88380178d13d4cbdfedf35c4f2956e4ff3e7386d4e6",
+    "policy_version": "1",
+    "reasons": [
+      "accuracy: candidate 0.8000 vs current 1.0000, improvement -0.2000 with 95% interval [-0.2750, -0.1247]; non_inferiority improvement interval must not go below -0.0500",
+      "guardrail calibration failed: ECE rose by 0.0625 > 0.05"
+    ],
+    "resamples": 200,
+    "test": "paired_bootstrap",
+    "threshold": -0.05,
+    "verdict": "REJECT"
+  },
+  "rmse": {
+    "candidate_value": 0.281934562,
+    "ci_high": 0.570872711,
+    "ci_low": 0.343287423,
+    "confidence": 0.95,
+    "current_value": 0.736551211,
+    "delta": 0.454616649,
+    "guardrails": [],
+    "higher_is_better": false,
+    "metric": "rmse",
+    "mode": "superiority",
+    "n_rows": 80,
+    "policy_hash": "185a3c71eea047ec7038ae767d4e29c9a9d96b65cb35c2c64d1c53a3a5c42153",
+    "policy_version": "1",
+    "reasons": [
+      "rmse: candidate 0.2819 vs current 0.7366, improvement +0.4546 with 95% interval [+0.3433, +0.5709] passes superiority; all guardrails passed"
+    ],
+    "resamples": 200,
+    "test": "paired_bootstrap",
+    "threshold": 0.073655121,
+    "verdict": "ACCEPT"
+  },
+  "silhouette_pairwise": {
+    "candidate_value": 0.844879104,
+    "ci_high": 0.882705137,
+    "ci_low": 0.624785249,
+    "confidence": 0.95,
+    "current_value": 0.09853498,
+    "delta": 0.746344124,
+    "guardrails": [
+      {
+        "detail": "not applicable to this task's metric",
+        "evaluated": false,
+        "name": "slice:cell",
+        "passed": true,
+        "values": {}
+      }
+    ],
+    "higher_is_better": true,
+    "metric": "silhouette",
+    "mode": "superiority",
+    "n_rows": 80,
+    "policy_hash": "6a2418514e43c0d2559f209ca158822bd1b6519e92b884903d5e35f858ca6bd3",
+    "policy_version": "1",
+    "reasons": [
+      "silhouette: candidate 0.8449 vs current 0.0985, improvement +0.7463 with 95% interval [+0.6248, +0.8827] passes superiority; all guardrails passed"
+    ],
+    "resamples": 200,
+    "test": "paired_bootstrap",
+    "threshold": 0.0,
+    "verdict": "ACCEPT"
+  }
+}

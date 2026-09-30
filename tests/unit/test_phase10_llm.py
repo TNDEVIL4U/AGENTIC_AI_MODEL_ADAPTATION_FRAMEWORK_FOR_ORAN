@@ -563,7 +563,8 @@ def test_a_failed_llm_adaptation_retrains_instead_of_failing_the_job(
 # ---- live provider (off by default) ------------------------------------------------------------
 @pytest.mark.heavy
 @pytest.mark.skipif(os.environ.get("ORAN_LLM_LIVE") != "1",
-                    reason="live provider smoke: set ORAN_LLM_LIVE=1 and configure a provider")
+                    reason="live provider smoke: set ORAN_LLM_LIVE=1 and configure a provider"
+                           " [owner=TNDEVIL4U expires=2027-03-31]")
 def test_live_provider_smoke() -> None:
     settings = Settings()
     client = build_llm(settings)

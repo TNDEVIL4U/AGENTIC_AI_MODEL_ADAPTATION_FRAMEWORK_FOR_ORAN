@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
+import skip_policy
 from oran_adapt.api.app import create_app
 from oran_adapt.core.config import Settings
 from oran_adapt.core.policies import GatePolicy
@@ -82,12 +84,26 @@ def client(migrated_settings) -> Iterator[TestClient]:
         yield c
 
 
+def _enforce_skip_policy(report) -> None:
+    """An untagged or expired skip or xfail fails (tests/skip_policy.py)."""
+    if not report.skipped:
+        return
+    reason = getattr(report, "wasxfail", None)
+    if reason is None and isinstance(report.longrepr, tuple):
+        reason = str(report.longrepr[2])
+    broken = skip_policy.problem(reason, datetime.now(UTC).date())
+    if broken is not None:
+        report.outcome = "failed"
+        report.longrepr = f"skip policy: the skip reason {reason!r} {broken}"
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     """A failing sandbox run keeps the child's stderr in the error's context, which pytest never
     prints. Append its tail to the one-line failure summary so CI annotations show the cause."""
     outcome = yield
     report = outcome.get_result()
+    _enforce_skip_policy(report)
     excinfo = call.excinfo
     if not report.failed or excinfo is None:
         return
