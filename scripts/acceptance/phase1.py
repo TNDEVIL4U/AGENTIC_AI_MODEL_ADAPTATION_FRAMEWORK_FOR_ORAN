@@ -63,7 +63,8 @@ def production_refuses_defaulted_storage(tmp: Path) -> str:
 
 def examples_pass_lint(tmp: Path) -> str:
     assert EXAMPLES, "config/examples/*.toml is empty"
-    code, body = _cli(["config", "lint", *map(str, EXAMPLES)], tmp)
+    # From the repo root: the examples name their policy files relative to it (as phase 14 does).
+    code, body = _cli(["config", "lint", *map(str, EXAMPLES)], ROOT)
     assert code == 0, body
     return f"{len(EXAMPLES)} example(s) clean: {', '.join(p.name for p in EXAMPLES)}"
 

@@ -87,3 +87,17 @@ Everything in the header's list.
 
 `bash scripts/verify.sh 15`: **PASS in 207 s** (budget 300 s; 320 scoped and smoke tests
 passed, acceptance 5/5). The log is in the session's scratchpad (`verify15.log`).
+
+`bash scripts/verify.sh all` (the release check): **PASS in 682 s** (budget 3600 s). 861 tests
+passed, 5 skipped; acceptance 1-15 all passed; both audit scans passed. The first two runs
+found three stale checks, fixed before this run:
+
+- `test_phase15_api_security.py`: `WRITE_POLICY` lacked Phase 14's
+  `POST /adaptation/events/from/{mapper}` (role action `submit`, as the route declares);
+- `scripts/secret_scan.py` read the compose user `${POSTGRES_USER:-oran}` as user `${POSTGRES_USER`
+  with password `-oran}:${POSTGRES_PASSWORD}`. The user may now be a whole `${...}` placeholder;
+  a literal password is still caught. The fake credential in a Phase 12 log-redaction test got
+  the `secret-scan: allow` marker;
+- `scripts/acceptance/phase1.py` linted the example configs from an empty directory, so their
+  repo-relative `DELIVERY_POLICY_FILE` paths did not resolve. It lints from the repo root, as
+  Phase 14's acceptance does.

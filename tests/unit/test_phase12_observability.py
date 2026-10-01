@@ -272,7 +272,7 @@ def test_bootstrap_instruments_every_port_but_the_executor(migrated_settings, tm
 
 def test_logs_carry_trace_ids_and_no_secrets(traced) -> None:
     record = logging.LogRecord("t", logging.ERROR, __file__, 1,
-                               "retrying postgresql://app:hunter2@db/x with token=abc123", None,
+                               "retrying postgresql://app:hunter2@db/x with token=abc123", None,  # secret-scan: allow
                                None)
     with tracing.event_span("intake", "log-key"):
         TraceIdFilter().filter(record)

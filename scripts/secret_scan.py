@@ -40,8 +40,10 @@ PATTERNS: dict[str, re.Pattern[str]] = {
     "openai-api-key": re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9]{32,}\b"),
     "stripe-secret-key": re.compile(r"\b[sr]k_live_[A-Za-z0-9]{20,}\b"),
     "jwt": re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),
+    # The user may be a ${VAR} or ${VAR:-default} placeholder, whose ":" is not the separator.
     "url-with-password": re.compile(
-        r"\b[a-z][a-z0-9+.\-]*://[^\s:/@'\"]+:(?!\*\*\*|<|\$\{|%|\{)([^\s@/'\"]{6,})@[^\s'\"]+"
+        r"\b[a-z][a-z0-9+.\-]*://(?:\$\{[^}\s]*\}|[^\s:/@'\"${}]+)"
+        r":(?!\*\*\*|<|\$\{|%|\{)([^\s@/'\"]{6,})@[^\s'\"]+"
     ),
 }
 # Passwords in documentation URLs that are placeholders, not credentials.
