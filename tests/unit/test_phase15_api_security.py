@@ -8,22 +8,33 @@ import re
 
 from test_phase14_stage_b import KEYS, _h, secured, secured_settings
 
-from oran_adapt.api.security import DATA_ROLES, PROMOTE_ROLES, READ_ROLES, SUBMIT_ROLES
+from oran_adapt.api.security import ADMIN, DATA, PROMOTE, READ, SUBMIT
 from oran_adapt.core.enums import Role
 
 __all__ = ["secured", "secured_settings"]  # fixtures re-used from test_phase14_stage_b
 
 PUBLIC = {"/api/v1/health", "/api/v1/ready", "/api/v1/readiness", "/api/v1/metrics"}
 
-# Every state-changing route and the roles allowed to call it.
+# Every state-changing route and the policy action it requires.
 WRITE_POLICY = {
-    ("POST", "/api/v1/adaptation/events"): SUBMIT_ROLES,
-    ("POST", "/api/v1/datasets"): DATA_ROLES,
-    ("POST", "/api/v1/datasets/{dataset_id}/versions"): DATA_ROLES,
-    ("POST", "/api/v1/datasets/{dataset_id}/cdc/materialize"): DATA_ROLES,
-    ("POST", "/api/v1/models/attach"): DATA_ROLES,
-    ("POST", "/api/v1/models/{model_id}/rollback"): PROMOTE_ROLES,
+    ("POST", "/api/v1/adaptation/events"): SUBMIT,
+    ("POST", "/api/v1/adaptation/events/from/{mapper}"): SUBMIT,
+    ("POST", "/api/v1/adaptation/jobs/{job_id}/cancel"): SUBMIT,
+    ("POST", "/api/v1/datasets"): DATA,
+    ("POST", "/api/v1/datasets/{dataset_id}/versions"): DATA,
+    ("POST", "/api/v1/datasets/{dataset_id}/versions/{version}/verify"): DATA,
+    ("POST", "/api/v1/datasets/{dataset_id}/cdc/materialize"): DATA,
+    ("POST", "/api/v1/models/attach"): DATA,
+    ("POST", "/api/v1/models/{model_id}/rollback"): PROMOTE,
+    ("POST", "/api/v1/deliveries/redrive"): ADMIN,
+    ("POST", "/api/v1/deliveries/{delivery_id}/redrive"): ADMIN,
+    ("POST", "/api/v1/rollouts/{rollout_id}/approve"): PROMOTE,
+    ("POST", "/api/v1/rollouts/{rollout_id}/reject"): PROMOTE,
+    ("POST", "/api/v1/rollouts/{rollout_id}/observations"): SUBMIT,
 }
+
+# Read routes that need more than READ.
+PRIVILEGED_READS = {("GET", "/api/v1/config/effective"): ADMIN}
 
 ROLE_OF = {who: Role(spec.partition(":")[0]) for who, (_, spec) in KEYS.items()}
 
@@ -61,11 +72,12 @@ def test_every_protected_route_refuses_a_missing_or_wrong_key(secured) -> None:
             assert r.json()["code"] == "UNAUTHENTICATED"
 
 
-def test_each_role_reaches_exactly_the_routes_its_policy_allows(secured) -> None:
+def test_each_role_reaches_exactly_the_routes_its_policy_allows(secured, secured_settings) -> None:
     for method, path in _routes(secured.app):
         if path in PUBLIC:
             continue
-        allowed = WRITE_POLICY.get((method, path), READ_ROLES)
+        action = {**WRITE_POLICY, **PRIVILEGED_READS}.get((method, path), READ)
+        allowed = {Role(r) for r in secured_settings.policy_roles[action]}
         for who, role in ROLE_OF.items():
             # An empty body: allowed callers get past the role check and stop at validation
             # (422) or a missing resource (404); nothing is created.
@@ -78,7 +90,7 @@ def test_each_role_reaches_exactly_the_routes_its_policy_allows(secured) -> None
 
 
 def test_errors_are_structured_and_echo_no_input_or_secret(secured) -> None:
-    secret = "sk-ant-should-never-be-echoed"
+    secret = "sk-ant-should-never-be-echoed"  # secret-scan: allow
     r = secured.post(
         "/api/v1/adaptation/events",
         json={"model_id": 12345, "note": secret},

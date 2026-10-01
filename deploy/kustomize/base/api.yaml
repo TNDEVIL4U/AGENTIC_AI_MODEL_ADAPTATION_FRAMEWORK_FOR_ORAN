@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oran-adapt-api
+  labels: {app.kubernetes.io/component: api}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/component: api}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: api}
+    spec:
+      serviceAccountName: oran-adapt
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      terminationGracePeriodSeconds: 40
+      initContainers:
+        - name: wait-for-schema
+          image: oran-adapt-migrator
+          command: ["oran-adapt", "db", "wait"]
+          envFrom:
+            - configMapRef: {name: oran-adapt-config}
+            - secretRef: {name: oran-adapt-env}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      containers:
+        - name: api
+          image: oran-adapt-api
+          env:
+            - {name: UVICORN_PORT, value: "8000"}
+            - {name: UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN, value: "20"}
+          envFrom:
+            - configMapRef: {name: oran-adapt-config}
+            - secretRef: {name: oran-adapt-env}
+          ports: [{name: http, containerPort: 8000, protocol: TCP}]
+          startupProbe:
+            httpGet: {path: /api/v1/health, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: {path: /api/v1/health, port: http}
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            httpGet: {path: /api/v1/ready, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          lifecycle:
+            preStop:
+              exec: {command: ["sleep", "5"]}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 1Gi}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 2Gi}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oran-adapt-api
+  labels: {app.kubernetes.io/component: api}
+spec:
+  selector: {app.kubernetes.io/component: api}
+  ports: [{name: http, port: 80, targetPort: http, protocol: TCP}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: oran-adapt-api
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: oran-adapt-api}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: oran-adapt-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/component: api}

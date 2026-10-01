@@ -1,0 +1,9 @@
+{
+  "generated_at": "2026-03-01T12:00:00Z",
+  "detections": [
+    {"id": "det-001", "model": {"name": "cell-a-throughput", "version": "1"},
+     "drift": {"detected": true, "score": 0.3, "features": ["prb_util"]}},
+    {"id": "det-002", "model": {"name": "cell-b-throughput", "version": "4"},
+     "drift": {"detected": false, "score": 0.01, "features": []}}
+  ]
+}

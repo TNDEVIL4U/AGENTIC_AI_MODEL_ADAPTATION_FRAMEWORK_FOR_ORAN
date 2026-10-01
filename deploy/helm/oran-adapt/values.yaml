@@ -1,0 +1,159 @@
+# Defaults for the oran-adapt chart. Nothing here names an environment: registries, hosts,
+# namespaces, secret stores and node pools come from an environment's own values file
+# (examples/). values.schema.json validates every file; docs/operations/helm.md explains each key.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# One image per Dockerfile target. A digest, when set, wins over the tag (pin it in production).
+image:
+  registry: ""          # e.g. your registry host; empty means the runtime's default
+  tag: ""               # empty means the chart's appVersion
+  pullPolicy: IfNotPresent
+  api: {repository: oran-adapt-api, digest: ""}
+  worker: {repository: oran-adapt-worker, digest: ""}
+  migrator: {repository: oran-adapt-migrator, digest: ""}
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Settings shared by every pod, as environment variables (the keys of core/config.py). Non-secret
+# only: secrets come from `secrets` below.
+config:
+  env:
+    ENVIRONMENT: production
+    LOG_LEVEL: INFO
+    ARTIFACT_WORKDIR: /tmp/oran-adapt/artifacts
+
+# One ConfigMap per port whose adapter this release chooses (docs/adapters/). Each entry's env
+# holds the selector and that adapter's keys, e.g. registry: {env: {REGISTRY_BACKEND: mlflow}}.
+adapters: {}
+
+# Secret settings (DATABASE_URL, API keys, provider credentials). Either an existing Secret, or
+# an ExternalSecret (external-secrets.io) that syncs one from the operator's secret store.
+secrets:
+  existingSecret: ""
+  externalSecret:
+    enabled: false
+    refreshInterval: 1h
+    secretStoreRef: {kind: ClusterSecretStore, name: ""}
+    # env key -> {key: remote key, property: optional field}
+    data: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile: {type: RuntimeDefault}
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+# Size of the writable /tmp (emptyDir): artifacts, the worker's liveness file.
+tmpSizeLimit: 2Gi
+
+api:
+  replicas: 2
+  port: 8000
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 1Gi}
+  # SIGTERM -> uvicorn stops accepting and gives in-flight requests gracefulShutdownS; preStop
+  # first waits preStopSleepS so endpoints drop the pod before it stops accepting.
+  gracefulShutdownS: 20
+  preStopSleepS: 5
+  terminationGracePeriodS: 40
+  probes:
+    startup: {periodSeconds: 5, failureThreshold: 60}
+    liveness: {periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 4}
+    readiness: {periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 3}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  service:
+    type: ClusterIP
+    port: 80
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    minAvailable: 1
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []            # [{host: ..., paths: [{path: /api, pathType: Prefix}]}]
+    tls: []              # [{secretName: ..., hosts: [...]}]
+
+# One Deployment per entry. `classes` is the entry's JOB_WORKER_CLASSES (docs/adapters/job_queue.md).
+workers:
+  - name: default
+    classes: [default]
+    replicas: 1
+    resources:
+      requests: {cpu: "1", memory: 2Gi}
+      limits: {memory: 4Gi}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    env: {}
+worker:
+  healthFile: /tmp/oran-adapt/worker.alive
+  # WORKER_METRICS_PORT: each worker serves /metrics here (the job, queue, stage, adapter and
+  # rollout metrics); scraped by metrics.podMonitor.
+  metricsPort: 9100
+  # > JOB_DRAIN_TIMEOUT_S: a stopping worker requeues its job before it is killed.
+  terminationGracePeriodS: 60
+  probes:
+    liveness: {initialDelaySeconds: 30, periodSeconds: 30, timeoutSeconds: 20, failureThreshold: 3}
+  podAnnotations: {}
+
+migrations:
+  # The hook Job runs `oran-adapt db upgrade` before install and before every upgrade (the
+  # migrations are expand-only: docs/operations/migrations.md). Pods wait for the schema in an
+  # init container (`oran-adapt db wait`).
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  waitTimeoutS: 600
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 512Mi}
+
+networkPolicy:
+  enabled: true
+  # Peers allowed to reach the API (the ingress controller, the gateway): NetworkPolicyPeer list.
+  apiIngressFrom: []
+  # Peers allowed to scrape /metrics.
+  metricsFrom: []
+  # Egress rules for every pod (database, registry, serving, broker). Empty: egress unrestricted.
+  egress: []
+
+metrics:
+  path: /api/v1/metrics
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+  # Scrapes the workers' metrics port (worker.metricsPort).
+  podMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  # A ConfigMap of files/dashboards/*.json with the Grafana sidecar's discovery label.
+  dashboards:
+    enabled: false
+    label: grafana_dashboard
+    labelValue: "1"

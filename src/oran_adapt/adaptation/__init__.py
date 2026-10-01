@@ -7,11 +7,10 @@ from oran_adapt.adaptation.data import (
     load_data_version_frame,
     split_features_target,
 )
-from oran_adapt.adaptation.engines import EngineKind, run_engine, select_engine
+from oran_adapt.adaptation.engines import EngineKind, TorchBudget, run_engine, select_engine
 from oran_adapt.adaptation.finetune import fine_tune_sklearn
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
-from oran_adapt.adaptation.loaders import load_native_model
 from oran_adapt.adaptation.retrain import full_retrain
 from oran_adapt.adaptation.schemas import (
     CandidateModel,
@@ -27,6 +26,7 @@ __all__ = [
     "EngineKind",
     "ModelInspection",
     "SchemaCompatibility",
+    "TorchBudget",
     "adapt_via_llm",
     "assess_capability",
     "assess_schema_compatibility",
@@ -37,7 +37,6 @@ __all__ = [
     "full_retrain_torch",
     "inspect_model",
     "load_data_version_frame",
-    "load_native_model",
     "run_engine",
     "select_engine",
     "split_features_target",

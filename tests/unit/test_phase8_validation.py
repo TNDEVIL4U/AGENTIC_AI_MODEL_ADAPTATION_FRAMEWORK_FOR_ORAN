@@ -17,7 +17,10 @@ from oran_adapt.adaptation.schemas import CandidateModel
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import EngineKind
 from oran_adapt.core.errors import ValidationFailedError
+from oran_adapt.core.policies import GatePolicy
 from oran_adapt.validation.engine import validate_candidate
+
+pytestmark = pytest.mark.smoke
 
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
@@ -60,7 +63,12 @@ def _dump_candidate(
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(_env_file=None)
+    # A same-quality candidate passes only under a non-inferiority gate; the default
+    # superiority gate rejects it (test_phase7_gate_delivery).
+    return Settings(
+        _env_file=None,
+        gate_policy=GatePolicy(mode="non_inferiority", margin=0.05, margin_relative=True),
+    )
 
 
 class _AlwaysZero:

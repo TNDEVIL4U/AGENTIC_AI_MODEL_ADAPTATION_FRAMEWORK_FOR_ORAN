@@ -18,6 +18,7 @@ import pytest
 from sklearn.linear_model import LogisticRegression
 
 import oran_adapt.orchestrator.jobs as jobs_module
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.core.enums import AssociationRole, DataKind, JobStatus
 from oran_adapt.core.errors import ModelNotFoundError, RegistryUnavailableError
 from oran_adapt.core.schemas import DriftEvent
@@ -34,7 +35,6 @@ from oran_adapt.db.models import (
 )
 from oran_adapt.orchestrator.jobs import submit_adaptation_job
 from oran_adapt.orchestrator.schemas import JobResult
-from oran_adapt.registry.client import MlflowRegistry
 
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
@@ -51,7 +51,7 @@ def session_factory(migrated_settings):
 def registry(settings) -> MlflowRegistry:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 def _frame(n: int, *, prb_lo: float, prb_hi: float, prb_seed: int, rsrp_seed: int) -> pd.DataFrame:
@@ -122,6 +122,7 @@ def _seed_model(
 
 
 # ---- idempotency -----------------------------------------------------------------------------
+@pytest.mark.heavy
 def test_duplicate_event_is_deduplicated_without_rerunning(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -154,6 +155,7 @@ def test_duplicate_event_is_deduplicated_without_rerunning(
 
 
 # ---- concurrency -------------------------------------------------------------------------------
+@pytest.mark.heavy
 def test_concurrent_submissions_only_run_once(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -305,6 +307,7 @@ def test_thread_mode_job_exceeding_timeout_is_recorded_timed_out(
 
 
 # ---- end to end through the wrapper --------------------------------------------------------
+@pytest.mark.heavy
 def test_full_pipeline_via_job_manager_registers_and_records_events(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -341,6 +344,7 @@ def test_full_pipeline_via_job_manager_registers_and_records_events(
         assert transitions == list(pairwise(path))
         assert path[1:] == [
             "RECEIVED",
+            "QUEUED",
             "VALIDATING",
             "DATA_PREPARING",
             "EVALUATING_VERSIONS",
@@ -355,10 +359,11 @@ def test_full_pipeline_via_job_manager_registers_and_records_events(
 
 
 # ---- end to end through the HTTP API --------------------------------------------------------
+@pytest.mark.heavy
 def test_api_submit_event_and_idempotent_resubmit(client, migrated_settings) -> None:
     engine = create_db_engine(migrated_settings.database_url)
     api_session_factory = make_session_factory(engine)
-    api_registry = MlflowRegistry(migrated_settings.mlflow_tracking_uri)
+    api_registry = MlflowRegistry.from_settings(migrated_settings)
     mlflow.set_tracking_uri(migrated_settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(migrated_settings.mlflow_tracking_uri)
 
@@ -425,6 +430,7 @@ def _ghost_pipeline(session, event, settings, *, registry, llm_client, workdir):
     raise ModelNotFoundError("no such model", model="ghost-model")
 
 
+@pytest.mark.heavy
 def test_process_mode_timeout_kills_the_worker_and_records_timed_out(
     session_factory, migrated_settings, tmp_path, monkeypatch
 ) -> None:
@@ -464,6 +470,7 @@ def test_process_mode_timeout_kills_the_worker_and_records_timed_out(
         assert job.status == "TIMED_OUT"
 
 
+@pytest.mark.heavy
 def test_process_mode_retries_transient_failures_across_worker_processes(
     session_factory, migrated_settings, tmp_path, monkeypatch
 ) -> None:
@@ -489,6 +496,7 @@ def test_process_mode_retries_transient_failures_across_worker_processes(
     assert sum("retry" in m and "MLFLOW_UNAVAILABLE" in m for m in messages) == 2
 
 
+@pytest.mark.heavy
 def test_process_mode_keeps_the_error_class_and_context_of_a_worker_failure(
     session_factory, migrated_settings, tmp_path, monkeypatch
 ) -> None:

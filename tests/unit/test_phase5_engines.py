@@ -17,7 +17,7 @@ from oran_adapt.adaptation.data import (
     load_data_version_frame,
     split_features_target,
 )
-from oran_adapt.adaptation.engines import run_engine, select_engine
+from oran_adapt.adaptation.engines import TorchBudget, run_engine, select_engine
 from oran_adapt.adaptation.finetune import fine_tune_sklearn
 from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.retrain import full_retrain
@@ -26,10 +26,13 @@ from oran_adapt.core.errors import ArtifactError, UnsupportedAdaptationError
 from oran_adapt.db.base import create_db_engine, make_session_factory, session_scope
 from oran_adapt.db.models import DataRecord, DatasetMetadata, DataVersion
 
+pytestmark = pytest.mark.smoke
+
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
+BUDGET = TorchBudget(fine_tune_epochs=5, full_retrain_epochs=300, learning_rate=1e-2)
 
 
 def _rows(n: int, offset: int = 0) -> list[dict]:
@@ -243,7 +246,7 @@ def test_full_retrain_fit_failure_raises_artifact_error(session_factory, tmp_pat
         )
 
 
-# ---- fine-tuning: continues from existing weights, in place ------------------------------------
+# ---- fine-tuning: continues from existing weights, on a copy -----------------------------------
 def test_fine_tune_sklearn_continues_from_existing_weights(session_factory, tmp_path) -> None:
     X1, y1 = _fit_frame(session_factory, n=60)
     current = SGDClassifier(random_state=0).fit(X1, y1)
@@ -260,12 +263,14 @@ def test_fine_tune_sklearn_continues_from_existing_weights(session_factory, tmp_
         artifact_dir=str(tmp_path / "artifact"),
     )
 
-    # partial_fit mutates the same object in place - never a fresh clone.
-    assert not np.allclose(coef_before, current.coef_)
+    # partial_fit continues on a copy: the live model (which validation compares the candidate
+    # against) is untouched.
+    assert np.allclose(coef_before, current.coef_)
     assert candidate.artifact_path
     reloaded = joblib.load(candidate.artifact_path)
     # The saved artifact reflects the continued weights, not a reset/re-fit model.
-    assert np.allclose(reloaded.coef_, current.coef_)
+    assert not np.allclose(reloaded.coef_, coef_before)
+    assert reloaded.t_ > current.t_
     assert len(reloaded.predict(X2)) == len(X2)
 
 
@@ -303,6 +308,7 @@ def test_run_engine_sklearn_full_retrain_via_select_engine(session_factory, tmp_
         y=y,
         target_column=TARGET,
         artifact_dir=str(tmp_path / "artifact"),
+        torch_budget=BUDGET,
     )
     assert candidate.engine == EngineKind.SKLEARN_FULL_RETRAIN
     assert joblib.load(candidate.artifact_path) is not None
@@ -321,4 +327,5 @@ def test_run_engine_unimplemented_engine_raises_unsupported(tmp_path) -> None:
             y=None,
             target_column=TARGET,
             artifact_dir=str(tmp_path / "artifact"),
+            torch_budget=BUDGET,
         )

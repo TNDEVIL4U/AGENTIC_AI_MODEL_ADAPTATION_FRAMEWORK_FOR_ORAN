@@ -27,6 +27,7 @@ import pandas as pd
 import pytest
 from sklearn.linear_model import LogisticRegression
 
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.core.enums import AssociationRole, DataKind, EngineKind, Strategy
 from oran_adapt.core.errors import ModelNotFoundError
 from oran_adapt.core.schemas import DriftEvent
@@ -39,7 +40,6 @@ from oran_adapt.db.models import (
     ModelMetadata,
 )
 from oran_adapt.orchestrator.pipeline import run_adaptation_job
-from oran_adapt.registry.client import MlflowRegistry
 
 FEATURES = ["prb_util", "rsrp"]
 TARGET = "label"
@@ -81,10 +81,10 @@ def session_factory(migrated_settings):
 def registry(settings) -> MlflowRegistry:
     # mlflow.*.log_model (used by _seed_model below) only follows the *global* fluent tracking/
     # registry URI, which a previous test in this session may have left pointed elsewhere (e.g.
-    # via MlflowRegistry.register_candidate) - reset both explicitly so each test starts clean.
+    # via registry.publishing.register_candidate) - reset both explicitly so each test starts clean.
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 def _insert_version(session, dataset, *, version, kind, role, model_id, frame, start):
@@ -119,10 +119,12 @@ def _seed_model(
     historical: pd.DataFrame,
     drifted: pd.DataFrame,
     warm_start: bool,
+    pip_requirements: list[str] | None = None,
 ) -> None:
     clf = LogisticRegression(warm_start=warm_start).fit(historical[FEATURES], historical[TARGET])
     with mlflow.start_run():
-        mlflow.sklearn.log_model(clf, name="model", registered_model_name=mlflow_name)
+        mlflow.sklearn.log_model(clf, name="model", registered_model_name=mlflow_name,
+                                 pip_requirements=pip_requirements)
     registry.set_alias(mlflow_name, settings.live_alias, "1")
 
     with session_scope(session_factory) as session:
@@ -194,6 +196,7 @@ def test_orchestrator_reuse_results_in_no_action(session_factory, registry, migr
 
 
 # ---- scenario 2: large drift in a non-predictive feature -> FULL_RETRAINING -> REGISTERED ----
+@pytest.mark.heavy
 def test_orchestrator_full_retrain_registers_new_version(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -232,6 +235,7 @@ def test_orchestrator_full_retrain_registers_new_version(
 
 # ---- scenario 3: smaller drift -> FINE_TUNING selected, but the artifact only has warm_start
 # (no partial_fit) -> the built-in engine can't do it -> falls back to the LLM/sandbox adapter ---
+@pytest.mark.heavy
 def test_orchestrator_llm_sandbox_fallback_registers_new_version(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:

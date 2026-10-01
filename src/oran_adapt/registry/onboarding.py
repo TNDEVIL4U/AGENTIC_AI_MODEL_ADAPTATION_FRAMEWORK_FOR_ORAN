@@ -27,7 +27,8 @@ from oran_adapt.datastore.versioning import (
     link_model_data,
 )
 from oran_adapt.db.models import ModelMetadata
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import ModelHandlerPort, ModelRegistryPort
+from oran_adapt.registry.publishing import publish_model
 
 
 @dataclass
@@ -68,7 +69,8 @@ def _check_target(frame: pd.DataFrame, target_column: str) -> None:
 
 def onboard_model(
     session: Session,
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
+    handler: ModelHandlerPort,
     *,
     model_id: str,
     model: object,
@@ -80,7 +82,7 @@ def onboard_model(
     training_version: str = "v1",
     timestamp_column: str | None = None,
     mlflow_model_name: str | None = None,
-    live_alias: str = "live",
+    live_alias: str,
     drifted_frame: pd.DataFrame | None = None,
     drifted_version: str | None = None,
 ) -> OnboardResult:
@@ -118,10 +120,13 @@ def onboard_model(
     features = (
         training_frame.drop(columns=[timestamp_column]) if timestamp_column else training_frame
     )
-    version = registry.log_model(
+    version = publish_model(
+        registry,
+        handler,
         name,
         model,
         framework=framework,
+        workdir=None,
         tags={
             "oran.model_id": model_id,
             "data.dataset_id": dataset_id,
@@ -166,14 +171,14 @@ def onboard_model(
 
 def attach_existing_model(
     session: Session,
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     *,
     model_id: str,
     mlflow_model_name: str,
     framework: str,
     task_type: str,
     target_column: str,
-    live_alias: str = "live",
+    live_alias: str,
     version: str | None = None,
     dataset_id: str | None = None,
     training_version: str | None = None,

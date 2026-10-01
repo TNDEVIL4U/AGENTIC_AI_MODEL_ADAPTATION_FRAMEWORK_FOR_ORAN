@@ -1,11 +1,13 @@
 """Member 3 - full retraining engine: fit a fresh estimator with the current model's
 hyperparameters (sklearn.base.clone - never the fitted state) on the merged historical+drifted
 data, then save it to a local artifact path. Shared by SKLEARN_FULL_RETRAIN and
-XGBOOST_FULL_RETRAIN - both are scikit-learn-API estimators."""
+XGBOOST_FULL_RETRAIN - both are scikit-learn-API estimators - and by the boosting model type
+plugins, whose continued boosting passes the current booster through ``fit_kwargs``."""
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 
 import joblib
 import pandas as pd
@@ -13,14 +15,13 @@ from sklearn.base import clone
 from sklearn.metrics import accuracy_score, mean_squared_error
 
 from oran_adapt.adaptation.schemas import CandidateModel
-from oran_adapt.core.enums import EngineKind
 from oran_adapt.core.errors import ArtifactError
 
 
 def full_retrain(
     current_model: object,
     *,
-    engine: EngineKind,
+    engine: str,
     framework: str,
     X: pd.DataFrame,
     y: pd.Series,
@@ -28,10 +29,11 @@ def full_retrain(
     target_column: str,
     estimator_type: str,
     artifact_dir: str,
+    fit_kwargs: Mapping[str, object] | None = None,
 ) -> CandidateModel:
     fresh = clone(current_model)
     try:
-        fresh.fit(X, y)
+        fresh.fit(X, y, **(fit_kwargs or {}))
     except Exception as exc:
         raise ArtifactError(
             f"full retrain failed to fit {type(current_model).__name__}", cause=str(exc)

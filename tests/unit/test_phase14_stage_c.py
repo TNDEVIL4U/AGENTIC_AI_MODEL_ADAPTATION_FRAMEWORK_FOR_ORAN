@@ -21,10 +21,11 @@ from test_phase14_member1 import (  # shared seeding helpers (same test director
 )
 
 from oran_adapt import cli
+from oran_adapt.adapters.kafka_cdc import KafkaCdcSource
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
+from oran_adapt.bootstrap import build_cdc_source
 from oran_adapt.cdc import (
-    KafkaCdcSource,
     PollingCdcSource,
-    build_source,
     from_debezium,
     materialize_cdc,
     run_cdc_once,
@@ -47,7 +48,6 @@ from oran_adapt.db.models import (
     KpiSample,
     ModelVersionEvaluation,
 )
-from oran_adapt.registry.client import MlflowRegistry
 
 T0 = datetime(2026, 3, 1, tzinfo=UTC)
 
@@ -63,7 +63,7 @@ def registry(settings) -> MlflowRegistry:
 
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 @pytest.fixture
@@ -142,7 +142,7 @@ def test_cdc_events_materialize_into_immutable_versions(session_factory, polling
     run_cdc_once(session_factory, polling)
 
     with session_scope(session_factory) as s:
-        first = materialize_cdc(s, "kpi")
+        first = materialize_cdc(s, "kpi", max_tx_ids=1000)
     assert first is not None and first.kind == DataKind.CDC
     assert first.row_count == 2  # rows 1 and 2 remain; row 3 was deleted
     assert first.cdc_range["event_count"] == 5
@@ -158,7 +158,7 @@ def test_cdc_events_materialize_into_immutable_versions(session_factory, polling
         assert s.get(DataVersion, first.data_version_id).extra["deleted_keys"] == ["3"]
         assert all(e.data_version_id == first.data_version_id
                    for e in s.query(CdcEventRecord).all())
-        assert materialize_cdc(s, "kpi") is None  # nothing pending: harmless to repeat
+        assert materialize_cdc(s, "kpi", max_tx_ids=1000) is None  # nothing pending: harmless to repeat
 
     # Row 1 is deleted later: the next version chains to the first and records the deletion.
     with session_scope(session_factory) as s:
@@ -167,7 +167,7 @@ def test_cdc_events_materialize_into_immutable_versions(session_factory, polling
                         payload={"prb_util": 0.4, "rsrp": -95.0, "label": 0}))
     run_cdc_once(session_factory, polling)
     with session_scope(session_factory) as s:
-        second = materialize_cdc(s, "kpi")
+        second = materialize_cdc(s, "kpi", max_tx_ids=1000)
     assert second.parent_version == first.version and second.row_count == 1
 
     # CurrentData cleaning over both versions: row 1 is gone, row 2 kept once.
@@ -222,7 +222,7 @@ def _row(i, util, *, as_string=True):
 
 
 def test_debezium_envelopes_parse_into_cdc_events() -> None:
-    coords = {"topic": "oran.public.kpi_sample", "partition": 0}
+    coords = {"topic": "oran.public.kpi_sample", "partition": 0, "schema_ref": "kpi_sample/1"}
     ins = from_debezium(_debezium("c", None, _row(1, 0.5)), offset=10, **coords)
     assert ins.operation == CdcOperation.INSERT and ins.primary_key == "1"
     assert ins.new_value["payload"] == {"prb_util": 0.5, "rsrp": -90.0, "label": 1}
@@ -300,14 +300,18 @@ class _FakeConsumer:
 def test_kafka_consumer_commits_after_storing_and_skips_redeliveries(
     session_factory, migrated_settings
 ) -> None:
-    settings = migrated_settings.model_copy(update={"cdc_mode": "kafka"})
+    settings = migrated_settings.model_copy(
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092",
+                "cdc_kafka_topic": "oran.public.kpi_sample",
+                "cdc_consumer_group": "oran-adapt-cdc"}
+    )
     batch = [
         _Msg(_debezium("c", None, _row(1, 0.5), lsn=1), 0),
         _Msg(_debezium("u", _row(1, 0.5), _row(1, 0.7), lsn=2), 1),
         _Msg(None, 2),  # tombstone: acknowledged, not stored
     ]
     fake = _FakeConsumer([batch, batch])  # the second is a redelivery of the same messages
-    source = build_source(settings, kafka_consumer=fake)
+    source = KafkaCdcSource(settings, fake)
     assert isinstance(source, KafkaCdcSource) and fake.subscribed == [settings.cdc_kafka_topic]
     before = _sample("cdc_events_total", {"source": "debezium", "operation": "UPDATE"})
 
@@ -325,7 +329,11 @@ def test_kafka_consumer_commits_after_storing_and_skips_redeliveries(
 
 # ---- chaos: Kafka down, consumer failure ------------------------------------------------------
 def test_kafka_unavailable_stores_and_commits_nothing(session_factory, migrated_settings) -> None:
-    settings = migrated_settings.model_copy(update={"cdc_mode": "kafka"})
+    settings = migrated_settings.model_copy(
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092",
+                "cdc_kafka_topic": "oran.public.kpi_sample",
+                "cdc_consumer_group": "oran-adapt-cdc"}
+    )
     broken = _FakeConsumer([
         [_Msg(_debezium("c", None, _row(1, 0.5)), 0), _Msg(None, 1, error="_ALL_BROKERS_DOWN")],
         RuntimeError("KafkaException: _TRANSPORT"),
@@ -344,13 +352,15 @@ def test_kafka_mode_without_client_library_is_reported(migrated_settings, monkey
     import sys
 
     monkeypatch.setitem(sys.modules, "confluent_kafka", None)  # import fails
-    settings = migrated_settings.model_copy(update={"cdc_mode": "kafka"})
+    settings = migrated_settings.model_copy(
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092"}
+    )
     with pytest.raises(CdcUnavailableError, match="confluent-kafka"):
-        build_source(settings)
+        build_cdc_source(settings)
     with pytest.raises(CdcUnavailableError, match="disabled"):
-        build_source(migrated_settings)  # cdc_mode defaults to disabled
+        build_cdc_source(migrated_settings)  # cdc_mode defaults to disabled
     assert isinstance(
-        build_source(migrated_settings.model_copy(update={"cdc_mode": "polling"})),
+        build_cdc_source(migrated_settings.model_copy(update={"cdc_mode": "polling"})),
         PollingCdcSource,
     )
 
@@ -379,6 +389,7 @@ def test_consumer_failure_rolls_back_and_the_batch_is_redelivered(
 
 
 # ---- CurrentData persisted and traceable ------------------------------------------------------
+@pytest.mark.heavy
 def test_job_persists_current_data_and_every_score_refers_to_it(
     session_factory, registry, migrated_settings, client, tmp_path
 ) -> None:

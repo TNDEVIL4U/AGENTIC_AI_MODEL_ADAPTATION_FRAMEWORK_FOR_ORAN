@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from oran_adapt.analysis.schemas import (
     DataVersionRef,
     DecisionPackage,
@@ -20,6 +22,8 @@ from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.decision.constraints import evaluate_constraints
 from oran_adapt.decision.engine import decide
 from oran_adapt.decision.llm_selector import select_strategy_via_llm
+
+pytestmark = pytest.mark.smoke
 
 SETTINGS = Settings(_env_file=None)
 CAPS = {"fine_tuning": True, "full_retraining": True, "llm_adapter": False}

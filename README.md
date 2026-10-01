@@ -251,9 +251,10 @@ and wasn't verified.
 
 ## Known limitations
 
-- **Windows: no enforced sandbox memory ceiling.** `SANDBOX_MEMORY_MB` is only enforced on
-  POSIX (`resource.setrlimit`); on Windows the subprocess sandbox backend has a real wall-clock
-  timeout but no memory cap. Use `SANDBOX_BACKEND=docker` for an enforced limit on any OS.
+- **Soft sandbox memory ceiling.** The subprocess sandbox enforces `SANDBOX_MEMORY_MB` with a
+  watchdog that polls the child's resident memory (Linux and Windows; not enforced elsewhere)
+  and kills it past the limit, so a very fast spike can briefly overshoot. Use
+  `SANDBOX_BACKEND=docker` for a hard limit on any OS.
 - **A timed-out job's worker thread keeps running.** Python cannot forcibly kill a thread, so
   past `JOB_TIMEOUT_S` the caller is unblocked but the abandoned worker may still write a late
   result to the database after the client was told it failed — check `AdaptationJob.status`

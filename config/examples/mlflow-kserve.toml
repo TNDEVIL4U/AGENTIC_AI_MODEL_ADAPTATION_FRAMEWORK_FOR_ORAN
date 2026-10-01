@@ -1,0 +1,48 @@
+# MLflow registry + KServe serving: every promoted version becomes the storageUri of the model's
+# InferenceService; canaries use KServe's canaryTrafficPercent. Online metrics come from
+# Prometheus; drift arrives as Alertmanager webhooks (docs/integration-guide.md).
+# Secrets are NOT in this file: set K8S_TOKEN (or K8S_TOKEN_FILE, the pod's service-account token),
+# API_KEYS and ROLLOUT_PROMETHEUS_TOKEN in the environment or via SECRETS_BACKEND.
+# Use with:  ORAN_CONFIG_FILE=config/examples/mlflow-kserve.toml
+
+environment = "production"
+database_url = "postgresql+psycopg://oran@db.internal:5432/oran_adapt"
+mlflow_tracking_uri = "http://mlflow.internal:5000"
+artifact_workdir = "/var/lib/oran-adapt/artifacts"
+registry_backend = "mlflow"
+deployment_backend = "kserve"
+job_queue_backend = "database"
+delivery_strategy = "canary"
+delivery_policy_file = "config/policies/delivery.toml"
+
+[k8s]
+api_url = "https://kubernetes.default.svc"
+ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+namespace = "oran-models"
+name_prefix = "oran-"
+
+[kserve]
+storage_uri_template = "s3://mlflow-artifacts/models/{model}/{version}"
+model_format = "mlflow"
+
+[rollout_metrics]
+backend = "prometheus"
+
+[rollout_prometheus]
+url = "http://prometheus.monitoring:9090"
+requests_query = 'sum(increase(revision_request_count{service_name="oran-{model}",arm="{arm}"}[{window_s}s]))'
+
+[rollout_prometheus.queries]
+latency_p95_ms = 'histogram_quantile(0.95, sum(rate(revision_request_latencies_bucket{service_name="oran-{model}",arm="{arm}"}[5m])) by (le))'
+
+[drift_mappers]
+alertmanager = "config/mappers/alertmanager.toml"
+
+[auth]
+enabled = true
+backend = "api-key"
+
+[log]
+level = "INFO"
+json = true

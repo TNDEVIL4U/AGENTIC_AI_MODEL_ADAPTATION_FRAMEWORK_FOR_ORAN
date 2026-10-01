@@ -1,0 +1,29 @@
+# Development: one API replica, images loaded into the local cluster by tag, the Secret
+# `oran-adapt-env` created by hand (docs/operations/kustomize.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: oran-adapt-dev
+resources:
+  - ../../base
+images:
+  - {name: oran-adapt-api, newTag: dev}
+  - {name: oran-adapt-worker, newTag: dev}
+  - {name: oran-adapt-migrator, newTag: dev}
+configMapGenerator:
+  - name: oran-adapt-config
+    behavior: merge
+    literals:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+patches:
+  - target: {kind: HorizontalPodAutoscaler, name: oran-adapt-api}
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+  - target: {kind: PodDisruptionBudget, name: oran-adapt-api}
+    patch: |-
+      - op: replace
+        path: /spec/minAvailable
+        value: 0

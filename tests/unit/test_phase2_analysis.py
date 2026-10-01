@@ -25,6 +25,8 @@ from oran_adapt.db.models import (
     PerformanceRecord,
 )
 
+pytestmark = pytest.mark.smoke
+
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
@@ -127,7 +129,7 @@ def session_factory(migrated_settings):
 def test_retrieval_finds_model_and_both_slices(session_factory) -> None:
     _seed(session_factory)
     with session_scope(session_factory) as session:
-        ctx = retrieve_context(session, DriftEvent(model_id="ran-kpi-v1", drift_detected=True))
+        ctx = retrieve_context(session, DriftEvent(model_id="ran-kpi-v1", drift_detected=True), performance_limit=10)
     assert ctx.model.model_id == "ran-kpi-v1"
     assert ctx.historical is not None and ctx.historical.row_count == 30
     assert ctx.drifted is not None and ctx.drifted.row_count == 30
@@ -138,7 +140,7 @@ def test_retrieval_finds_model_and_both_slices(session_factory) -> None:
 
 def test_retrieval_raises_when_model_unknown(session_factory) -> None:
     with session_scope(session_factory) as session, pytest.raises(ModelNotFoundError) as ei:
-        retrieve_context(session, DriftEvent(model_id="does-not-exist", drift_detected=True))
+        retrieve_context(session, DriftEvent(model_id="does-not-exist", drift_detected=True), performance_limit=10)
     assert ei.value.code == "MODEL_NOT_FOUND"
 
 
@@ -146,7 +148,7 @@ def test_retrieval_returns_none_slices_when_no_data(session_factory) -> None:
     with session_scope(session_factory) as session:
         session.add(ModelMetadata(model_id="bare-model", mlflow_model_name="bare"))
     with session_scope(session_factory) as session:
-        ctx = retrieve_context(session, DriftEvent(model_id="bare-model", drift_detected=True))
+        ctx = retrieve_context(session, DriftEvent(model_id="bare-model", drift_detected=True), performance_limit=10)
     assert ctx.historical is None
     assert ctx.drifted is None
 
@@ -160,7 +162,7 @@ def test_retrieval_resolves_drifted_version_by_explicit_reference(session_factor
             dataset_id="kpi-ds",
             drifted_data_version="drift-1",
         )
-        ctx = retrieve_context(session, event)
+        ctx = retrieve_context(session, event, performance_limit=10)
     assert ctx.drifted is not None
     assert ctx.drifted.version == "drift-1"
 
@@ -294,7 +296,8 @@ def test_comparison_ignores_non_numeric_features() -> None:
 
 
 # ---- reuse ----------------------------------------------------------------------------------
-_THRESHOLDS = {"psi_threshold": 0.1, "ks_pvalue_threshold": 0.05, "drift_score_threshold": 0.3}
+_THRESHOLDS = {"psi_threshold": 0.1, "ks_pvalue_threshold": 0.05, "drift_score_threshold": 0.3,
+               "min_psi_rows": 30}
 
 
 def test_reuse_true_when_no_drift_detected() -> None:

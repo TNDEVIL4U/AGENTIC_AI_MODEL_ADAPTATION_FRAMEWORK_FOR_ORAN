@@ -1,14 +1,15 @@
 """Member 4 (validation) - scores a fitted model against a held-out validation set using the
 framework-appropriate prediction call, producing the same metric names the adaptation engines
 already report (accuracy for classifiers, rmse for regressors) so a candidate and V_current are
-directly comparable. The predictions come from the model's own framework; the primary accuracy
+directly comparable. The predictions come from the model's model type plugin
+(adaptation.model_types); the primary accuracy
 and RMSE scores are computed by Evidently AI, and the rest of the task's metric set (precision,
 F1, ROC-AUC, MAE, R2, sMAPE, silhouette, ...) by validation.metrics."""
 
 from __future__ import annotations
 
 import warnings
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -26,22 +27,9 @@ from oran_adapt.core.enums import TaskType
 from oran_adapt.core.errors import ValidationFailedError
 from oran_adapt.validation.metrics import compute_metrics, primary_metric, resolve_task
 
-_TORCH_LIKE = {"torch", "pytorch"}
-
-
-def _predict_sklearn_like(model: Any, X: pd.DataFrame):
-    return model.predict(X)
-
-
-def _predict_torch(model: Any, X: pd.DataFrame, estimator_type: str):
-    import torch
-
-    model.eval()
-    with torch.no_grad():
-        outputs = model(torch.tensor(X.to_numpy(), dtype=torch.float32))
-    if estimator_type == "classifier":
-        return outputs.argmax(dim=-1).numpy()
-    return outputs.squeeze(-1).numpy()
+if TYPE_CHECKING:
+    from oran_adapt.adaptation.model_types import ModelTypes
+    from oran_adapt.adaptation.schemas import ModelInspection
 
 
 def _evidently_score(y: pd.Series, predictions, estimator_type: str) -> dict[str, float]:
@@ -69,7 +57,7 @@ def _evidently_score(y: pd.Series, predictions, estimator_type: str) -> dict[str
     return {name: float(snapshot.dict()["metrics"][0]["value"])}
 
 
-def _scores(model: object, X: pd.DataFrame, y: pd.Series, task: TaskType):
+def _scores(model: Any, X: pd.DataFrame, y: pd.Series, task: TaskType):
     """The score input the task's ranking metrics need, or None: the positive-class probability
     of a binary classifier, or an anomaly score (higher = more anomalous)."""
     if task == TaskType.CLASSIFICATION and hasattr(model, "predict_proba"):
@@ -81,41 +69,67 @@ def _scores(model: object, X: pd.DataFrame, y: pd.Series, task: TaskType):
     return None
 
 
-def evaluate_model(
+def inspection_for(
+    model: object,
+    *,
+    framework: str,
+    estimator_type: str,
+    model_types: ModelTypes | None = None,
+) -> ModelInspection:
+    """The model's inspection with the task's estimator type: what ``predict`` dispatches on.
+    UnsupportedModelTypeError when no installed plugin handles the model."""
+    if model_types is None:
+        from oran_adapt.adaptation.model_types import default_model_types
+
+        model_types = default_model_types()
+    inspection = model_types.require(model, framework)
+    return inspection.model_copy(update={"estimator_type": estimator_type})
+
+
+def predict(
     model: object,
     X: pd.DataFrame,
     y: pd.Series | None,
     *,
     framework: str,
     estimator_type: str,
-    task_type: str | None = None,
-    y_train: pd.Series | None = None,
-) -> dict[str, float]:
-    """Score ``model`` on ``X``/``y`` with the metric set of its task (validation.metrics). The
-    task's primary metric comes first - that is the one reuse and validation compare on;
-    accuracy and RMSE are computed by Evidently. ``y`` may be None only for clustering.
+    task: TaskType,
+    model_types: ModelTypes | None = None,
+    inspection: ModelInspection | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """The model's predictions on ``X`` (through its model type plugin) and, when its task ranks
+    on one, its score (see ``_scores``). Raises UnsupportedModelTypeError if no plugin handles
+    the model, ValidationFailedError if it cannot predict at all."""
+    if model_types is None:
+        from oran_adapt.adaptation.model_types import default_model_types
 
-    Raises ValidationFailedError if the model can't produce predictions at all (that's a hard
-    validation failure, distinct from a merely worse score), if its task isn't scorable, or if
-    the primary metric is undefined on this data.
-    """
+        model_types = default_model_types()
+    if inspection is None:
+        inspection = inspection_for(
+            model, framework=framework, estimator_type=estimator_type, model_types=model_types
+        )
     try:
-        task = resolve_task(task_type, estimator_type)
-    except ValueError as exc:
-        raise ValidationFailedError(str(exc)) from exc
-    try:
-        if framework.lower() in _TORCH_LIKE:
-            predictions = _predict_torch(model, X, estimator_type)
-            score = None
-        else:
-            predictions = _predict_sklearn_like(model, X)
-            score = _scores(model, X, y, task) if y is not None else None
+        predictions = np.asarray(model_types.predict(model, X, inspection=inspection))
+        score = _scores(model, X, y, task) if y is not None else None
+        return predictions, None if score is None else np.asarray(score)
     except Exception as exc:
         raise ValidationFailedError(
             f"model failed to produce predictions on the validation set: {type(model).__name__}",
             cause=str(exc),
         ) from exc
 
+
+def score_predictions(
+    task: TaskType,
+    X: pd.DataFrame,
+    y: pd.Series | None,
+    predictions: np.ndarray,
+    score: np.ndarray | None,
+    *,
+    estimator_type: str,
+    y_train: pd.Series | None = None,
+) -> dict[str, float]:
+    """The task's metric set for given predictions, primary metric first (evaluate_model)."""
     scores = compute_metrics(task, y, predictions, y_score=score, X=X, y_train=y_train)
     primary = primary_metric(task)
     if task in (TaskType.CLASSIFICATION, TaskType.REGRESSION, TaskType.FORECASTING):
@@ -127,3 +141,45 @@ def evaluate_model(
             n_rows=len(X),
         )
     return {primary: scores[primary], **{k: v for k, v in scores.items() if k != primary}}
+
+
+def task_of(task_type: str | None, estimator_type: str) -> TaskType:
+    """resolve_task, with an unscorable task reported as a validation failure."""
+    try:
+        return resolve_task(task_type, estimator_type)
+    except ValueError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+
+
+def evaluate_model(
+    model: object,
+    X: pd.DataFrame,
+    y: pd.Series | None,
+    *,
+    framework: str,
+    estimator_type: str,
+    task_type: str | None = None,
+    y_train: pd.Series | None = None,
+    model_types: ModelTypes | None = None,
+) -> dict[str, float]:
+    """Score ``model`` on ``X``/``y`` with the metric set of its task (validation.metrics). The
+    task's primary metric comes first - that is the one reuse and validation compare on;
+    accuracy and RMSE are computed by Evidently. ``y`` may be None only for clustering.
+
+    Raises ValidationFailedError if the model can't produce predictions at all (that's a hard
+    validation failure, distinct from a merely worse score), if its task isn't scorable, or if
+    the primary metric is undefined on this data.
+    """
+    task = task_of(task_type, estimator_type)
+    predictions, score = predict(
+        model,
+        X,
+        y,
+        framework=framework,
+        estimator_type=estimator_type,
+        task=task,
+        model_types=model_types,
+    )
+    return score_predictions(
+        task, X, y, predictions, score, estimator_type=estimator_type, y_train=y_train
+    )

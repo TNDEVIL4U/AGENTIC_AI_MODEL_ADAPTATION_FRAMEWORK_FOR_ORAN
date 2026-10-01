@@ -33,7 +33,6 @@ from sklearn.linear_model import Ridge
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from oran_adapt.adaptation.loaders import load_native_model
 from oran_adapt.api.app import create_app
 from oran_adapt.core.config import Settings
 from oran_adapt.db.base import session_scope
@@ -88,6 +87,8 @@ def run() -> None:
         artifact_workdir=str(run_dir / "work"),
         log_json=False,
         auth_enabled=False,  # a local demo; see RUN.md section 3 for API keys
+        # One process, no worker: each submitted job runs inside its request.
+        job_queue_backend="inline",
     )
     print(f"Demo folder: {run_dir}")
     upgrade_to_head(settings.database_url)
@@ -108,6 +109,7 @@ def run() -> None:
             onboarded = onboard_model(
                 s,
                 app.state.registry,
+                app.state.model_handler,
                 model_id=MODEL_ID,
                 model=model,
                 framework="sklearn",
@@ -117,6 +119,7 @@ def run() -> None:
                 training_frame=historical,
                 drifted_frame=drifted,
                 drifted_version="drift-1",
+                live_alias=settings.live_alias,
             )
         view = client.get(f"/api/v1/models/{MODEL_ID}").json()
         check(view.get("live_version") == onboarded.model_version == "1", f"onboarding: {view}")
@@ -211,7 +214,7 @@ def run() -> None:
         local, _ = verify_version_artifact(
             app.state.registry, MODEL_ID.replace("-", "_"), new_version, str(run_dir / "predict")
         )
-        live_model = load_native_model(local, "sklearn")
+        live_model = app.state.model_handler.load(local, "sklearn")
         sample = drifted[FEATURES].tail(5)
         predictions = live_model.predict(sample)
         check(len(predictions) == 5 and np.isfinite(predictions).all(), "bad predictions")

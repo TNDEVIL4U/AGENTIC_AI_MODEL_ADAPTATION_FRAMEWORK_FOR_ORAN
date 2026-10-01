@@ -13,3 +13,4 @@ data/
 .claude/
 *.egg-info/
 reports/
+.serena/

@@ -43,6 +43,7 @@ def run(settings, monkeypatch, capsys):
     return _run
 
 
+@pytest.mark.heavy
 def test_cli_end_to_end(run, tmp_path):
     hist = _frame(200, seed=1)
     drift = _frame(200, shift=3, seed=2, start=T0 + timedelta(days=1))

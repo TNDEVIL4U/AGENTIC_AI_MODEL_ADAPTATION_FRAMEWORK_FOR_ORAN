@@ -1,0 +1,32 @@
+# Filesystem registry + NVIDIA Triton in explicit model-control mode: a promoted version is staged
+# into TRITON_REPOSITORY/<name>/<version> (a volume Triton also mounts) and loaded through the
+# KServe v2 repository API. Models must be in a Triton backend format (MODEL_FORMAT=native with
+# the onnx model type, for example). Set API_KEYS outside this file.
+# Use with:  ORAN_CONFIG_FILE=config/examples/triton.toml
+
+environment = "production"
+database_url = "postgresql+psycopg://oran@db.internal:5432/oran_adapt"
+artifact_workdir = "/var/lib/oran-adapt/artifacts"
+registry_backend = "filesystem"
+registry_fs_root = "/srv/oran-adapt/registry"
+artifact_store_backend = "filesystem"
+artifact_store_root = "/srv/oran-adapt/artifacts"
+model_format = "native"
+deployment_backend = "triton"
+delivery_strategy = "blue_green"
+delivery_policy_file = "config/policies/delivery.toml"
+
+[triton]
+url = "http://triton.internal:8000"
+repository = "/srv/triton/models"
+
+[drift_mappers]
+generic = "config/mappers/generic-json.toml"
+
+[auth]
+enabled = true
+backend = "api-key"
+
+[log]
+level = "INFO"
+json = true

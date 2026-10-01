@@ -1,30 +1,39 @@
-# Full oran-adapt stack: PostgreSQL (app data + CDC source), MLflow (registry, artifacts in MinIO),
-# Kafka + Debezium (production CDC), the API, the CDC consumer, and Prometheus.
+# Full oran-adapt stack: PostgreSQL (app data + CDC source), MLflow (registry; artifacts on a volume),
+# Kafka + Debezium (production CDC), the API, the job worker, the CDC consumer, and Prometheus.
 #
-#   cp .env.example .env      # then set POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD, API_KEYS, ...
-#   docker compose up -d --build
+#   export POSTGRES_PASSWORD=...   # or put it in .env (cp .env.example .env)
+#   docker compose up -d --build --wait
+#   bash scripts/ci/compose_smoke.sh   # what CI runs from a fresh clone
 #
-# Every image is pinned to a version tag; the two built here (api/cdc-consumer and mlflow) pin
-# their Python packages (requirements.lock, docker/mlflow/Dockerfile). Published ports bind to
-# 127.0.0.1 only. See docs/DEPLOYMENT.md and docs/CDC.md.
+# `migrate` applies the migrations once and exits; the API, the worker and the connector setup
+# start only after it succeeded (the API never migrates). Every pulled image is pinned by tag and
+# digest; the images built here pin their base by digest and their Python packages by
+# requirements.lock. Published ports bind to 127.0.0.1 only. See docs/DEPLOYMENT.md and
+# docs/CDC.md.
+#
+# Names, tags and published ports are variables with defaults (the compose section of
+# .env.example); service names (postgres, mlflow, kafka, ...) are this file's own topology.
 
 x-app: &app
-  build: .
-  image: oran-adapt:0.1.0
-  env_file: .env
+  env_file:
+    - path: .env
+      required: false  # a fresh clone runs on the defaults plus POSTGRES_PASSWORD
   environment: &app-env
-    DATABASE_URL: postgresql+psycopg://oran:${POSTGRES_PASSWORD}@postgres:5432/oran_adapt
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-oran}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-oran_adapt}
     MLFLOW_TRACKING_URI: http://mlflow:5000
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
   restart: unless-stopped
 
+x-migrated: &migrated
+  migrate: {condition: service_completed_successfully}
+
 services:
   postgres:
-    image: postgres:16.4-bookworm
+    image: postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412
     environment:
-      POSTGRES_USER: oran
+      POSTGRES_USER: ${POSTGRES_USER:-oran}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: oran_adapt
+      POSTGRES_DB: ${POSTGRES_DB:-oran_adapt}
     # Logical decoding for Debezium (pgoutput).
     command: ["postgres", "-c", "wal_level=logical", "-c", "max_wal_senders=4",
               "-c", "max_replication_slots=4"]
@@ -32,56 +41,32 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./deploy/postgres/init-mlflow.sql:/docker-entrypoint-initdb.d/10-mlflow.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U oran -d oran_adapt"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       retries: 20
     restart: unless-stopped
-
-  minio:
-    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-oran}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
-    volumes: [miniodata:/data]
-    ports: ["127.0.0.1:9001:9001"]  # console
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      retries: 20
-    restart: unless-stopped
-
-  minio-init:  # one-shot: create the MLflow artifact bucket
-    image: minio/mc:RELEASE.2024-11-21T17-21-54Z
-    depends_on: {minio: {condition: service_healthy}}
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-oran}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
-        && mc mb --ignore-existing local/mlflow
-    restart: "no"
 
   mlflow:
     build: docker/mlflow
-    image: oran-adapt-mlflow:3.16.1
+    image: oran-adapt-mlflow:${MLFLOW_IMAGE_TAG:-3.16.1}
     environment:
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-oran}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      MLFLOW_BACKEND_URI: postgresql+psycopg://oran:${POSTGRES_PASSWORD}@postgres:5432/mlflow
+      # The mlflow database is created by deploy/postgres/init-mlflow.sql; it is internal to
+      # this stack (only this service uses it).
+      MLFLOW_BACKEND_URI: postgresql+psycopg://${POSTGRES_USER:-oran}:${POSTGRES_PASSWORD}@postgres:5432/mlflow
+      MLFLOW_ALLOWED_HOSTS: ${MLFLOW_ALLOWED_HOSTS:-mlflow:5000,localhost:5000,127.0.0.1:5000}
     command:
       - sh
       - -c
       - exec mlflow server --host 0.0.0.0 --port 5000
         --backend-store-uri "$$MLFLOW_BACKEND_URI"
-        --artifacts-destination s3://mlflow --serve-artifacts
-        --allowed-hosts "mlflow:5000,localhost:5000,127.0.0.1:5000"
+        --artifacts-destination /mlartifacts --serve-artifacts
+        --allowed-hosts "$$MLFLOW_ALLOWED_HOSTS"
+    # Artifacts live on a named volume; --serve-artifacts proxies them, so clients need no
+    # storage credentials or shared filesystem.
+    volumes: [mlartifacts:/mlartifacts]
     depends_on:
       postgres: {condition: service_healthy}
-      minio-init: {condition: service_completed_successfully}
-    ports: ["127.0.0.1:5000:5000"]
+    ports: ["127.0.0.1:${MLFLOW_PORT:-5000}:5000"]
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=4)"]
@@ -91,7 +76,7 @@ services:
     restart: unless-stopped
 
   kafka:  # single-node KRaft broker (no ZooKeeper)
-    image: apache/kafka:3.8.0
+    image: apache/kafka:3.8.0@sha256:c89f315cff967322c5d2021434b32271393cb193aa7ec1d43e97341924e57069
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -113,24 +98,29 @@ services:
     restart: unless-stopped
 
   debezium:  # Kafka Connect with the Debezium PostgreSQL connector
-    image: quay.io/debezium/connect:2.7.3.Final
+    image: quay.io/debezium/connect:2.7.3.Final@sha256:a51bbb3a08d0de2cd56f76b956060bdaa3beb112ec13dac2668886b92dd5dd0b
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
-      GROUP_ID: oran-connect
-      CONFIG_STORAGE_TOPIC: oran_connect_configs
-      OFFSET_STORAGE_TOPIC: oran_connect_offsets
-      STATUS_STORAGE_TOPIC: oran_connect_statuses
+      GROUP_ID: ${CONNECT_GROUP_ID:-oran-connect}
+      CONFIG_STORAGE_TOPIC: ${CONNECT_TOPIC_PREFIX:-oran_connect}_configs
+      OFFSET_STORAGE_TOPIC: ${CONNECT_TOPIC_PREFIX:-oran_connect}_offsets
+      STATUS_STORAGE_TOPIC: ${CONNECT_TOPIC_PREFIX:-oran_connect}_statuses
       CONFIG_STORAGE_REPLICATION_FACTOR: 1
       OFFSET_STORAGE_REPLICATION_FACTOR: 1
       STATUS_STORAGE_REPLICATION_FACTOR: 1
-      # Lets the connector config say ${env:POSTGRES_PASSWORD} instead of holding the secret.
+      # Lets the connector config say ${env:POSTGRES_PASSWORD} instead of holding the secret,
+      # and take its database, table and topic names from the variables below.
       CONNECT_CONFIG_PROVIDERS: env
       CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-oran}
+      POSTGRES_DB: ${POSTGRES_DB:-oran_adapt}
+      CDC_TOPIC_PREFIX: ${CDC_TOPIC_PREFIX:-oran}
+      CDC_SOURCE_TABLE: ${CDC_SOURCE_TABLE:-kpi_sample}
     depends_on:
       kafka: {condition: service_healthy}
       postgres: {condition: service_healthy}
-    ports: ["127.0.0.1:8083:8083"]
+    ports: ["127.0.0.1:${CONNECT_PORT:-8083}:8083"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8083/connectors"]
       interval: 10s
@@ -138,47 +128,75 @@ services:
       retries: 20
     restart: unless-stopped
 
-  debezium-init:  # one-shot: create or update the kpi_sample connector (PUT is idempotent)
-    image: curlimages/curl:8.10.1
+  debezium-init:  # one-shot: create or update the CDC connector (PUT is idempotent)
+    image: curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b
     depends_on:
+      <<: *migrated  # the migrations create kpi_sample
       debezium: {condition: service_healthy}
-      api: {condition: service_healthy}  # the API runs the migrations that create kpi_sample
     volumes: ["./deploy/debezium/kpi-connector.json:/connector.json:ro"]
     command: ["-fsS", "-X", "PUT", "-H", "Content-Type: application/json",
               "--data", "@/connector.json",
-              "http://debezium:8083/connectors/oran-kpi-sample/config"]
+              "http://debezium:8083/connectors/${CDC_CONNECTOR_NAME:-oran-kpi-sample}/config"]
     restart: "no"
+
+  migrate:  # one-shot: `oran-adapt db upgrade` (expand-only migrations: docs/operations/migrations.md)
+    <<: *app
+    build: {context: ., target: migrator}
+    image: oran-adapt-migrator:${ORAN_ADAPT_VERSION:-0.1.0}
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
 
   api:
     <<: *app
-    ports: ["127.0.0.1:8000:8000"]
+    build: {context: ., target: api}
+    image: oran-adapt-api:${ORAN_ADAPT_VERSION:-0.1.0}
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
+    stop_grace_period: 30s  # > UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN
     depends_on:
-      postgres: {condition: service_healthy}
+      <<: *migrated
       mlflow: {condition: service_healthy}
 
   cdc-consumer:  # reads Debezium's topic into cdc_event (CDC_MODE=kafka)
     <<: *app
+    build: {context: ., target: worker}
+    image: oran-adapt-worker:${ORAN_ADAPT_VERSION:-0.1.0}
     environment:
       <<: *app-env
       CDC_MODE: kafka
+      CDC_KAFKA_TOPIC: ${CDC_TOPIC_PREFIX:-oran}.public.${CDC_SOURCE_TABLE:-kpi_sample}
+      CDC_POLLING_TABLE: ${CDC_SOURCE_TABLE:-kpi_sample}
+      CDC_CONSUMER_GROUP: ${CDC_CONSUMER_GROUP:-oran-adapt-cdc}
     command: ["oran-adapt", "cdc", "run", "--mode", "kafka"]
-    healthcheck: {disable: true}
+    healthcheck: {disable: true}  # the image's check is the job worker's liveness file
     depends_on:
-      api: {condition: service_healthy}
+      <<: *migrated
       kafka: {condition: service_healthy}
 
+  worker:  # claims and runs the adaptation jobs the API queues (docs/adapters/job_queue.md)
+    <<: *app
+    build: {context: ., target: worker}
+    image: oran-adapt-worker:${ORAN_ADAPT_VERSION:-0.1.0}
+    stop_grace_period: 45s  # > JOB_DRAIN_TIMEOUT_S: a stopping worker requeues its job
+    environment:
+      <<: *app-env
+      WORKER_METRICS_PORT: "9100"  # job, queue and rollout metrics; scraped by prometheus
+    depends_on:
+      <<: *migrated
+      mlflow: {condition: service_healthy}
+
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - promdata:/prometheus
-    ports: ["127.0.0.1:9090:9090"]
+    ports: ["127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"]
     depends_on:
       api: {condition: service_healthy}
     restart: unless-stopped
 
 volumes:
   pgdata:
-  miniodata:
+  mlartifacts:
   kafkadata:
   promdata:

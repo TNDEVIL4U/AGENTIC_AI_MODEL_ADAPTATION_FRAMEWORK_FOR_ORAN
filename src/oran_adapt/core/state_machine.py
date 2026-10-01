@@ -10,7 +10,10 @@ from oran_adapt.core.errors import InvalidTransitionError
 S = JobStatus
 
 _ALLOWED: dict[JobStatus, frozenset[JobStatus]] = {
-    S.RECEIVED: frozenset({S.VALIDATING, S.FAILED}),
+    # RECEIVED -> VALIDATING directly only for a row an older release left RECEIVED.
+    S.RECEIVED: frozenset({S.QUEUED, S.VALIDATING, S.FAILED}),
+    # A worker claimed it; FAILED when quarantined or out of retries while waiting.
+    S.QUEUED: frozenset({S.VALIDATING, S.FAILED}),
     S.VALIDATING: frozenset({S.DATA_PREPARING, S.FAILED}),
     # COMPLETED straight from data preparation: no drift confirmed, or not enough data.
     S.DATA_PREPARING: frozenset({S.EVALUATING_VERSIONS, S.DECISION_PENDING, S.COMPLETED, S.FAILED}),
@@ -24,18 +27,18 @@ _ALLOWED: dict[JobStatus, frozenset[JobStatus]] = {
     S.PROMOTING: frozenset({S.COMPLETED, S.ROLLED_BACK, S.FAILED}),
 }
 
-# A transient failure (MLflow / database unreachable) restarts the pipeline from data
-# preparation, from wherever it had got to.
-_RETRY_TARGET = S.DATA_PREPARING
+# A transient failure (MLflow / database unreachable, a worker that died or lost its lease)
+# puts the job back in the queue from wherever it had got to; the next attempt starts over.
+_RETRY_TARGET = S.QUEUED
 
 
 def allowed_next(status: JobStatus) -> frozenset[JobStatus]:
     if status in TERMINAL_STATUSES:
         return frozenset()
     nxt = set(_ALLOWED.get(status, frozenset({S.FAILED})))
-    # A timeout can strike at any stage that is still running.
-    nxt.add(S.TIMED_OUT)
-    if status not in (S.RECEIVED, S.VALIDATING):
+    # A deadline and a cancel request can strike at any stage that has not ended.
+    nxt.update({S.TIMED_OUT, S.CANCELLED})
+    if status not in (S.RECEIVED, S.QUEUED):
         nxt.add(_RETRY_TARGET)
     return frozenset(nxt)
 

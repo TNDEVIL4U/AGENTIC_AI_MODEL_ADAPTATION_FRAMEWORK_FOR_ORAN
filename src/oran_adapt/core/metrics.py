@@ -62,6 +62,43 @@ CDC_PROCESSING_LAG = Gauge(
 )
 LLM_REQUESTS = Counter("llm_requests_total", "Calls made to the LLM provider.", ["provider"])
 LLM_FAILURES = Counter("llm_failures_total", "LLM calls that failed.", ["provider"])
+# Fallback reasons are a closed set (llm.calls.FALLBACK_* and LlmUnavailableError.reason).
+LLM_FALLBACKS = Counter(
+    "llm_fallbacks_total",
+    "Decisions and adaptations the deterministic rules made because the LLM path failed.",
+    ["reason"],
+)
+LLM_TOKENS = Counter(
+    "llm_tokens_total", "Tokens sent to and received from the LLM.", ["provider", "direction"]
+)
+LLM_COST = Counter("llm_cost_total", "LLM spend in the LLM_COST_* currency.", ["provider"])
+LLM_REFUSED = Counter(
+    "llm_calls_refused_total",
+    "LLM calls refused before sending (circuit open, over a cap).",
+    ["provider", "reason"],
+)
+LLM_CIRCUIT_OPEN = Gauge(
+    "llm_circuit_open", "1 while the LLM circuit breaker is open (this process).", ["provider"]
+)
+# Notification sink labels come from NOTIFICATION_BACKEND, a short configured list.
+NOTIFICATION_EVENTS = Counter(
+    "notification_events_total", "Events written to the notification outbox.", ["event_type"]
+)
+NOTIFICATION_DELIVERIES = Counter(
+    "notification_deliveries_total",
+    "Notification delivery attempts by sink and outcome (delivered, retry, dead).",
+    ["sink", "outcome"],
+)
+NOTIFICATION_DELIVERY_DURATION = Histogram(
+    "notification_delivery_duration_seconds", "Time a sink took to take a message.", ["sink"],
+    buckets=_EVAL_BUCKETS,
+)
+NOTIFICATION_BACKLOG = Gauge(
+    "notification_backlog", "Deliveries waiting (PENDING) or dead-lettered (DEAD).", ["status"]
+)
+NOTIFICATION_CIRCUIT_OPEN = Gauge(
+    "notification_circuit_open", "1 while a sink's circuit breaker is open.", ["sink"]
+)
 SANDBOX_FAILURES = Counter(
     "sandbox_failures_total",
     "Generated adapters refused by the code scan or failing inside the sandbox.",
@@ -87,10 +124,124 @@ REGISTRATIONS = Counter("model_registrations_total", "Candidate model versions r
 PROMOTIONS = Counter(
     "model_promotions_total", "Live-alias moves applied, by kind (promotion, reuse, rollback).", ["kind"]
 )
+DEPLOYMENTS = Counter(
+    "model_deployments_total",
+    "Rollouts to the serving system (DEPLOYMENT_BACKEND), by outcome: ok (read back as serving) "
+    "or failed (previous version restored).",
+    ["backend", "outcome"],
+)
+TRAFFIC_SPLITS = Counter(
+    "traffic_splits_total",
+    "Traffic split changes (canary and A/B rollouts), by outcome: ok (read back) or failed.",
+    ["backend", "outcome"],
+)
+GATE_DECISIONS = Counter(
+    "gate_decisions_total",
+    "Validation gate verdicts, by verdict (ACCEPT, REJECT) and gate mode.",
+    ["verdict", "mode"],
+)
+ROLLOUTS_STARTED = Counter(
+    "rollouts_started_total", "Progressive rollouts started, by strategy.", ["strategy"]
+)
+ROLLOUTS_FINISHED = Counter(
+    "rollouts_finished_total",
+    "Progressive rollouts ended, by strategy and final state (PROMOTED, ROLLED_BACK, "
+    "EXPIRED, REJECTED).",
+    ["strategy", "state"],
+)
+ROLLOUTS_ACTIVE = Gauge(
+    "rollouts_active", "Rollouts not yet ended, by state (set on every tick).", ["state"]
+)
 JOB_TIMEOUTS = Counter(
     "job_timeouts_total",
     "Adaptation jobs recorded TIMED_OUT, by the stage their worker had reached when killed.",
     ["stage"],
+)
+JOB_QUEUE_DEPTH = Gauge(
+    "job_queue_depth",
+    "Jobs QUEUED and not quarantined, by worker class (set by the reaper).",
+    ["worker_class"],
+)
+JOB_QUEUE_OLDEST_AGE = Gauge(
+    "job_queue_oldest_age_seconds",
+    "Age of the oldest QUEUED job, by worker class (set by the reaper).",
+    ["worker_class"],
+)
+JOB_REQUEUES = Counter(
+    "job_requeues_total",
+    "Jobs put back in the queue, by reason: retry (transient error), lost (worker died), "
+    "lease_expired (found by the reaper) or drained (worker shut down).",
+    ["reason"],
+)
+JOB_QUARANTINED = Counter(
+    "job_quarantined_total",
+    "Poison jobs quarantined after JOB_POISON_THRESHOLD attempts without an outcome.",
+)
+JOB_CANCELLED = Counter(
+    "job_cancelled_total",
+    "Jobs recorded CANCELLED, by where the cancel found them: queued or running.",
+    ["where"],
+)
+DATASET_ROWS_READ = Counter(
+    "dataset_rows_read_total",
+    "Data rows read for analysis and training, by how the version stores them "
+    "(rows, reference, derived).",
+    ["storage"],
+)
+DATASET_BYTES_READ = Counter(
+    "dataset_bytes_read_total",
+    "Bytes read from referenced data objects, by URI scheme.",
+    ["scheme"],
+)
+DATASET_READ_DURATION = Histogram(
+    "dataset_read_duration_seconds",
+    "Time to read one data version's rows, by how the version stores them.",
+    ["storage"],
+    buckets=_EVAL_BUCKETS,
+)
+DATASET_READ_REFUSED = Counter(
+    "dataset_read_refused_total",
+    "Data reads refused, by reason: too_large (over DATASET_MAX_ROWS or "
+    "DATASET_MAX_SOURCE_BYTES), changed (the referenced object no longer matches) or "
+    "not_allowed (URI outside the configured allow-lists).",
+    ["reason"],
+)
+STAGE_DURATION = Histogram(
+    "adaptation_stage_duration_seconds",
+    "Time a job attempt spent in each pipeline stage, by stage and outcome (ok, error).",
+    ["stage", "outcome"],
+    buckets=_JOB_BUCKETS,
+)
+# Adapter calls (core.observed): the port, the adapter name the configuration chose and the
+# port method - three closed sets, so the series stay bounded.
+_ADAPTER_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300)
+ADAPTER_CALL_DURATION = Histogram(
+    "adapter_call_duration_seconds",
+    "Latency of calls to a port's adapter, by port, adapter and operation.",
+    ["port", "adapter", "operation"],
+    buckets=_ADAPTER_BUCKETS,
+)
+ADAPTER_ERRORS = Counter(
+    "adapter_errors_total",
+    "Adapter calls that raised, by port, adapter, operation and error code (the AdaptationError "
+    "code, else UNEXPECTED).",
+    ["port", "adapter", "operation", "code"],
+)
+ROLLOUT_STEPS = Counter(
+    "rollout_steps_total",
+    "Rollout transitions that did not end the rollout (canary steps, shadow to canary, "
+    "approval waits), by strategy and the state entered.",
+    ["strategy", "state"],
+)
+DELIVERY_FAILURES = Counter(
+    "delivery_failures_total",
+    "Progressive delivery steps that could not complete, by strategy and reason: first_split "
+    "(the first traffic change did not read back), serving (a split or undo failed), metrics "
+    "(the rollout metrics source was unavailable), promotion (LIVE could not move).",
+    ["strategy", "reason"],
+)
+WORKER_INFO = Gauge(
+    "worker_up", "1 while this worker process serves its metrics port.", ["worker_class"]
 )
 
 # The metrics a job's worker process can move. A worker runs in its own process with its own
@@ -101,6 +252,11 @@ _FORWARDED = (
     STRATEGY_SELECTED,
     REGISTRATIONS,
     PROMOTIONS,
+    DEPLOYMENTS,
+    TRAFFIC_SPLITS,
+    GATE_DECISIONS,
+    ROLLOUTS_STARTED,
+    ROLLOUTS_FINISHED,
     MODEL_REUSE,
     FINE_TUNE,
     RETRAIN,
@@ -110,7 +266,20 @@ _FORWARDED = (
     CDC_EVENTS,
     LLM_REQUESTS,
     LLM_FAILURES,
+    LLM_FALLBACKS,
+    LLM_TOKENS,
+    LLM_COST,
+    LLM_REFUSED,
     SANDBOX_FAILURES,
+    DATASET_ROWS_READ,
+    DATASET_BYTES_READ,
+    DATASET_READ_DURATION,
+    DATASET_READ_REFUSED,
+    STAGE_DURATION,
+    ADAPTER_CALL_DURATION,
+    ADAPTER_ERRORS,
+    ROLLOUT_STEPS,
+    DELIVERY_FAILURES,
 )
 _BY_NAME = {family.name: metric for metric in _FORWARDED for family in metric.describe()}
 
@@ -173,6 +342,14 @@ def apply_delta(delta: MetricDelta) -> None:
                 child._buckets[i].inc(count - cumulative)
             cumulative = max(cumulative, count)
         child._sum.inc(entry["sum"])
+
+
+def serve(port: int, addr: str = "") -> None:
+    """Serve this process's metrics on ``port`` (a worker: WORKER_METRICS_PORT), in a daemon
+    thread that ends with the process."""
+    from prometheus_client import start_http_server
+
+    start_http_server(port, addr=addr)
 
 
 def render() -> tuple[bytes, str]:

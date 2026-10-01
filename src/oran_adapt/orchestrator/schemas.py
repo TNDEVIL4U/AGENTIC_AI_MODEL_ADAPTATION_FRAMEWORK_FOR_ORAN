@@ -19,7 +19,13 @@ class JobResult(BaseModel):
     model_id: str
     # REUSED: an existing version went live, nothing trained. ROLLED_BACK: a validated
     # candidate was registered but moving LIVE to it failed, and LIVE was restored.
-    outcome: Literal["NO_ACTION", "REUSED", "REGISTERED", "REJECTED", "ROLLED_BACK"]
+    # DELIVERING: a validated candidate was registered and its progressive rollout started
+    # (``rollout``); LIVE moves only when the rollout promotes it. ROLLOUT_IN_PROGRESS: the
+    # model already has a rollout running, so this event started no adaptation.
+    outcome: Literal[
+        "NO_ACTION", "REUSED", "REGISTERED", "REJECTED", "ROLLED_BACK", "DELIVERING",
+        "ROLLOUT_IN_PROGRESS",
+    ]
     reason: str
     strategy: Strategy | None = None
     decision: Decision | None = None
@@ -39,3 +45,8 @@ class JobResult(BaseModel):
     # What the leakage checks found and removed before training (None when nothing trained).
     leakage: LeakageReport | None = None
     promotion: dict | None = None
+    # The rollout this job started (DELIVERING) or found running (ROLLOUT_IN_PROGRESS).
+    rollout: dict | None = None
+    # Every LLM call this job made (llm.calls.LlmCall): prompt id, version and SHA-256,
+    # outcome or fallback reason, provider, tokens and cost. Empty when the LLM is disabled.
+    llm_calls: list[dict] = Field(default_factory=list)

@@ -18,7 +18,8 @@ from oran_adapt.sandbox.runner import run_in_docker
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI is not installed on this host"),
+    pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI is not installed on this host"
+                       " [owner=TNDEVIL4U expires=2027-03-31]"),
 ]
 
 _IMAGE = "oran-adapt-sandbox:test"

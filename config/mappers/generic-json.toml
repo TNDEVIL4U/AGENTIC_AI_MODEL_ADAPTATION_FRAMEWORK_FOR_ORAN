@@ -1,0 +1,24 @@
+# Any JSON monitoring payload -> DriftEvents: copy this file and point the paths at your
+# document. This example reads {"detections": [{"model": {...}, "drift": {...}, "id": ...}]}.
+# Path syntax: dotted keys; name[key=value] picks a list element; a leading "/" reads from the
+# payload root instead of the record.
+version = "1"
+description = "Example of a custom monitor's JSON; adapt the paths"
+records = "detections"
+
+[where]
+"drift.detected" = "true"
+
+[fields]
+model_id = "model.name"
+model_version = "model.version"
+drift_score = "drift.score"
+affected_features = "drift.features"
+detected_at = "/generated_at"
+
+[constants]
+drift_type = "feature"
+
+[event_id]
+parts = ["id"]
+separator = ""

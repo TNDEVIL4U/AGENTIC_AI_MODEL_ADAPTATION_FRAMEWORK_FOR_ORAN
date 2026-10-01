@@ -15,6 +15,8 @@ from oran_adapt.core.errors import SandboxExecutionError, UnsafeCodeError
 from oran_adapt.sandbox import runner
 from oran_adapt.sandbox.security import check_code_safety
 
+pytestmark = pytest.mark.smoke
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # One probe per Rule 9 category.
@@ -83,8 +85,9 @@ def test_the_subprocess_sandbox_inherits_no_secrets(monkeypatch) -> None:
 
     env = runner._sandbox_env()
 
-    assert set(env) <= set(runner._INHERITED_ENV_VARS)
+    assert set(env) <= set(runner._INHERITED_ENV_VARS) | set(runner._SINGLE_THREAD_ENV)
     assert "secret" not in " ".join(env.values())
+    assert env["OPENBLAS_NUM_THREADS"] == "1"
 
 
 def test_the_docker_backend_runs_isolated(tmp_path, monkeypatch) -> None:
@@ -121,6 +124,45 @@ def test_the_docker_backend_runs_isolated(tmp_path, monkeypatch) -> None:
         assert flag in joined
     assert "-e" not in cmd and "--env" not in cmd and "--privileged" not in cmd
     assert f"{os.path.abspath(tmp_path)}:/sandbox" in cmd
+
+
+def test_the_docker_backend_takes_its_limits_from_settings(tmp_path, monkeypatch) -> None:
+    # Non-default values, so a literal left in the runner cannot pass. The first call (docker
+    # run) times out, which makes the runner remove the container with the cleanup timeout.
+    limits = runner.SandboxLimits(
+        manifest_max_bytes=4096,
+        docker_pids_limit=7,
+        docker_cpus=0.5,
+        docker_tmpfs_mb=16,
+        docker_cleanup_timeout_s=3.0,
+    )
+    calls: list[tuple[list[str], dict]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    with pytest.raises(SandboxExecutionError):
+        runner.run_in_docker(
+            "result = current_model",
+            current_model=None,
+            X=pd.DataFrame({"a": [1.0]}),
+            y=pd.Series([1.0]),
+            timeout_s=5,
+            memory_mb=256,
+            workdir=str(tmp_path),
+            image="oran-adapt-sandbox:latest",
+            limits=limits,
+        )
+
+    joined = " ".join(calls[0][0])
+    assert "--pids-limit 7" in joined and "--cpus 0.5" in joined and "size=16m" in joined
+    rm_cmd, rm_kwargs = calls[1]
+    assert rm_cmd[:3] == ["docker", "rm", "-f"]
+    assert rm_kwargs["timeout"] == 3.0
 
 
 def test_the_sandbox_image_runs_as_non_root_and_holds_no_project_code() -> None:

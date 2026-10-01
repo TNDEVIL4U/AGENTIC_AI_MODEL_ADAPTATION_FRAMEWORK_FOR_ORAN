@@ -1,0 +1,36 @@
+# Google Vertex AI end to end: the Vertex Model Registry (a model per name, versions as model
+# versions; artifacts, tags and metrics in GCS) and a Vertex endpoint per model. The adapter has
+# no traffic split, so an accepted candidate shadows first and then waits for approval (shadow).
+# Credentials come from Application Default Credentials (the workload
+# identity); no key is in this file. Set API_KEYS in the environment or via SECRETS_BACKEND.
+# Use with:  ORAN_CONFIG_FILE=config/examples/vertex.toml
+
+environment = "production"
+database_url = "postgresql+psycopg://oran@db.internal:5432/oran_adapt"
+artifact_workdir = "/var/lib/oran-adapt/artifacts"
+registry_backend = "vertex"
+deployment_backend = "vertex"
+delivery_strategy = "shadow"
+delivery_policy_file = "config/policies/delivery.toml"
+
+[vertex]
+project = "oran-adapt-prod"
+location = "europe-west4"
+gcs_bucket = "oran-adapt-models"
+gcs_prefix = "registry"
+serving_image = "europe-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest"
+endpoint_prefix = "oran-"
+machine_type = "n1-standard-2"
+min_replicas = 1
+max_replicas = 3
+
+[drift_mappers]
+evidently = "config/mappers/evidently.toml"
+
+[auth]
+enabled = true
+backend = "api-key"
+
+[log]
+level = "INFO"
+json = true

@@ -9,9 +9,11 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import inspect
 
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.api.app import create_app
 from oran_adapt.core.config import Settings
 from oran_adapt.core.errors import (
+    ConfigurationError,
     DatabaseUnavailableError,
     ModelNotFoundError,
     RegistryUnavailableError,
@@ -21,7 +23,6 @@ from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.db.base import create_db_engine
 from oran_adapt.db.health import check_database
 from oran_adapt.db.migrate import downgrade_to_base, upgrade_to_head
-from oran_adapt.registry.client import MlflowRegistry
 
 EXPECTED_TABLES = {
     "model_metadata", "dataset_metadata", "data_version", "data_record",
@@ -42,7 +43,7 @@ def test_ready_ok_when_db_and_mlflow_reachable(client) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ready"] is True
-    assert {c["name"] for c in body["components"]} == {"database", "mlflow"}
+    assert {c["name"] for c in body["components"]} == {"database", "mlflow", "deployment"}
 
 
 def test_ready_reports_503_when_database_down(migrated_settings) -> None:
@@ -97,27 +98,32 @@ def test_no_model_version_table_in_postgres_schema(settings) -> None:
 
 # ---- MLflow --------------------------------------------------------------------------------
 def test_mlflow_connects(settings) -> None:
-    MlflowRegistry(settings.mlflow_tracking_uri).ping()
+    MlflowRegistry.from_settings(settings).ping()
 
 
-def test_mlflow_unavailable_raises(tmp_path) -> None:
-    reg = MlflowRegistry("http://127.0.0.1:1")
+def test_mlflow_unavailable_raises(settings) -> None:
+    reg = MlflowRegistry.from_settings(
+        settings.model_copy(update={"mlflow_tracking_uri": "http://127.0.0.1:1"})
+    )
     with pytest.raises(RegistryUnavailableError):
         reg.ping()
 
 
 def test_missing_model_raises_not_found(settings) -> None:
-    reg = MlflowRegistry(settings.mlflow_tracking_uri)
+    reg = MlflowRegistry.from_settings(settings)
     with pytest.raises(ModelNotFoundError):
         reg.list_versions("does_not_exist")
 
 
 # ---- config / logging / schemas ------------------------------------------------------------
 def test_settings_reject_provider_without_key() -> None:
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None, llm_provider="anthropic")
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None, llm_provider="gemini")
+    for provider in ("anthropic", "gemini"):
+        with pytest.raises(ConfigurationError) as exc:
+            Settings(_env_file=None, llm_enabled=True, llm_provider=provider)
+        assert exc.value.context["key"] == f"{provider.upper()}_API_KEY"
+        assert exc.value.context["selected_by"] == "LLM_PROVIDER"
+        # LLM_ENABLED=false (the default) selects no provider, so no key is needed.
+        assert Settings(_env_file=None, llm_provider=provider).llm_enabled is False
     assert Settings(_env_file=None, llm_provider="none").llm_provider == "none"
 
 

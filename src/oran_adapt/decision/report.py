@@ -11,6 +11,7 @@ None otherwise.
 
 from __future__ import annotations
 
+from oran_adapt.adaptation.model_types import supported_frameworks
 from oran_adapt.analysis.reuse import is_shifted
 from oran_adapt.analysis.schemas import DecisionPackage, VersionEvaluation
 from oran_adapt.core.config import Settings
@@ -29,8 +30,6 @@ _COST_LEVEL = {
     Strategy.FULL_RETRAINING: ("HIGH", "a fresh fit from scratch on all training rows"),
     Strategy.ROLLBACK: ("LOW", "no training; an existing version is re-promoted"),
 }
-# Rough float64 working-set multiplier (features + target, a copy for the fit, the model's own).
-_MEMORY_COPIES = 3
 
 
 def _live(package: DecisionPackage) -> VersionEvaluation | None:
@@ -156,10 +155,12 @@ def explain_decision(decision: Decision, package: DecisionPackage, settings: Set
         "min_drifted_rows": settings.decision_min_drifted_rows,
         "full_retrain_psi": settings.decision_full_retrain_psi_threshold,
         "drifted_feature_psi": settings.analysis_psi_reuse_threshold,
-        "supported_frameworks": list(settings.decision_supported_frameworks),
+        "supported_frameworks": sorted(supported_frameworks(settings)),
         "validation_min_rows": settings.validation_min_rows,
-        "validation_accuracy_tolerance": settings.validation_accuracy_tolerance,
-        "validation_rmse_tolerance_ratio": settings.validation_rmse_tolerance_ratio,
+        "gate_policy_version": settings.gate_policy.version,
+        "gate_mode": settings.gate_policy.mode,
+        "gate_margin": settings.gate_policy.margin,
+        "gate_confidence": settings.gate_policy.confidence,
     }
     return decision.model_copy(
         update={
@@ -186,9 +187,9 @@ def explain_decision(decision: Decision, package: DecisionPackage, settings: Set
                 "device": "cpu",
                 "n_features": n_features,
                 "train_rows": train_rows,
-                # An estimate: rows x (features + target) x 8 bytes x working copies.
+                # An estimate: rows x (features + target) x 8 bytes x DECISION_MEMORY_COPIES.
                 "estimated_memory_mb": round(
-                    train_rows * (n_features + 1) * 8 * _MEMORY_COPIES / 1_048_576, 3
+                    train_rows * (n_features + 1) * 8 * settings.decision_memory_copies / 1_048_576, 3
                 ),
             },
             "fallback_strategy": _fallback(decision.strategy, decision.compatible_strategies),

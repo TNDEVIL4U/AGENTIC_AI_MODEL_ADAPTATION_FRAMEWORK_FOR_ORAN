@@ -1,0 +1,24 @@
+# Evidently data drift report (Report(metrics=[DataDriftPreset()]).json(), the legacy
+# metrics/result layout) -> one DriftEvent. The report does not name the model, so the caller
+# does: POST /api/v1/adaptation/events/from/evidently?model_id=cell-a-throughput
+# (or oran-adapt event map --mapper evidently --model-id ...).
+version = "1"
+description = "Evidently DataDriftPreset report, one event per report"
+
+[fields]
+drift_detected = "metrics[metric=DatasetDriftMetric].result.dataset_drift"
+drift_score = "metrics[metric=DatasetDriftMetric].result.share_of_drifted_columns"
+timestamp = "timestamp"
+
+[constants]
+drift_type = "feature"
+
+# Per-column verdicts: drifted columns become affected_features, their scores drift_metrics.
+[feature_table]
+path = "metrics[metric=DataDriftTable].result.drift_by_columns"
+detected = "drift_detected"
+score = "drift_score"
+
+[event_id]
+parts = ["field:model_id", "timestamp"]
+separator = "@"

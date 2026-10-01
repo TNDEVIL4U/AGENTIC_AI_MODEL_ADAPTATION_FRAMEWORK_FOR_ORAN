@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from oran_adapt.adaptation.model_types import supported_frameworks
 from oran_adapt.analysis.schemas import DecisionPackage
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy
@@ -38,7 +39,7 @@ def _forced(strategy: Strategy, reason: str) -> ConstraintResult:
 
 
 def evaluate_constraints(package: DecisionPackage, settings: Settings) -> ConstraintResult:
-    supported = {f.lower() for f in settings.decision_supported_frameworks}
+    supported = supported_frameworks(settings)
     if package.framework is None or package.framework.lower() not in supported:
         return _forced(
             Strategy.NO_COMPATIBLE_STRATEGY,

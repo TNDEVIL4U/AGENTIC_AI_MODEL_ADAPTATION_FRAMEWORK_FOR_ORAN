@@ -1,0 +1,37 @@
+# Progressive delivery policy (core.policies.DeliveryPolicy).
+# Use with DELIVERY_POLICY_FILE=config/policies/delivery.toml and DELIVERY_STRATEGY=<strategy>.
+version = "1"
+# Requests each arm needs before any health verdict or step.
+min_samples = 100
+
+# shadow: candidate scores mirrored traffic, serves none.
+shadow_max_s = 86400
+shadow_then = "manual"          # promote | canary | manual
+
+# canary: traffic percentages, each held while healthy; the last must be 100.
+canary_steps = [5, 25, 50, 100]
+canary_step_hold_s = 600
+
+# ab: fixed split, then Welch's t-test on ab_metric.
+ab_percent = 50
+ab_duration_s = 3600
+ab_metric = "error_rate"
+ab_direction = "lower"
+ab_confidence = 0.95
+ab_inconclusive = "rollback"    # rollback | promote | manual
+
+# manual approval.
+approval_ttl_s = 86400
+approval_then = "promote"       # promote | canary
+
+# Online health: any breached rule rolls the candidate back.
+[[health]]
+metric = "error_rate"
+direction = "lower"
+max_degradation = 0.01
+
+[[health]]
+metric = "latency_p95_ms"
+direction = "lower"
+max_ratio = 1.5
+required = false

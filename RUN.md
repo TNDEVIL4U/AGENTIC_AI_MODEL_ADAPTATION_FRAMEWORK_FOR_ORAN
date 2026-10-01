@@ -92,16 +92,15 @@ python -m oran_adapt.cli data current --model-id m1
 `python -m oran_adapt.cli --help` lists every command. `docs/CDC.md` covers
 `cdc run` / `cdc materialize`.
 
-## 8. Docker stack (PostgreSQL, MinIO, MLflow, Kafka + Debezium, API, Prometheus)
+## 8. Docker stack (PostgreSQL, MLflow, Kafka + Debezium, API, Prometheus)
 
 | Windows | By hand |
 |---|---|
 | `.\scripts\run_local.ps1 docker` | `docker build -t oran-adapt-sandbox:latest -f docker/sandbox/Dockerfile docker/sandbox` then `docker compose up --build -d` |
 | `.\scripts\run_local.ps1 docker-down` | `docker compose down` |
 
-Set `POSTGRES_PASSWORD`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` and `API_KEYS` in `.env`
-first. Ports are bound to 127.0.0.1 only: API 8000, MLflow 5000, MinIO console 9001,
-Kafka Connect 8083, Prometheus 9090.
+Set `POSTGRES_PASSWORD` and `API_KEYS` in `.env` first. Ports are bound to 127.0.0.1 only:
+API 8000, MLflow 5000, Kafka Connect 8083, Prometheus 9090.
 
 Verify the stack:
 

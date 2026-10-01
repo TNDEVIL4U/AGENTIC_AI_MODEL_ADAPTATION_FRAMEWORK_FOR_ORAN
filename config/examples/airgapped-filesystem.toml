@@ -1,0 +1,37 @@
+# Air-gapped site: no registry server, no cloud, no outbound network. The registry is JSON files
+# on a local volume, artifacts live on the same volume, serving is the registry alias (the
+# inference service reads the "champion" alias), notifications go to the log and datasets come
+# from a local directory. Nothing in this file names a remote host except the database.
+# Set API_KEYS via SECRETS_BACKEND=file (a mounted directory, one file per secret).
+# Use with:  ORAN_CONFIG_FILE=config/examples/airgapped-filesystem.toml
+
+environment = "production"
+database_url = "postgresql+psycopg://oran@localhost:5432/oran_adapt"
+artifact_workdir = "/srv/oran-adapt/work"
+registry_backend = "filesystem"
+registry_fs_root = "/srv/oran-adapt/registry"
+artifact_store_backend = "filesystem"
+artifact_store_root = "/srv/oran-adapt/artifacts"
+deployment_backend = "registry-alias"
+delivery_strategy = "canary"
+delivery_policy_file = "config/policies/delivery.toml"
+dataset_backends = "file"
+dataset_file_roots = ["/srv/oran-adapt/datasets"]
+notification_backend = "log"
+llm_provider = "none"
+
+[drift_mappers]
+alertmanager = "config/mappers/alertmanager.toml"
+generic = "config/mappers/generic-json.toml"
+
+[secrets]
+backend = "file"
+dir = "/run/secrets/oran-adapt"
+
+[auth]
+enabled = true
+backend = "api-key"
+
+[log]
+level = "INFO"
+json = true

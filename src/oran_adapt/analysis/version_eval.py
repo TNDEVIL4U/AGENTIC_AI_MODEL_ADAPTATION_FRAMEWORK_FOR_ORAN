@@ -9,7 +9,7 @@ after, so memory stays at one model regardless of how many versions exist. The n
 A version is *compatible* when its artifact passes its checksum, loads, is the same kind of
 estimator as LIVE (classifier vs regressor), and every feature it needs is in the data. An
 incompatible version is reported with the reason, never silently skipped. An unreachable
-MLflow is not a per-version problem: RegistryUnavailableError propagates so the job retries.
+registry is not a per-version problem: RegistryUnavailableError propagates so the job retries.
 """
 
 from __future__ import annotations
@@ -21,13 +21,13 @@ import time
 
 import pandas as pd
 
-from oran_adapt.adaptation.inspector import inspect_model
-from oran_adapt.adaptation.loaders import load_native_model
+from oran_adapt.adaptation.model_types import ModelTypes, build_model_types
 from oran_adapt.analysis.schemas import VersionEvaluation
 from oran_adapt.core.config import Settings
 from oran_adapt.core.errors import AdaptationError, RegistryUnavailableError
 from oran_adapt.core.logging import log_event
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import ModelHandlerPort, ModelRegistryPort, ModelVersion
+from oran_adapt.ports.registry import READY
 from oran_adapt.registry.promotion import verify_version_artifact
 from oran_adapt.validation.evaluate import evaluate_model
 from oran_adapt.validation.metrics import higher_is_better
@@ -35,11 +35,13 @@ from oran_adapt.validation.metrics import higher_is_better
 logger = logging.getLogger(__name__)
 
 
-def _candidates(registry: MlflowRegistry, name: str, live_version: str, limit: int) -> list:
-    ready = [v for v in registry.list_versions(name) if (v.status or "READY") == "READY"]
+def _candidates(
+    registry: ModelRegistryPort, name: str, live_version: str, limit: int
+) -> list[ModelVersion]:
+    ready = [v for v in registry.list_versions(name) if v.status == READY]
     newest = ready[-limit:]
-    if all(str(v.version) != live_version for v in newest):
-        newest += [v for v in ready if str(v.version) == live_version]
+    if all(v.version != live_version for v in newest):
+        newest += [v for v in ready if v.version == live_version]
     return sorted(newest, key=lambda v: int(v.version))
 
 
@@ -51,9 +53,10 @@ def _degradation(metric: str, now: float, baseline: dict[str, float]) -> float |
 
 
 def _evaluate_one(
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
+    handler: ModelHandlerPort,
     name: str,
-    version_info,
+    version_info: ModelVersion,
     *,
     framework: str,
     target_column: str,
@@ -61,19 +64,20 @@ def _evaluate_one(
     live_version: str,
     expected_estimator: str | None,
     workdir: str,
+    model_types: ModelTypes,
     task_type: str | None = None,
 ) -> VersionEvaluation:
-    version = str(version_info.version)
+    version = version_info.version
     ev = VersionEvaluation(version=version, is_live=version == live_version, n_rows=len(data))
-    created_ms = getattr(version_info, "creation_timestamp", None)
+    created_ms = version_info.created_at_ms
     if created_ms:
         ev.age_days = round((time.time() * 1000 - created_ms) / 86_400_000, 4)
-    ev.baseline_metrics = registry.get_run_metrics(getattr(version_info, "run_id", None))
+    ev.baseline_metrics = registry.get_version_metrics(name, version)
 
     try:
         local, ev.artifact_sha256 = verify_version_artifact(registry, name, version, workdir)
-        model = load_native_model(local, framework)
-        inspection = inspect_model(model, framework)
+        model = handler.load(local, framework)
+        inspection = model_types.require(model, framework)
     except RegistryUnavailableError:
         raise
     except AdaptationError as exc:
@@ -100,6 +104,7 @@ def _evaluate_one(
             framework=framework,
             estimator_type=inspection.estimator_type,
             task_type=task_type,
+            model_types=model_types,
         )
     except AdaptationError as exc:
         ev.incompatibility_reason = f"{exc.code}: {exc.message}"
@@ -116,7 +121,8 @@ def _evaluate_one(
 
 
 def evaluate_versions(
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
+    handler: ModelHandlerPort,
     *,
     mlflow_name: str,
     framework: str,
@@ -133,11 +139,13 @@ def evaluate_versions(
     live_info = [v for v in infos if str(v.version) == live_version]
     others = [v for v in infos if str(v.version) != live_version]
 
+    model_types = build_model_types(settings)
     results: list[VersionEvaluation] = []
     expected: str | None = None
     for info in live_info + others:
         ev = _evaluate_one(
             registry,
+            handler,
             mlflow_name,
             info,
             framework=framework,
@@ -146,6 +154,7 @@ def evaluate_versions(
             live_version=live_version,
             expected_estimator=expected,
             workdir=os.path.join(workdir, "versions"),
+            model_types=model_types,
             task_type=task_type,
         )
         if ev.is_live:

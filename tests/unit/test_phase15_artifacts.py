@@ -9,6 +9,8 @@ from oran_adapt.core.config import Settings
 from oran_adapt.core.errors import ArtifactError
 from oran_adapt.core.integrity import check_size, path_size
 
+pytestmark = pytest.mark.smoke
+
 
 def test_path_size_counts_a_file_and_a_whole_directory(tmp_path):
     (tmp_path / "a.bin").write_bytes(b"x" * 100)

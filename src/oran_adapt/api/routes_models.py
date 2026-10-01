@@ -15,14 +15,21 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
-from oran_adapt.api.security import DATA_ROLES, Promoter, require_roles
+from oran_adapt.api.security import DATA, Promoter, require
 from oran_adapt.core.errors import ModelBusyError, ModelNotFoundError
 from oran_adapt.datastore import model_data_links
 from oran_adapt.db.base import session_scope
-from oran_adapt.db.models import ModelLock, ModelMetadata, ModelPromotion, ModelVersionEvaluation
+from oran_adapt.db.models import (
+    GateDecisionRecord,
+    ModelLock,
+    ModelMetadata,
+    ModelPromotion,
+    ModelVersionEvaluation,
+)
 from oran_adapt.orchestrator.locks import add_lock, release_lock, take_over_expired_lock
 from oran_adapt.registry.onboarding import attach_existing_model
 from oran_adapt.registry.promotion import rollback_model
+from oran_adapt.registry.publishing import describe_versions
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -83,7 +90,7 @@ def get_model(model_id: str, request: Request) -> dict:
             raise ModelNotFoundError(f"model '{model_id}' is not onboarded", model_id=model_id)
         body = _summary(meta)
         body["data_links"] = model_data_links(session, model_id)
-    versions = state.registry.describe_versions(body["mlflow_model_name"])
+    versions = describe_versions(state.registry, body["mlflow_model_name"])
     alias = state.settings.live_alias
     body["live_alias"] = alias
     body["live_version"] = next((v["version"] for v in versions if alias in v["aliases"]), None)
@@ -91,7 +98,7 @@ def get_model(model_id: str, request: Request) -> dict:
     return body
 
 
-@router.post("/attach", status_code=201, dependencies=[Depends(require_roles(*DATA_ROLES))])
+@router.post("/attach", status_code=201, dependencies=[Depends(require(DATA))])
 def attach_model(body: AttachModel, request: Request) -> dict:
     state = request.app.state
     with session_scope(state.session_factory) as session:
@@ -110,12 +117,14 @@ def get_model_versions(model_id: str, request: Request) -> dict:
     state = request.app.state
     with session_scope(state.session_factory) as session:
         name = _require_model(session, model_id).mlflow_model_name
-    versions = state.registry.describe_versions(name)
+    versions = describe_versions(state.registry, name)
     alias = state.settings.live_alias
     live = next((v["version"] for v in versions if alias in v["aliases"]), None)
     for v in versions:
         v["is_live"] = v["version"] == live
-        v["lifecycle_status"] = v["tags"].get("oran.status", "LIVE" if v["is_live"] else None)
+        v["lifecycle_status"] = v["tags"].get(
+            state.registry.artifact_policy.status_tag, "LIVE" if v["is_live"] else None
+        )
     return {"model_id": model_id, "live_version": live, "versions": versions}
 
 
@@ -183,6 +192,34 @@ def get_model_promotions(model_id: str, request: Request) -> list[dict]:
         ]
 
 
+@router.get("/{model_id}/gate-decisions")
+def get_gate_decisions(model_id: str, request: Request) -> list[dict]:
+    """Every validation gate decision for the model, newest first, with the policy version and
+    hash it was made under and the full evidence (interval, guardrails, reasons)."""
+    with session_scope(request.app.state.session_factory) as session:
+        _require_model(session, model_id)
+        rows = session.execute(
+            select(GateDecisionRecord)
+            .where(GateDecisionRecord.model_id == model_id)
+            .order_by(desc(GateDecisionRecord.id))
+        ).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "job_id": r.job_id,
+                "current_version": r.current_version,
+                "candidate_version": r.candidate_version,
+                "verdict": r.verdict,
+                "metric": r.metric,
+                "policy_version": r.policy_version,
+                "policy_hash": r.policy_hash,
+                "decision": r.decision,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ]
+
+
 @router.post("/{model_id}/rollback")
 def rollback(
     model_id: str,
@@ -214,6 +251,8 @@ def rollback(
             result = rollback_model(
                 session,
                 state.registry,
+                state.model_handler,
+                deployer=state.deployer,
                 model_id=model_id,
                 live_alias=settings.live_alias,
                 workdir=os.path.join(settings.artifact_workdir, holder),

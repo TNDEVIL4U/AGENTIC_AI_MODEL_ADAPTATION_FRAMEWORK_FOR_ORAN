@@ -3,11 +3,14 @@ event. Each member stays ignorant of the others - this module is the seam.
 
     analyze() [Member 1] -> evaluate_versions() + decide_reuse() [Member 1]: score every
     registered version on the current data and, if one clearly beats LIVE, promote it and stop
-    (no training) -> decide() [Member 2] -> select_engine()/run_engine() [Member 3], falling
-    back to adapt_via_llm() (sandboxed) when the engine registry has no built-in engine for the
-    chosen (strategy, framework) -> validate_candidate() [Member 4] -> registry (MLflow):
-    register the candidate, then promote_version() moves the live alias to it, but only when
-    validation passed.
+    (no training) -> decide() [Member 2] -> the model's model type plugin adapts it [Member 3],
+    falling back to adapt_via_llm() (sandboxed) when that plugin has no engine for the chosen
+    strategy -> validate_candidate() [Member 4] -> registry (MLflow):
+    register the candidate, then deliver it, but only when the validation gate accepted it:
+    DELIVERY_STRATEGY=blue_green has promote_version() move the live alias at once; shadow,
+    canary, ab and manual start a rollout (delivery.controller) that the controller moves on
+    and the job ends DELIVERING. A model with a rollout in progress takes no new adaptation
+    (outcome ROLLOUT_IN_PROGRESS).
 
 Nothing here mutates the live model except through registry.promotion, which records the
 previous LIVE and undoes a half-finished move. Job persistence, idempotency, locking and
@@ -20,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 
 import pandas as pd
 from sqlalchemy import select
@@ -32,16 +36,15 @@ from oran_adapt.adaptation.data import (
     records_frame,
     split_features_target,
 )
-from oran_adapt.adaptation.engines import run_engine, select_engine
-from oran_adapt.adaptation.inspector import inspect_model
 from oran_adapt.adaptation.leakage import check_leakage
 from oran_adapt.adaptation.llm_adapter import adapt_via_llm
-from oran_adapt.adaptation.loaders import load_native_model
+from oran_adapt.adaptation.model_types import ModelTypes, build_model_types
 from oran_adapt.adaptation.schemas import CandidateModel, ModelInspection
 from oran_adapt.analysis.engine import analyze
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import ReuseDecision, VersionEvaluation
 from oran_adapt.analysis.version_eval import evaluate_versions
+from oran_adapt.bootstrap import build_data_access, build_deployer, build_model_handler
 from oran_adapt.core import metrics
 from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
@@ -57,6 +60,7 @@ from oran_adapt.core.enums import (
 )
 from oran_adapt.core.errors import (
     ArtifactError,
+    LlmUnavailableError,
     PromotionError,
     SandboxExecutionError,
     UnsafeCodeError,
@@ -64,16 +68,30 @@ from oran_adapt.core.errors import (
 )
 from oran_adapt.core.integrity import check_size, sha256_file, verify_checksum
 from oran_adapt.core.schemas import DriftEvent
+from oran_adapt.datastore.access import DataAccess
 from oran_adapt.datastore.current_data import clean_records, persist_current_data
 from oran_adapt.datastore.versioning import snapshot_training_data
-from oran_adapt.db.models import ModelMetadata, ModelVersionEvaluation
+from oran_adapt.db.models import GateDecisionRecord, ModelMetadata, ModelVersionEvaluation
 from oran_adapt.decision.engine import decide
+from oran_adapt.delivery.controller import (
+    PROMOTED,
+    ROLLED_BACK,
+    Delivery,
+    active_rollout,
+    start_rollout,
+)
+from oran_adapt.delivery.controller import to_dict as rollout_dict
+from oran_adapt.llm import calls
 from oran_adapt.llm.client import LlmClient
 from oran_adapt.orchestrator.context import current_job_id, report_stage
 from oran_adapt.orchestrator.schemas import JobResult
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import ModelRegistryPort, TrainingSet
+from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.promotion import current_live, promote_version, verify_version_artifact
+from oran_adapt.registry.publishing import record_artifact_checksum, register_candidate
+from oran_adapt.sandbox.runner import SandboxLimits
 from oran_adapt.validation.engine import validate_candidate
+from oran_adapt.validation.schemas import ValidationReport
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +110,17 @@ def _produce_candidate(
     settings: Settings,
     llm_client: LlmClient | None,
     workdir: str,
+    model_types: ModelTypes,
+    on_llm_failure: Callable[[Exception, str], None] | None = None,
 ) -> CandidateModel:
-    """Try the built-in engine registry first; only fall back to the LLM sandbox adapter when
-    the registry genuinely has nothing for this (strategy, framework, capability) combination.
+    """Try the model's model type plugin first; only fall back to the LLM sandbox adapter when
+    it genuinely has nothing for this (strategy, capability) combination.
+
+    The LLM path never makes the outcome worse than having no LLM: when it cannot be reached,
+    is refused by the guard, writes unsafe code or code that fails in the sandbox, the failure
+    is reported to ``on_llm_failure`` (with the fallback reason) and the deterministic rule
+    applies - a full retrain when the model supports one, otherwise the plugin's
+    UnsupportedAdaptationError, exactly as without an LLM.
 
     Fine-tuning happens only when the artifact technically supports it: an artifact with no
     incremental-update mechanism, or one whose mechanism no native engine uses while no LLM is
@@ -109,18 +135,12 @@ def _produce_candidate(
         strategy = Strategy.FULL_RETRAINING
         note = f"fine-tuning is not supported ({capability.reason}); fully retrained instead"
 
+    data = TrainingSet(X=X, y=y, target_column=target_column,
+                       artifact_dir=os.path.join(workdir, "engine"))
+
     def _native(chosen: Strategy) -> CandidateModel:
-        return run_engine(
-            select_engine(chosen, framework, capability),
-            current_model,
-            inspection=inspection,
-            X=X,
-            y=y,
-            target_column=target_column,
-            artifact_dir=os.path.join(workdir, "engine"),
-            torch_fine_tune_epochs=settings.torch_fine_tune_epochs,
-            torch_full_retrain_epochs=settings.torch_full_retrain_epochs,
-            torch_learning_rate=settings.torch_learning_rate,
+        return model_types.adapt(
+            current_model, chosen, inspection=inspection, capability=capability, data=data
         )
 
     def _applied(candidate: CandidateModel, chosen: Strategy, why: str) -> CandidateModel:
@@ -128,33 +148,76 @@ def _produce_candidate(
             logger.warning("%s", why)
         return candidate.model_copy(update={"applied_strategy": chosen, "adaptation_note": why})
 
+    retrain_instead = strategy == Strategy.FINE_TUNING and capability.supports_full_retraining
     try:
         return _applied(_native(strategy), strategy, note)
-    except UnsupportedAdaptationError:
+    except UnsupportedAdaptationError as unsupported:
         if llm_client is None:
-            if strategy == Strategy.FINE_TUNING and capability.supports_full_retraining:
+            calls.fallback(calls.FALLBACK_DISABLED)
+            if retrain_instead:
                 note = (
                     f"{inspection.model_class} can only be fine-tuned through the LLM adapter "
                     "(no native fine-tuning engine) and no LLM is configured; fully retrained"
                 )
                 return _applied(_native(Strategy.FULL_RETRAINING), Strategy.FULL_RETRAINING, note)
             raise
-        candidate = adapt_via_llm(
-            llm_client,
-            current_model,
-            framework=framework,
-            model_class=inspection.model_class,
-            X=X,
-            y=y,
-            target_column=target_column,
-            sandbox_timeout_s=settings.sandbox_timeout_s,
-            sandbox_memory_mb=settings.sandbox_memory_mb,
-            workdir=os.path.join(workdir, "llm"),
-            sandbox_backend=settings.sandbox_backend,
-            sandbox_docker_image=settings.sandbox_docker_image,
-            skops_trusted_types=settings.mlflow_skops_trusted_types,
-        )
+        try:
+            candidate = _adapt_with_llm(
+                llm_client, current_model, inspection=inspection, framework=framework, X=X, y=y,
+                target_column=target_column, settings=settings, workdir=workdir,
+            )
+        except (LlmUnavailableError, UnsafeCodeError, SandboxExecutionError) as exc:
+            reason = _llm_failure_reason(exc)
+            calls.fallback(reason)
+            if on_llm_failure is not None:
+                on_llm_failure(exc, reason)
+            if not retrain_instead:
+                raise unsupported from exc
+            note = (
+                f"the LLM adapter could not fine-tune {inspection.model_class} ({reason}); "
+                "fully retrained instead"
+            )
+            return _applied(_native(Strategy.FULL_RETRAINING), Strategy.FULL_RETRAINING, note)
         return _applied(candidate, strategy, note)
+
+
+def _llm_failure_reason(exc: Exception) -> str:
+    if isinstance(exc, LlmUnavailableError):
+        return exc.reason
+    if isinstance(exc, UnsafeCodeError):
+        return calls.FALLBACK_UNSAFE_CODE
+    return calls.FALLBACK_SANDBOX_FAILED
+
+
+def _adapt_with_llm(
+    llm_client: LlmClient,
+    current_model: object,
+    *,
+    inspection: ModelInspection,
+    framework: str,
+    X: pd.DataFrame,
+    y: pd.Series,
+    target_column: str,
+    settings: Settings,
+    workdir: str,
+) -> CandidateModel:
+    return adapt_via_llm(
+        llm_client,
+        current_model,
+        framework=framework,
+        model_class=inspection.model_class,
+        X=X,
+        y=y,
+        target_column=target_column,
+        sandbox_timeout_s=settings.sandbox_timeout_s,
+        sandbox_memory_mb=settings.sandbox_memory_mb,
+        workdir=os.path.join(workdir, "llm"),
+        sandbox_backend=settings.sandbox_backend,
+        sandbox_docker_image=settings.sandbox_docker_image,
+        skops_trusted_types=settings.mlflow_skops_trusted_types,
+        sandbox_limits=SandboxLimits.from_settings(settings),
+        settings=settings,
+    )
 
 
 def _stage(session: Session, status: JobStatus, message: str = "") -> None:
@@ -216,6 +279,100 @@ def _record_evaluations(
     session.flush()
 
 
+def _record_gate(session: Session, model_id: str, current_version: str | None,
+                 report: ValidationReport) -> GateDecisionRecord | None:
+    """Persist the gate's decision (gate_decision row, audit, metric). The candidate version
+    is filled in once the candidate is registered."""
+    decision = report.gate
+    if decision is None:
+        return None
+    row = GateDecisionRecord(
+        model_id=model_id,
+        job_id=current_job_id(),
+        current_version=current_version,
+        verdict=decision.verdict,
+        metric=decision.metric,
+        policy_version=decision.policy_version,
+        policy_hash=decision.policy_hash,
+        decision=decision.model_dump(mode="json"),
+    )
+    session.add(row)
+    session.flush()
+    metrics.GATE_DECISIONS.labels(verdict=decision.verdict, mode=decision.mode).inc()
+    _audit(
+        session,
+        AuditAction.GATE_DECIDED,
+        model_id,
+        model_version=current_version,
+        decision=decision.verdict,
+        reason=" | ".join(decision.reasons),
+        metadata={
+            "gate_decision_id": row.id,
+            "policy_version": decision.policy_version,
+            "policy_hash": decision.policy_hash,
+            "metric": decision.metric,
+            "delta": decision.delta,
+            "ci": [decision.ci_low, decision.ci_high],
+            "threshold": decision.threshold,
+        },
+    )
+    return row
+
+
+def _deliver(
+    session: Session,
+    settings: Settings,
+    registry: ModelRegistryPort,
+    deployer: Deployer,
+    workdir: str,
+    *,
+    model_id: str,
+    live_version: str,
+    new_version: str,
+    gate_row: GateDecisionRecord | None,
+    result: JobResult,
+) -> JobResult:
+    """Start the DELIVERY_STRATEGY rollout of the registered candidate. The job ends
+    DELIVERING while the rollout runs; a rollout that ends at once (a one-step canary, a first
+    split that failed) is reported as REGISTERED or ROLLED_BACK like an inline promotion."""
+    strategy = settings.delivery_strategy
+    _stage(session, JobStatus.PROMOTING, f"starting a {strategy} rollout of {new_version}")
+    delivery = Delivery.from_settings(
+        settings, registry, deployer=deployer, workdir=os.path.join(workdir, "rollout")
+    )
+    rollout = start_rollout(
+        session,
+        delivery,
+        model_id=model_id,
+        strategy=strategy,
+        stable_version=live_version,
+        candidate_version=new_version,
+        job_id=current_job_id(),
+        gate_decision_id=gate_row.id if gate_row is not None else None,
+    )
+    shown = rollout_dict(rollout)
+    if rollout.state == PROMOTED:
+        return result.model_copy(update={
+            "outcome": "REGISTERED", "rollout": shown, "live_version": new_version,
+            "previous_live_version": live_version,
+            "reason": f"version {new_version} registered and promoted: {rollout.reason}",
+        })
+    if rollout.state == ROLLED_BACK:
+        metrics.ROLLBACK.labels("promotion_failure").inc()
+        return result.model_copy(update={
+            "outcome": "ROLLED_BACK", "rollout": shown,
+            "reason": f"version {new_version} registered but its rollout failed: "
+                      f"{rollout.reason}",
+        })
+    return result.model_copy(update={
+        "rollout": shown,
+        "reason": (
+            f"version {new_version} registered; {strategy} rollout {rollout.rollout_id} is "
+            f"{rollout.state} ({rollout.reason})"
+        ),
+    })
+
+
 def _promotion_key(suffix: str) -> str | None:
     job_id = current_job_id()
     return f"{job_id}:{suffix}" if job_id else None
@@ -226,15 +383,41 @@ def run_adaptation_job(
     event: DriftEvent,
     settings: Settings,
     *,
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort,
     llm_client: LlmClient | None,
     workdir: str,
+    data_access: DataAccess | None = None,
+) -> JobResult:
+    """Run the full pipeline for one drift event (``_run_adaptation_job``) and stamp every LLM
+    call it made - prompt versions, outcomes, fallback reasons, tokens - on the result."""
+    with calls.recording(current_job_id()) as made:
+        result = _run_adaptation_job(
+            session, event, settings, registry=registry, llm_client=llm_client,
+            workdir=workdir, data_access=data_access,
+        )
+    if not made:
+        return result
+    return result.model_copy(update={"llm_calls": [c.to_dict() for c in made]})
+
+
+def _run_adaptation_job(
+    session: Session,
+    event: DriftEvent,
+    settings: Settings,
+    *,
+    registry: ModelRegistryPort,
+    llm_client: LlmClient | None,
+    workdir: str,
+    data_access: DataAccess | None = None,
 ) -> JobResult:
     """Run the full pipeline for one drift event. Raises ModelNotFoundError if
     ``event.model_id`` isn't registered (Member 1's precondition) or ArtifactError if the model
     is adaptable but has no ``target_column`` on record. Every other outcome - no action, an
     existing version reused, a rejected candidate, a registered candidate - comes back as a
     JobResult, never an exception."""
+    handler = build_model_handler(settings)
+    access = data_access or build_data_access(settings)
+    deployer = build_deployer(settings, registry)
     model_meta = session.execute(
         select(ModelMetadata).where(ModelMetadata.model_id == event.model_id)
     ).scalar_one_or_none()
@@ -259,7 +442,20 @@ def run_adaptation_job(
             ),
         )
 
-    analysis = analyze(session, event, settings, live_version=live_version)
+    in_flight = active_rollout(session, event.model_id) if model_meta is not None else None
+    if in_flight is not None:
+        return JobResult(
+            model_id=event.model_id,
+            outcome="ROLLOUT_IN_PROGRESS",
+            live_version=live_version,
+            rollout=rollout_dict(in_flight),
+            reason=(
+                f"rollout {in_flight.rollout_id} of version {in_flight.candidate_version} is "
+                f"{in_flight.state}; the model takes no new adaptation until it ends"
+            ),
+        )
+
+    analysis = analyze(session, event, settings, live_version=live_version, access=access)
     assert model_meta is not None  # analyze() raised ModelNotFoundError otherwise
     metrics.DRIFT_EVENTS.labels(outcome=analysis.status).inc()
 
@@ -285,7 +481,9 @@ def run_adaptation_job(
         ref.data_version_id for ref in (package.historical_data, package.drifted_data) if ref
     ]
     cleaned = clean_records(
-        session, load_records(session, train_ids), required_columns=[target] if target else []
+        session,
+        load_records(session, train_ids, access=access),
+        required_columns=[target] if target else [],
     )
     if not cleaned.records:
         raise ArtifactError(
@@ -341,6 +539,7 @@ def run_adaptation_job(
         eval_started = time.perf_counter()
         evaluations = evaluate_versions(
             registry,
+            handler,
             mlflow_name=model_meta.mlflow_model_name,
             framework=framework,
             target_column=target,
@@ -373,6 +572,7 @@ def run_adaptation_job(
             promotion = promote_version(
                 session,
                 registry,
+                deployer=deployer,
                 model_id=event.model_id,
                 version=reuse.selected_version,
                 kind=PromotionKind.REUSE,
@@ -460,15 +660,16 @@ def run_adaptation_job(
         model_meta.mlflow_model_name,
         live_version,
         os.path.join(workdir, "current"),
-        max_bytes=settings.artifact_max_bytes,
     )
     if framework is None:
         raise ArtifactError(
             f"model '{event.model_id}' has no framework on record; cannot load it to adapt",
             model_id=event.model_id,
         )
-    current_model = load_native_model(local_path, framework)
-    inspection = inspect_model(current_model, framework)
+    current_model = handler.load(local_path, framework)
+    model_types = build_model_types(settings)
+    # An unsupported model is a typed UNSUPPORTED_MODEL_TYPE job error, never a crash.
+    inspection = model_types.require(current_model, framework)
 
     train_records = [r for r in records if r.id not in holdout_ids]
     feature_names = inspection.feature_names_in or [
@@ -482,44 +683,49 @@ def run_adaptation_job(
     excluded_ids = {r.id for r in records} - {r.id for r in train_records}
     X, y = split_features_target(records_frame(train_records), feature_names, target)
 
-    try:
-        candidate = _produce_candidate(
-            decision.strategy,
-            current_model,
-            inspection=inspection,
-            framework=framework,
-            X=X,
-            y=y,
-            target_column=target,
-            settings=settings,
-            llm_client=llm_client,
-            workdir=workdir,
-        )
-    except (UnsafeCodeError, SandboxExecutionError) as exc:
-        # Only the LLM adapter raises these. Commit the audit rows now: the job's session is
-        # rolled back when the error escapes.
-        unsafe = isinstance(exc, UnsafeCodeError)
+    def _llm_failed(exc: Exception, reason: str) -> None:
+        # Commit the audit rows now: if no deterministic fallback exists the job fails and its
+        # session is rolled back.
+        sandboxed = isinstance(exc, SandboxExecutionError)
+        message = getattr(exc, "message", str(exc))
         _audit(
             session,
             AuditAction.ADAPTER_GENERATED,
             event.model_id,
             model_version=live_version,
-            status="FAILED" if unsafe else "OK",
-            reason=exc.message if unsafe else "adapter code passed the safety scan",
+            status="OK" if sandboxed else "FAILED",
+            reason="adapter code passed the safety scan" if sandboxed else message,
+            metadata={"fallback_reason": reason},
         )
-        if not unsafe:
+        if sandboxed:
             _audit(
                 session,
                 AuditAction.SANDBOX_EXECUTED,
                 event.model_id,
                 model_version=live_version,
                 status="FAILED",
-                reason=exc.message,
+                reason=message,
+                metadata={"fallback_reason": reason},
             )
         session.commit()
-        raise
+
+    candidate = _produce_candidate(
+        decision.strategy,
+        current_model,
+        inspection=inspection,
+        framework=framework,
+        X=X,
+        y=y,
+        target_column=target,
+        settings=settings,
+        llm_client=llm_client,
+        workdir=workdir,
+        model_types=model_types,
+        on_llm_failure=_llm_failed,
+    )
     check_size(candidate.artifact_path, settings.artifact_max_bytes, stage="candidate")
-    candidate_sha = sha256_file(candidate.artifact_path)
+    chunk = settings.artifact_hash_chunk_bytes
+    candidate_sha = sha256_file(candidate.artifact_path, chunk)
     if candidate.engine == EngineKind.LLM_GENERATED:
         _audit(
             session,
@@ -538,7 +744,7 @@ def run_adaptation_job(
         )
 
     _stage(session, JobStatus.VALIDATING_CANDIDATE, "scoring the candidate on held-out data")
-    verify_checksum(candidate.artifact_path, candidate_sha, stage="validation")
+    verify_checksum(candidate.artifact_path, candidate_sha, chunk_bytes=chunk, stage="validation")
     validation_frame = holdout_frame
     if validation_frame.empty:  # validate_candidate then reports "not enough validation rows"
         validation_frame = pd.DataFrame(columns=[*feature_names, target])
@@ -549,7 +755,7 @@ def run_adaptation_job(
         event.model_id,
         model_version=live_version,
         metadata={
-            "engine": candidate.engine.value,
+            "engine": str(candidate.engine),
             "applied_strategy": str(candidate.applied_strategy or decision.strategy),
             "adaptation_note": candidate.adaptation_note,
             "inspection": inspection.model_dump(mode="json"),
@@ -568,7 +774,9 @@ def run_adaptation_job(
         estimator_type=inspection.estimator_type,
         settings=settings,
         task_type=model_meta.task_type,
+        context=validation_frame,
     )
+    gate_row = _record_gate(session, event.model_id, live_version, report)
 
     _audit(
         session,
@@ -602,27 +810,33 @@ def run_adaptation_job(
         )
 
     _stage(session, JobStatus.REGISTERING, "registering the validated candidate")
-    verify_checksum(candidate.artifact_path, candidate_sha, stage="registration")
+    verify_checksum(
+        candidate.artifact_path, candidate_sha, chunk_bytes=chunk, stage="registration"
+    )
     source_versions = [
         ref for ref in (package.historical_data, package.drifted_data) if ref is not None
     ]
     name = model_meta.mlflow_model_name
-    new_version = registry.register_candidate(
+    new_version = register_candidate(
+        registry,
+        handler,
         name,
         candidate.artifact_path,
         framework=candidate.framework,
+        workdir=os.path.join(workdir, "publish"),
         metrics=candidate.metrics,
         tags={
             "oran.model_id": event.model_id,
             "oran.parent_version": live_version,
             "oran.event_id": event.event_id or "",
             "oran.job_id": current_job_id() or "",
-            "oran.status": ModelVersionStatus.VALIDATED.value,
+            registry.artifact_policy.status_tag: ModelVersionStatus.VALIDATED.value,
             "oran.correlation_id": get_correlation_id() or "",
             "adaptation.strategy": decision.strategy.value,
             "adaptation.applied_strategy": str(candidate.applied_strategy or decision.strategy),
-            "adaptation.note": candidate.adaptation_note[:500],
-            "adaptation.engine": candidate.engine.value,
+            # 250: the smallest per-tag limit of the registry adapters (SageMaker, 256).
+            "adaptation.note": candidate.adaptation_note[:250],
+            "adaptation.engine": str(candidate.engine),
             "candidate.sha256": candidate_sha,
             "validation.metric": report.metric_name,
             "validation.candidate_value": f"{report.candidate_value:.6f}",
@@ -633,7 +847,9 @@ def run_adaptation_job(
         },
     )
     metrics.REGISTRATIONS.inc()
-    registry.record_artifact_checksum(name, new_version, os.path.join(workdir, "registered"))
+    record_artifact_checksum(
+        registry, name, new_version, os.path.join(workdir, "registered")
+    )
     _audit(
         session,
         AuditAction.MODEL_REGISTERED,
@@ -641,9 +857,11 @@ def run_adaptation_job(
         model_version=new_version,
         decision=decision.strategy.value,
         reason=f"validated candidate registered (parent version {live_version})",
-        metadata={"artifact_sha256": candidate_sha, "engine": candidate.engine.value},
+        metadata={"artifact_sha256": candidate_sha, "engine": str(candidate.engine)},
     )
     registry.set_alias(name, settings.candidate_alias, new_version)
+    if gate_row is not None:
+        gate_row.candidate_version = new_version
     # Data lineage: freeze what v<new> was trained on as its own data version, linked to it, so
     # the next drift event is compared against the live model's real baseline.
     snapshot = snapshot_training_data(
@@ -656,6 +874,7 @@ def run_adaptation_job(
         if package.historical_data
         else None,
         job_ref=event.event_id,
+        access=access,
     )
     registry.set_version_tags(
         name,
@@ -665,6 +884,29 @@ def run_adaptation_job(
             "data.training_hash": snapshot.content_hash or "",
         },
     )
+
+    if settings.delivery_strategy != "blue_green":
+        return _deliver(
+            session, settings, registry, deployer, workdir,
+            model_id=event.model_id, live_version=live_version, new_version=new_version,
+            gate_row=gate_row,
+            result=JobResult(
+                model_id=event.model_id,
+                outcome="DELIVERING",
+                strategy=decision.strategy,
+                decision=decision,
+                candidate=candidate,
+                validation=report,
+                registered_version=new_version,
+                training_data_version=snapshot.version,
+                live_version=live_version,
+                version_evaluations=evaluations,
+                current_data_id=current_data_id,
+                reuse_decision=reuse,
+                leakage=leakage,
+                reason="",
+            ),
+        )
 
     _stage(session, JobStatus.PROMOTING, f"moving LIVE from {live_version} to {new_version}")
     result = JobResult(
@@ -688,6 +930,7 @@ def run_adaptation_job(
         promotion = promote_version(
             session,
             registry,
+            deployer=deployer,
             model_id=event.model_id,
             version=new_version,
             kind=PromotionKind.PROMOTE_CANDIDATE,

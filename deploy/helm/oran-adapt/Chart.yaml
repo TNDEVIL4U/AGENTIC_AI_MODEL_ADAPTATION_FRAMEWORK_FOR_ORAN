@@ -1,0 +1,10 @@
+apiVersion: v2
+name: oran-adapt
+description: >-
+  Agentic model adaptation for O-RAN: the REST API, job workers per queue class and the
+  migration hook. Every environment-specific value comes from values (docs/operations/helm.md).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+keywords: [o-ran, mlops, model-adaptation]

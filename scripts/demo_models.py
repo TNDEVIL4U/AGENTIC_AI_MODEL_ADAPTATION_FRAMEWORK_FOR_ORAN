@@ -54,6 +54,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from demo_torch_models import BeamMLP, EnergyMLP
+
 from oran_adapt.adaptation.data import holdout_size
 from oran_adapt.analysis.engine import analyze
 from oran_adapt.api.app import create_app
@@ -61,7 +63,7 @@ from oran_adapt.core.config import Settings
 from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.db.base import session_scope
 from oran_adapt.db.migrate import upgrade_to_head
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import ModelRegistryPort
 from oran_adapt.registry.onboarding import onboard_model
 
 torch.set_num_threads(2)
@@ -76,28 +78,6 @@ HIST, DRIFT = "hist-1", "drift-1"
 
 
 # --------------------------------------------------------------------------- demo torch models
-class BeamMLP(nn.Module):
-    """Two-class beam-selection classifier (logits out)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.net = nn.Sequential(nn.Linear(3, 16), nn.ReLU(), nn.Linear(16, 2))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
-class EnergyMLP(nn.Module):
-    """Scalar cell-energy regressor."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.net = nn.Sequential(nn.Linear(3, 16), nn.ReLU(), nn.Linear(16, 1))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
 def _train_torch(model: nn.Module, frame: pd.DataFrame, target: str, *, classifier: bool) -> nn.Module:
     X = torch.tensor(frame[FEATURES].to_numpy(), dtype=torch.float32)
     if classifier:
@@ -261,7 +241,7 @@ class Demo:
         self.run_tag = run_tag
         self.app = create_app(settings)
         self.client = TestClient(self.app)
-        self.registry: MlflowRegistry = self.app.state.registry
+        self.registry: ModelRegistryPort = self.app.state.registry
         self.rows: list[tuple[str, str, str, str, bool]] = []
 
     def mlflow_name(self, model_id: str) -> str:
@@ -284,6 +264,7 @@ class Demo:
             result = onboard_model(
                 session,
                 self.registry,
+                self.app.state.model_handler,
                 model_id=sc.model_id,
                 model=model,
                 framework=sc.framework,
@@ -303,12 +284,10 @@ class Demo:
 
     # ------------------------------------------------------------------ first drift cycle
     def reload_and_predict(self, sc: Scenario) -> str:
-        from oran_adapt.adaptation.loaders import load_native_model
-
         name = self.mlflow_name(sc.model_id)
         version = self.live(sc.model_id)
         path = self.registry.download_artifacts(name, version, str(self.run_dir / f"reload-{sc.model_id}-v{version}"))
-        model = load_native_model(path, sc.framework)
+        model = self.app.state.model_handler.load(path, sc.framework)
         probe = sc.make_frame(5, shift=sc.drift_shift, seed=999)[FEATURES]
         if sc.framework == "torch":
             with torch.no_grad():
@@ -447,6 +426,9 @@ def run(tracking_uri: str | None) -> int:
         artifact_workdir=str(run_dir / "work"),
         log_json=False,
         log_level="WARNING",
+        auth_enabled=False,  # a local demo; see RUN.md section 3 for API keys
+        # One process, no worker: each submitted job runs inside its request.
+        job_queue_backend="inline",
     )
 
     _banner("1. Migrating the database and starting the API")

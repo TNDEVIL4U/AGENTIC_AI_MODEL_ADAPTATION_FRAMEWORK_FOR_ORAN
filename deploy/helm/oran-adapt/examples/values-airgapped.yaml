@@ -1,0 +1,36 @@
+# Air-gapped: images from an in-cluster mirror, the LLM off, every model and registry
+# in-cluster, and egress limited to the cluster (no route out). MLflow and the database are
+# in-cluster services; the names are placeholders.
+image:
+  registry: mirror.registry.svc.cluster.local:5000/oran
+  tag: 0.1.0
+imagePullSecrets:
+  - name: mirror-pull
+config:
+  env:
+    ENVIRONMENT: production
+    LOG_LEVEL: INFO
+    ARTIFACT_WORKDIR: /tmp/oran-adapt/artifacts
+    SANDBOX_BACKEND: subprocess
+    LLM_ENABLED: "false"
+    MLFLOW_TELEMETRY: "false"
+adapters:
+  registry:
+    env: {REGISTRY_BACKEND: mlflow, MLFLOW_TRACKING_URI: "http://mlflow.mlops.svc.cluster.local:5000"}
+  deployment:
+    env: {DEPLOYMENT_BACKEND: registry-alias}
+secrets:
+  existingSecret: oran-adapt-env
+networkPolicy:
+  enabled: true
+  apiIngressFrom:
+    - podSelector: {}
+  egress:
+    - to:
+        - namespaceSelector: {}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}

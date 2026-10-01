@@ -1,0 +1,62 @@
+{{- if .Values.networkPolicy.enabled }}
+# Deny by default: nothing reaches the release's pods except the listed peers, on the API port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "oran-adapt.fullname" . }}-default-deny
+  labels:
+    {{- include "oran-adapt.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "oran-adapt.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if .Values.networkPolicy.egress }}
+    - Egress
+  egress:
+    {{- toYaml .Values.networkPolicy.egress | nindent 4 }}
+    {{- end }}
+{{- $peers := concat .Values.networkPolicy.apiIngressFrom .Values.networkPolicy.metricsFrom }}
+{{- if $peers }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "oran-adapt.fullname" . }}-api
+  labels:
+    {{- include "oran-adapt.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "oran-adapt.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- toYaml $peers | nindent 8 }}
+      ports:
+        - {port: {{ .Values.api.port }}, protocol: TCP}
+{{- end }}
+{{- with .Values.networkPolicy.metricsFrom }}
+---
+# The metrics peers may scrape the workers' metrics port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "oran-adapt.fullname" $ }}-worker-metrics
+  labels:
+    {{- include "oran-adapt.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "oran-adapt.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: worker
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - {port: {{ $.Values.worker.metricsPort }}, protocol: TCP}
+{{- end }}
+{{- end }}

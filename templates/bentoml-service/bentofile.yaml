@@ -1,0 +1,7 @@
+service: "service:OranModels"
+include:
+  - "service.py"
+python:
+  packages:
+    - bentoml>=1.2
+    - fastapi

@@ -4,22 +4,27 @@ worker metric forwarding (Rule 17)."""
 
 from __future__ import annotations
 
+import pytest
+from fastapi import Depends
 from fastapi.testclient import TestClient
 
 from oran_adapt.analysis.schemas import DataVersionRef, DecisionPackage, FeatureShift
 from oran_adapt.api.app import create_app
+from oran_adapt.api.security import public
 from oran_adapt.core import metrics
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy
 from oran_adapt.core.schemas import DriftEvent
 from oran_adapt.decision.engine import decide
 
+pytestmark = pytest.mark.smoke
+
 
 # ---- API errors and body size -----------------------------------------------------------------
 def test_unhandled_error_returns_structured_500_without_the_exception_text(migrated_settings):
     app = create_app(migrated_settings)
 
-    @app.get("/boom")
+    @app.get("/boom", dependencies=[Depends(public)])  # every route declares a policy
     def _boom() -> None:
         raise RuntimeError("secret-token-123 at C:/internal/path.py")
 

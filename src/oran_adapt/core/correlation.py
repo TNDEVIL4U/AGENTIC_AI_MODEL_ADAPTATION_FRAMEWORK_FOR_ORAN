@@ -1,8 +1,8 @@
 """Correlation id: one id per inbound request (or CLI/consumer run), carried through every log
 line, audit row and adaptation job it causes, so one drift event can be followed end to end.
 
-The id lives in a ContextVar. The API middleware sets it from the ``X-Correlation-ID`` request
-header (or a new one), and the job wrapper copies the context into the worker thread, so code
+The id lives in a ContextVar. The API middleware sets it from the request header named by
+API_CORRELATION_HEADER (or a new one), and the job wrapper copies the context into the worker thread, so code
 never passes it around explicitly."""
 
 from __future__ import annotations
@@ -11,8 +11,6 @@ import logging
 import re
 import uuid
 from contextvars import ContextVar, Token
-
-HEADER = "X-Correlation-ID"
 
 _correlation_id: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 # Caller-supplied ids end up in logs and the database: accept only short, plain tokens.

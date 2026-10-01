@@ -1,0 +1,38 @@
+# Production: images pinned by digest from your registry, settings for the chosen adapters, the
+# API reachable from the ingress controller only. Names and digests are placeholders for yours.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: oran-adapt
+resources:
+  - ../../base
+  - api-ingress-policy.yaml
+  - worker-metrics-policy.yaml
+images:
+  - name: oran-adapt-api
+    newName: registry.example.com/oran/oran-adapt-api
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: oran-adapt-worker
+    newName: registry.example.com/oran/oran-adapt-worker
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: oran-adapt-migrator
+    newName: registry.example.com/oran/oran-adapt-migrator
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+configMapGenerator:
+  - name: oran-adapt-config
+    behavior: merge
+    literals:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - REGISTRY_BACKEND=mlflow
+      - MLFLOW_TRACKING_URI=https://mlflow.example.com
+      - DEPLOYMENT_BACKEND=kserve
+      - K8S_API_URL=https://kubernetes.default.svc
+      - KSERVE_STORAGE_URI_TEMPLATE=s3://models/{name}/{version}
+      - METRICS_PUBLIC=false
+# Each release: a new suffix on the migration Job, so it runs once per release.
+patches:
+  - target: {kind: Job, name: oran-adapt-migrate}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: oran-adapt-migrate-0-1-0

@@ -20,6 +20,8 @@ from sklearn.linear_model import LogisticRegression
 from sqlalchemy import inspect as sa_inspect
 
 import oran_adapt.orchestrator.pipeline as pipeline_module
+from oran_adapt.adapters.deployment.alias import RegistryAliasDeployment
+from oran_adapt.adapters.registry.mlflow import MlflowRegistry
 from oran_adapt.analysis.reuse_decision import decide_reuse
 from oran_adapt.analysis.schemas import VersionEvaluation
 from oran_adapt.core.enums import (
@@ -53,7 +55,7 @@ from oran_adapt.db.models import (
     ModelVersionEvaluation,
 )
 from oran_adapt.orchestrator.jobs import submit_adaptation_job
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.promotion import promote_version
 
 FEATURES = ["prb_util", "rsrp"]
@@ -70,7 +72,7 @@ def session_factory(migrated_settings):
 def registry(settings) -> MlflowRegistry:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_registry_uri(settings.mlflow_tracking_uri)
-    return MlflowRegistry(settings.mlflow_tracking_uri)
+    return MlflowRegistry.from_settings(settings)
 
 
 # ---- data ------------------------------------------------------------------------------------
@@ -193,7 +195,8 @@ def _seed_three_similar(session_factory, registry, settings, *, model_id, name):
 # ---- state machine ---------------------------------------------------------------------------
 def test_state_machine_allows_the_spec_path_and_refuses_jumps() -> None:
     path = [
-        "RECEIVED", "VALIDATING", "DATA_PREPARING", "EVALUATING_VERSIONS", "REUSE_DECISION",
+        "RECEIVED", "QUEUED", "VALIDATING", "DATA_PREPARING", "EVALUATING_VERSIONS",
+        "REUSE_DECISION",
         "DECISION_PENDING", "ADAPTING", "VALIDATING_CANDIDATE", "REGISTERING", "PROMOTING",
         "COMPLETED",
     ]
@@ -201,7 +204,7 @@ def test_state_machine_allows_the_spec_path_and_refuses_jumps() -> None:
         check_transition(cur, nxt)
     check_transition("REUSE_DECISION", "PROMOTING")  # reuse skips adaptation
     check_transition("PROMOTING", "ROLLED_BACK")
-    check_transition("ADAPTING", "DATA_PREPARING")  # retry after a transient failure
+    check_transition("ADAPTING", "QUEUED")  # requeued after a transient failure
 
     with pytest.raises(InvalidTransitionError):
         check_transition("RECEIVED", "PROMOTING")
@@ -219,13 +222,13 @@ def test_checksum_of_an_artifact_directory_detects_tampering(tmp_path) -> None:
     (art / "sub").mkdir(parents=True)
     (art / "MLmodel").write_text("flavor: sklearn\n")
     (art / "sub" / "weights.bin").write_bytes(b"\x00\x01\x02")
-    digest = sha256_path(str(art))
-    assert digest == sha256_path(str(art))  # stable
-    verify_checksum(str(art), digest)
+    digest = sha256_path(str(art), 4096)
+    assert digest == sha256_path(str(art), 1 << 20)  # stable, whatever the read chunk
+    verify_checksum(str(art), digest, chunk_bytes=4096)
 
     (art / "sub" / "weights.bin").write_bytes(b"\x00\x01\x03")
     with pytest.raises(ArtifactIntegrityError):
-        verify_checksum(str(art), digest)
+        verify_checksum(str(art), digest, chunk_bytes=4096)
 
 
 # ---- reuse decision rule ---------------------------------------------------------------------
@@ -286,6 +289,7 @@ def test_reuse_rule_for_regressors_and_age_limit(settings) -> None:
 
 
 # ---- demo scenario 1: v2 is best, goes live without training ---------------------------------
+@pytest.mark.heavy
 def test_best_older_version_goes_live_without_training(
     session_factory, registry, migrated_settings, client, tmp_path
 ) -> None:
@@ -309,7 +313,8 @@ def test_best_older_version_goes_live_without_training(
 
     path = _path(session_factory, job.job_id)
     assert path == [
-        "RECEIVED", "VALIDATING", "DATA_PREPARING", "EVALUATING_VERSIONS", "REUSE_DECISION",
+        "RECEIVED", "QUEUED", "VALIDATING", "DATA_PREPARING", "EVALUATING_VERSIONS",
+        "REUSE_DECISION",
         "PROMOTING", "COMPLETED",
     ]
 
@@ -376,6 +381,7 @@ def _metric_total(name: str, **labels: str) -> float:
 
 
 # ---- demo scenario 2: nothing suitable, retrain to v4, then roll back ------------------------
+@pytest.mark.heavy
 def test_no_suitable_version_retrains_to_v4_then_rollback_restores_v3(
     session_factory, registry, migrated_settings, client, tmp_path
 ) -> None:
@@ -442,6 +448,7 @@ def test_no_suitable_version_retrains_to_v4_then_rollback_restores_v3(
 
 
 # ---- demo scenario 3: validation fails, LIVE unchanged ---------------------------------------
+@pytest.mark.heavy
 def test_failed_validation_leaves_live_untouched(
     session_factory, registry, migrated_settings, tmp_path, monkeypatch
 ) -> None:
@@ -473,6 +480,7 @@ def test_failed_validation_leaves_live_untouched(
 
 
 # ---- promotion failure: alias restored, job ROLLED_BACK --------------------------------------
+@pytest.mark.heavy
 def test_failed_promotion_restores_live_and_marks_job_rolled_back(
     session_factory, registry, migrated_settings, tmp_path, monkeypatch
 ) -> None:
@@ -506,6 +514,7 @@ def test_failed_promotion_restores_live_and_marks_job_rolled_back(
 
 
 # ---- integrity at promotion time -------------------------------------------------------------
+@pytest.mark.heavy
 def test_promotion_refuses_a_version_whose_artifact_changed(
     session_factory, registry, migrated_settings, tmp_path
 ) -> None:
@@ -513,9 +522,15 @@ def test_promotion_refuses_a_version_whose_artifact_changed(
         session_factory, registry, migrated_settings, model_id="cell-e", name="cell_e"
     )
     registry.set_version_tags("cell_e", "2", {"artifact.sha256": "0" * 64})
+    deployer = Deployer(
+        RegistryAliasDeployment(registry, migrated_settings.live_alias,
+                                canary_alias=migrated_settings.deployment_canary_alias,
+                                traffic_tag=migrated_settings.deployment_traffic_tag),
+        backend="registry-alias", timeout_s=5, poll_s=0.01,
+    )
     with session_scope(session_factory) as session, pytest.raises(ArtifactIntegrityError):
         promote_version(
-            session, registry, model_id="cell-e", version="2", kind=PromotionKind.ROLLBACK,
+            session, registry, deployer=deployer, model_id="cell-e", version="2", kind=PromotionKind.ROLLBACK,
             live_alias=migrated_settings.live_alias, workdir=str(tmp_path / "w"),
         )
     assert registry.get_version_by_alias("cell_e", migrated_settings.live_alias) == "3"
@@ -523,13 +538,14 @@ def test_promotion_refuses_a_version_whose_artifact_changed(
     # Promoting what is already live is a recorded no-op.
     with session_scope(session_factory) as session:
         same = promote_version(
-            session, registry, model_id="cell-e", version="3", kind=PromotionKind.ROLLBACK,
+            session, registry, deployer=deployer, model_id="cell-e", version="3", kind=PromotionKind.ROLLBACK,
             live_alias=migrated_settings.live_alias, workdir=str(tmp_path / "w"),
         )
     assert same.status == "NO_CHANGE"
 
 
 # ---- per-model lock --------------------------------------------------------------------------
+@pytest.mark.heavy
 def test_second_event_for_a_busy_model_is_refused_until_the_lock_expires(
     session_factory, registry, migrated_settings, client, tmp_path
 ) -> None:

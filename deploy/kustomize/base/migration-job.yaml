@@ -1,0 +1,41 @@
+# `oran-adapt db upgrade`. Expand-only migrations (docs/operations/migrations.md): running pods of
+# the previous release keep working while it runs. A Job's pod template cannot change, so each
+# release gives the Job a new name (the overlay's nameSuffix on it, or delete the finished Job
+# before applying).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oran-adapt-migrate
+  labels: {app.kubernetes.io/component: migrator}
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: migrator}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: oran-adapt
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: oran-adapt-migrator
+          command: ["oran-adapt", "db", "upgrade"]
+          envFrom:
+            - configMapRef: {name: oran-adapt-config}
+            - secretRef: {name: oran-adapt-env}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 2Gi}}]

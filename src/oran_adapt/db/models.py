@@ -11,9 +11,11 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -126,6 +128,7 @@ class PerformanceRecord(Base):
 
 class AdaptationJob(Base):
     __tablename__ = "adaptation_job"
+    __table_args__ = (Index("ix_adaptation_job_claim", "status", "worker_class", "available_at"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     job_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True)
@@ -140,7 +143,41 @@ class AdaptationJob(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+    # The job queue (orchestrator.queue): who may run the job, in what order, and who runs it
+    # now. A worker claims a QUEUED job whose available_at has passed by writing a fresh
+    # lease_token; every later write of that worker is fenced on the token.
+    tenant: Mapped[str] = mapped_column(String(100), default="default", index=True)
+    worker_class: Mapped[str] = mapped_column(String(50), default="default")
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(200))
+    lease_token: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_by: Mapped[str | None] = mapped_column(String(200))
+    # Attempts that ended without an outcome (the worker died or lost its lease); at
+    # JOB_POISON_THRESHOLD the job is quarantined instead of being run again.
+    lost_count: Mapped[int] = mapped_column(Integer, default=0)
+    quarantined: Mapped[bool] = mapped_column(Boolean, default=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # W3C traceparent of the intake span (core.tracing): the worker continues this trace.
+    trace_context: Mapped[str | None] = mapped_column(String(128))
     events: Mapped[list[AdaptationEvent]] = relationship(back_populates="job")
+
+
+class JobSlot(Base):
+    """One of a tenant's concurrency slots (JOB_TENANT_CONCURRENCY / JOB_TENANT_LIMITS), held by
+    the job running in it. The primary key makes the limit exact across workers: two claims of
+    the same slot cannot both commit. ``expires_at`` is renewed with the job's lease, so a slot
+    whose worker died frees itself."""
+
+    __tablename__ = "job_slot"
+    tenant: Mapped[str] = mapped_column(String(100), primary_key=True)
+    slot: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class AdaptationEvent(Base):
@@ -313,6 +350,135 @@ class CdcOffset(Base):
     position: Mapped[str] = mapped_column(String(200))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class NotificationEvent(Base):
+    """The outbox (oran_adapt.notifications): one row per event, written in the transaction
+    that made the change it reports, so an event exists if and only if its change committed.
+    ``envelope`` is the CloudEvents JSON sent to every sink; ``event_id`` is its ``id``."""
+
+    __tablename__ = "notification_event"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(100), index=True)
+    subject: Mapped[str] = mapped_column(String(200), index=True)  # the job id
+    model_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    envelope: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = _ts()
+    deliveries: Mapped[list[NotificationDelivery]] = relationship(back_populates="event")
+
+
+class NotificationDelivery(Base):
+    """One event's delivery to one sink. PENDING until the sink takes it (DELIVERED) or it runs
+    out of attempts or is refused for good (DEAD, until redriven). A dispatcher claims a row by
+    setting ``lease_until``; a row whose lease has run out is claimable again."""
+
+    __tablename__ = "notification_delivery"
+    __table_args__ = (UniqueConstraint("event_id", "sink"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("notification_event.event_id"), index=True
+    )
+    sink: Mapped[str] = mapped_column(String(50), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    leased_by: Mapped[str | None] = mapped_column(String(100))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_status_code: Mapped[int | None] = mapped_column(Integer)
+    redrive_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts()
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dead_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    event: Mapped[NotificationEvent] = relationship(back_populates="deliveries")
+
+
+class GateDecisionRecord(Base):
+    """One decision of the validation gate (validation.gate): the verdict, the policy version
+    and hash it was made under, and the full GateDecision in ``decision``."""
+
+    __tablename__ = "gate_decision"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(200), index=True)
+    job_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    current_version: Mapped[str | None] = mapped_column(String(50))
+    candidate_version: Mapped[str | None] = mapped_column(String(50))
+    verdict: Mapped[str] = mapped_column(String(10), index=True)  # ACCEPT | REJECT
+    metric: Mapped[str] = mapped_column(String(50))
+    policy_version: Mapped[str] = mapped_column(String(50))
+    policy_hash: Mapped[str] = mapped_column(String(64))
+    decision: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = _ts()
+
+
+class Rollout(Base):
+    """A validated candidate on its way to traffic (delivery.controller). ``state`` moves
+    SHADOW / CANARY / AB / AWAITING_APPROVAL -> PROMOTED | ROLLED_BACK | EXPIRED | REJECTED;
+    ``history`` lists every transition with its reason. ``policy`` is the DeliveryPolicy the
+    rollout started under - later config changes do not alter a running rollout."""
+
+    __tablename__ = "rollout"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rollout_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    model_id: Mapped[str] = mapped_column(String(200), index=True)
+    job_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    strategy: Mapped[str] = mapped_column(String(20))
+    state: Mapped[str] = mapped_column(String(30), index=True)
+    stable_version: Mapped[str | None] = mapped_column(String(50))
+    candidate_version: Mapped[str] = mapped_column(String(50))
+    step: Mapped[int] = mapped_column(Integer, default=0)
+    percent: Mapped[int] = mapped_column(Integer, default=0)
+    policy: Mapped[dict] = mapped_column(JSON)
+    policy_hash: Mapped[str] = mapped_column(String(64))
+    gate_decision_id: Mapped[int | None] = mapped_column(Integer)
+    step_started_at: Mapped[datetime] = _ts()
+    # When the current state times out (shadow_max_s, ab_duration_s, approval_ttl_s).
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(200))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    history: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RolloutObservation(Base):
+    """Online metrics of one arm (stable | candidate) of a rollout over some requests, as
+    submitted to the API (the ``api`` rollout metrics adapter reads these)."""
+
+    __tablename__ = "rollout_observation"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rollout_id: Mapped[str] = mapped_column(String(64), index=True)
+    arm: Mapped[str] = mapped_column(String(20))
+    requests: Mapped[int] = mapped_column(Integer, default=1)
+    metrics: Mapped[dict] = mapped_column(JSON)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )
+
+
+class LlmUsage(Base):
+    """One LLM call's usage, the ledger the token and cost budgets are checked against
+    (llm.guard). Rows are written after each call that reached the provider."""
+
+    __tablename__ = "llm_usage"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(100), index=True)
+    prompt_id: Mapped[str | None] = mapped_column(String(100))
+    prompt_version: Mapped[str | None] = mapped_column(String(50))
+    job_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated: Mapped[bool] = mapped_column(Boolean, default=False)
+    cost: Mapped[float] = mapped_column(Float, default=0.0)
+    outcome: Mapped[str] = mapped_column(String(40), default="ok")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
     )
 
 

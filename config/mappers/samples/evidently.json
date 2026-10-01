@@ -1,0 +1,36 @@
+{
+  "version": "0.4.33",
+  "timestamp": "2026-03-01T12:00:00",
+  "metrics": [
+    {
+      "metric": "DatasetDriftMetric",
+      "result": {
+        "drift_share": 0.5,
+        "number_of_columns": 3,
+        "number_of_drifted_columns": 2,
+        "share_of_drifted_columns": 0.6667,
+        "dataset_drift": true
+      }
+    },
+    {
+      "metric": "DataDriftTable",
+      "result": {
+        "number_of_columns": 3,
+        "number_of_drifted_columns": 2,
+        "share_of_drifted_columns": 0.6667,
+        "dataset_drift": true,
+        "drift_by_columns": {
+          "prb_util": {"column_name": "prb_util", "column_type": "num",
+                       "stattest_name": "K-S p_value", "stattest_threshold": 0.05,
+                       "drift_score": 0.0001, "drift_detected": true},
+          "cqi": {"column_name": "cqi", "column_type": "num",
+                  "stattest_name": "K-S p_value", "stattest_threshold": 0.05,
+                  "drift_score": 0.003, "drift_detected": true},
+          "rsrp": {"column_name": "rsrp", "column_type": "num",
+                   "stattest_name": "K-S p_value", "stattest_threshold": 0.05,
+                   "drift_score": 0.41, "drift_detected": false}
+        }
+      }
+    }
+  ]
+}

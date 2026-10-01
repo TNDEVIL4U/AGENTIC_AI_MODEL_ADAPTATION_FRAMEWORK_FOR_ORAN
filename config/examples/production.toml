@@ -1,0 +1,41 @@
+# Production: PostgreSQL, an MLflow server with --serve-artifacts, Debezium/Kafka CDC, an LLM
+# provider, webhook notifications. Secrets are NOT in this file (the loader refuses them): set
+# ANTHROPIC_API_KEY and API_KEYS in the environment, or point SECRETS_BACKEND=file at a
+# directory with one file per secret.
+# Use with:  ORAN_CONFIG_FILE=config/examples/production.toml
+
+environment = "production"
+database_url = "postgresql+psycopg://oran@db.internal:5432/oran_adapt"
+mlflow_tracking_uri = "http://mlflow.internal:5000"
+artifact_workdir = "/var/lib/oran-adapt/artifacts"
+
+cdc_mode = "kafka"
+kafka_bootstrap_servers = "kafka.internal:9092"
+
+[log]
+level = "INFO"
+json = true
+
+[llm]
+provider = "anthropic"
+timeout_s = 60.0
+max_output_tokens = 2048
+
+[anthropic]
+model = "claude-sonnet-5"
+
+[auth]
+enabled = true
+backend = "api-key"
+
+[notification]
+backend = "webhook"
+webhook_url = "https://alerts.internal/oran-adapt"
+
+[secrets]
+backend = "file"
+dir = "/run/secrets/oran-adapt"
+
+[cdc]
+kafka_topic = "oran.public.kpi_sample"
+consumer_group = "oran-adapt-cdc"

@@ -1,107 +1,108 @@
-"""Phase 10 hardening: wraps the pure pipeline (`orchestrator.pipeline.run_adaptation_job`,
-Phase 9) with everything a durable job needs that the pure function deliberately leaves out -
-persistence, idempotency, concurrency-safe deduplication, retries on transient failures, and a
-wall-clock timeout. `submit_adaptation_job` is the one function callers (the API route) use;
-`run_adaptation_job` only reports its stages (orchestrator.context) and is otherwise ignorant
-of all of this.
+"""Durable adaptation jobs: submission, state transitions and a single pipeline attempt.
 
-Idempotency and concurrency: every job is keyed by `DriftEvent.idempotency_key()`, enforced by a
-unique DB constraint on `AdaptationJob.idempotency_key`. Two callers racing to submit the same
-event either see each other's row on the initial lookup, or lose the INSERT race and catch the
-resulting IntegrityError - either way, exactly one of them runs the pipeline and both get back
-the same job's outcome (the loser with `duplicate=True`).
+The pure pipeline (`orchestrator.pipeline.run_adaptation_job`) only reports its stages
+(orchestrator.context). This module adds persistence, idempotency and the fenced transitions a
+queued job needs; orchestrator.worker claims queued jobs and runs them.
 
-Retries: only `RegistryUnavailableError` and `DatabaseUnavailableError` are retried (transient,
-infrastructure-level) - a deterministic failure like `ModelNotFoundError` or a rejected candidate
-is never retried, since re-running would just fail (or reject) the same way again.
+Submission (`submit_adaptation_job`): the job is inserted RECEIVED together with its model's
+lock and moved to QUEUED in the same transaction, so a job is only ever stored queued and
+locked. After the commit the job queue adapter (JOB_QUEUE_BACKEND, oran_adapt.job_queue) is
+asked to wake a worker; a broker that cannot be reached is logged and the reaper publishes the
+job again. The call returns the QUEUED job; the API answers 201 and the caller follows the job
+with GET /adaptation/jobs/{id}. Only the development adapter ``inline`` runs the job in the
+submitting call and returns its outcome.
 
-Locking: a job is inserted together with its model's lock (orchestrator.locks), so only one
-job per model runs at a time. A different event for a model that is busy is refused with
-ModelBusyError and nothing is recorded. The lock is released when the job ends; after a timeout
-it is released once the worker is dead (process mode) or has finished (thread mode), and the
-lock TTL is the backstop if this process dies.
+Idempotency: every job is keyed by `DriftEvent.idempotency_key()`, enforced by a unique DB
+constraint on `AdaptationJob.idempotency_key`. Two callers racing to submit the same event - two
+API replicas included - either see each other's row on the initial lookup, or lose the INSERT
+race and catch the IntegrityError; either way there is one job and the loser gets it back with
+`duplicate=True`.
 
-States: every transition goes through core.state_machine. The wrapper records RECEIVED ->
-VALIDATING -> DATA_PREPARING; the pipeline reports the stages after that through
-orchestrator.context, each recorded as its own transition. A job that runs past its timeout ends
-TIMED_OUT, a terminal state.
+Locking: a job holds its model's lock (orchestrator.locks) from submission to its end, so only
+one job per model is queued or running at a time; a different event for a busy model is refused
+with ModelBusyError and nothing is recorded. The worker renews the lock while it runs the job.
+An expired lock is taken over only when its holder is neither queued nor running under a live
+lease; the holder is then recorded FAILED with JOB_ABANDONED.
 
-Timeout (`Settings.job_timeout_s`), by `Settings.job_execution_mode`:
-- "process" (default): each attempt runs in a fresh worker process (multiprocessing "spawn"). The
-  child rebuilds its own DB engine, MLflow registry and LLM client from picklable settings and
-  records stage transitions itself. On a timeout the parent terminates it, then kills it if it
-  has not exited within a grace period. On POSIX the worker leads its own process group, so the
-  sandbox subprocesses it started die with it. On Windows only the worker itself is killed: a
-  sandbox subprocess it had started runs until its own work ends. A worker killed while
-  REGISTERING or PROMOTING may leave the registry half-updated; the TIMED_OUT error then carries
-  ``needs_reconciliation`` so an operator checks the live alias.
-- "thread": the pipeline runs in a worker thread of this process. Python cannot kill a thread,
-  so on a timeout it is left to finish; its next stage report finds the job TIMED_OUT, which the
-  state machine refuses, so it stops there instead of promoting anything. Only for tests and
-  debugging that inject in-process fakes.
+Fencing: a worker runs a job under a lease token (orchestrator.worker). Every transition it
+records passes the token as ``fence``; once the lease has passed to another worker the token no
+longer matches and the transition is refused with JobLeaseLostError, so a job is never taken to
+an outcome twice. A fenced stage report also refuses to continue a job whose cancel was
+requested (JobCancelledError), unless the job is registering or promoting.
+
+States: every transition goes through core.state_machine. A job goes RECEIVED -> QUEUED, then
+per attempt QUEUED -> VALIDATING -> DATA_PREPARING -> ... ; the pipeline reports the stages
+after that through orchestrator.context. A retried job goes back to QUEUED.
 """
 
 from __future__ import annotations
 
-import contextvars
-import json
 import logging
-import multiprocessing
-import os
-import pickle  # nosec B403 - only to check that parent-built job inputs can reach the worker
-import signal
-import sys
-import threading
-import time
 import uuid
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
-from multiprocessing.connection import Connection
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from opentelemetry.trace import SpanKind
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from oran_adapt.core import metrics
+from oran_adapt import bootstrap
+from oran_adapt.bootstrap import build_job_queue
+from oran_adapt.core import metrics, observed, tracing
 from oran_adapt.core.audit import record_audit
 from oran_adapt.core.config import Settings
 from oran_adapt.core.correlation import get_correlation_id, set_correlation_id
 from oran_adapt.core.enums import TERMINAL_STATUSES, AuditAction, JobStatus
 from oran_adapt.core.errors import (
-    AdaptationError,
-    ConfigurationError,
-    DatabaseUnavailableError,
     JobAbandonedError,
+    JobCancelledError,
+    JobLeaseLostError,
+    JobNotCancellableError,
+    JobNotFoundError,
+    JobQueueUnavailableError,
     JobTimeoutError,
     ModelBusyError,
-    RegistryUnavailableError,
 )
 from oran_adapt.core.logging import configure_logging, log_event
 from oran_adapt.core.schemas import DriftEvent, JobResponse
 from oran_adapt.core.state_machine import check_transition
 from oran_adapt.db.base import create_db_engine, make_session_factory, session_scope
-from oran_adapt.db.models import AdaptationEvent, AdaptationJob, ModelLock
-from oran_adapt.llm.client import (
-    AnthropicLlmClient,
-    GeminiLlmClient,
-    InstrumentedLlmClient,
-    LlmClient,
-    build_llm_client,
+from oran_adapt.db.models import (
+    AdaptationEvent,
+    AdaptationJob,
+    JobSlot,
+    ModelLock,
+    ModelMetadata,
 )
+from oran_adapt.llm.client import LlmClient
+from oran_adapt.notifications.events import record_job_transition
 from oran_adapt.orchestrator.context import JobContext, current_job
 from oran_adapt.orchestrator.locks import add_lock, release_lock, take_over_expired_lock
 from oran_adapt.orchestrator.pipeline import run_adaptation_job
 from oran_adapt.orchestrator.schemas import JobResult
-from oran_adapt.registry.client import MlflowRegistry
+from oran_adapt.ports import JobCall, JobExecutorPort, JobQueuePort, ModelRegistryPort, QueuedJob
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-_RETRYABLE = (RegistryUnavailableError, DatabaseUnavailableError)
-
-# How long a terminated worker gets to exit before it is killed outright.
-_KILL_GRACE_S = 5.0
-# Stages where a killed worker may have changed the registry without finishing.
+# Stages where a stopped worker may have changed the registry without finishing: a cancel is
+# refused there, and a job lost there is failed for reconciliation instead of being rerun.
 _REGISTRY_STAGES = frozenset({JobStatus.REGISTERING, JobStatus.PROMOTING})
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def aware(value: datetime | None) -> datetime | None:
+    """A stored timestamp as an aware UTC datetime (SQLite returns them naive)."""
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
 
 
 def _to_response(job: AdaptationJob, *, duplicate: bool) -> JobResponse:
@@ -115,52 +116,123 @@ def _to_response(job: AdaptationJob, *, duplicate: bool) -> JobResponse:
         duplicate=duplicate,
         created_at=job.created_at,
         updated_at=job.updated_at,
+        tenant=job.tenant,
+        worker_class=job.worker_class,
+        attempt=job.attempt or 0,
+        cancel_requested=job.cancel_requested_at is not None,
+        quarantined=bool(job.quarantined),
     )
+
+
+def load_job(session: Session, job_id: str, *, lock: bool = False) -> AdaptationJob:
+    """The job row (locked for update when ``lock``); JobNotFoundError when there is none."""
+    query = select(AdaptationJob).where(AdaptationJob.job_id == job_id)
+    if lock:
+        query = query.with_for_update()
+    job = session.execute(query).scalar_one_or_none()
+    if job is None:
+        raise JobNotFoundError(f"job '{job_id}' not found", job_id=job_id)
+    return job
+
+
+def apply_transition(
+    session: Session,
+    settings: Settings,
+    job: AdaptationJob,
+    to_status: JobStatus,
+    *,
+    message: str = "",
+    error: dict | None = None,
+    result: dict | None = None,
+    strategy: str | None = None,
+    component: str = "orchestrator",
+) -> None:
+    """Record ``job`` moving to ``to_status`` in ``session``: the row's status, an immutable
+    AdaptationEvent and the transition's notification event (outbox), all committed or rolled
+    back together with the caller's transaction."""
+    check_transition(job.status, to_status)
+    session.add(
+        AdaptationEvent(
+            job_id=job.job_id,
+            component=component,
+            from_status=job.status,
+            to_status=to_status,
+            message=message,
+        )
+    )
+    record_job_transition(
+        session, settings, job_id=job.job_id, model_id=job.model_id, from_status=job.status,
+        to_status=to_status, message=message, error=error,
+        strategy=strategy if strategy is not None else job.strategy,
+    )
+    job.status = to_status
+    if error is not None:
+        job.error = error
+    if result is not None:
+        job.result = result
+    if strategy is not None:
+        job.strategy = strategy
+
+
+def check_fence(job: AdaptationJob, fence: str | None, to_status: JobStatus) -> None:
+    """Refuse a worker's write once it no longer holds the job's lease, and a stage report
+    after a cancel request (outside the registry stages)."""
+    if fence is None:
+        return
+    if job.lease_token != fence:
+        raise JobLeaseLostError(
+            "this worker no longer holds the job's lease",
+            job_id=job.job_id,
+            lease_owner=job.lease_owner,
+        )
+    if (
+        job.cancel_requested_at is not None
+        and to_status not in TERMINAL_STATUSES
+        and to_status != JobStatus.QUEUED
+        and JobStatus(job.status) not in _REGISTRY_STAGES
+    ):
+        raise JobCancelledError(
+            "the job was cancelled on request",
+            job_id=job.job_id,
+            requested_by=job.cancel_requested_by,
+            stage=job.status,
+        )
 
 
 def _transition(
     session_factory,
     job_id: str,
     *,
+    settings: Settings,
     to_status: JobStatus,
     message: str = "",
     error: dict | None = None,
     result: dict | None = None,
     strategy: str | None = None,
+    fence: str | None = None,
 ) -> JobResponse:
-    """Load the job in its own short transaction, record the state change as both the row's
-    current status and an immutable `AdaptationEvent`, and commit - so a job's persisted status
-    always reflects the last step that actually finished, even if the process dies right after."""
+    """Load the job in its own short transaction, record the state change (apply_transition)
+    and commit - so a job's persisted status always reflects the last step that actually
+    finished, even if the process dies right after. ``fence`` is the caller's lease token
+    (check_fence)."""
     with session_scope(session_factory) as session:
-        job = session.execute(select(AdaptationJob).where(AdaptationJob.job_id == job_id)).scalar_one()
-        check_transition(job.status, to_status)
-        session.add(
-            AdaptationEvent(
-                job_id=job_id,
-                component="orchestrator",
-                from_status=job.status,
-                to_status=to_status,
-                message=message,
-            )
-        )
-        job.status = to_status
-        if error is not None:
-            job.error = error
-        if result is not None:
-            job.result = result
-        if strategy is not None:
-            job.strategy = strategy
+        job = load_job(session, job_id, lock=fence is not None)
+        check_fence(job, fence, to_status)
+        apply_transition(session, settings, job, to_status, message=message, error=error,
+                         result=result, strategy=strategy)
         session.flush()
         response = _to_response(job, duplicate=False)
     log_event(logger, message or f"job -> {to_status}", adaptation_job_id=job_id, status=to_status)
     return response
 
 
-def _fail_abandoned_job(session, old_job_id: str, taken_over_by: str) -> None:
+def _fail_abandoned_job(
+    session, settings: Settings, old_job_id: str, taken_over_by: str
+) -> None:
     """The lock of ``old_job_id`` expired and ``taken_over_by`` now holds it, so the process that
     ran the old job died (a crash or a service restart). Record the old job FAILED in the
-    takeover's transaction so it never stays in a running state; should its worker still be
-    alive, its next stage report is refused by the state machine, as after a timeout."""
+    takeover's transaction so it never stays in a running state; its lease is cleared, so a
+    worker of it that is still alive has every further write refused."""
     old = session.execute(
         select(AdaptationJob).where(AdaptationJob.job_id == old_job_id)
     ).scalar_one_or_none()
@@ -175,18 +247,11 @@ def _fail_abandoned_job(session, old_job_id: str, taken_over_by: str) -> None:
     ).to_dict()
     if last_stage in _REGISTRY_STAGES:
         error["context"]["needs_reconciliation"] = True
-    check_transition(last_stage, JobStatus.FAILED)
-    session.add(
-        AdaptationEvent(
-            job_id=old_job_id,
-            component="orchestrator",
-            from_status=last_stage,
-            to_status=JobStatus.FAILED,
-            message=error["message"],
-        )
-    )
-    old.status = JobStatus.FAILED
-    old.error = error
+    apply_transition(session, settings, old, JobStatus.FAILED, message=error["message"],
+                     error=error)
+    old.lease_token = None
+    old.lease_expires_at = None
+    session.execute(delete(JobSlot).where(JobSlot.job_id == old_job_id))
     metrics.ADAPTATION_JOBS.labels(JobStatus.FAILED.value, "NONE").inc()
     metrics.ADAPTATION_FAILURE.labels(JobAbandonedError.code).inc()
     log_event(
@@ -197,289 +262,77 @@ def _fail_abandoned_job(session, old_job_id: str, taken_over_by: str) -> None:
     )
 
 
-def _run_once(
-    event: DriftEvent,
-    settings: Settings,
-    *,
-    registry: MlflowRegistry,
-    llm_client: LlmClient | None,
-    workdir: str,
-    session_factory,
-    job_id: str,
-    on_abandoned: Callable[[], None] | None = None,
-) -> JobResult:
-    """One attempt, bounded by `settings.job_timeout_s`, in a worker process or thread (see the
-    module docstring). Raises whatever the pipeline itself raised, or JobTimeoutError."""
-    if settings.job_execution_mode == "process":
-        return _run_in_process(
-            event, settings, registry=registry, llm_client=llm_client, workdir=workdir,
-            session_factory=session_factory, job_id=job_id,
-        )
-    return _run_in_thread(
-        event, settings, registry=registry, llm_client=llm_client, workdir=workdir,
-        session_factory=session_factory, job_id=job_id, on_abandoned=on_abandoned,
+def _holder_is_active(session: Session, holder_job_id: str | None) -> bool:
+    """Whether the job holding an expired lock is still legitimately waiting or running: it is
+    queued, or a worker renews its lease. Such a lock is never taken over."""
+    if not holder_job_id:
+        return False
+    holder = session.get(AdaptationJob, holder_job_id)
+    if holder is None or JobStatus(holder.status) in TERMINAL_STATUSES:
+        return False
+    if JobStatus(holder.status) == JobStatus.QUEUED:
+        return True
+    expires = aware(holder.lease_expires_at)
+    return holder.lease_token is not None and expires is not None and expires > _now()
+
+
+def _placement(session: Session, event: DriftEvent, settings: Settings,
+               actor: str) -> dict[str, Any]:
+    """Tenant, worker class, priority and deadline of a new job, from configuration."""
+    framework = session.scalar(
+        select(ModelMetadata.framework).where(ModelMetadata.model_id == event.model_id)
     )
-
-
-def _run_in_thread(
-    event: DriftEvent,
-    settings: Settings,
-    *,
-    registry: MlflowRegistry,
-    llm_client: LlmClient | None,
-    workdir: str,
-    session_factory,
-    job_id: str,
-    on_abandoned: Callable[[], None] | None = None,
-) -> JobResult:
-    """On a timeout, ``on_abandoned`` runs once the detached worker thread has finished."""
-
-    def _on_stage(status: JobStatus, message: str) -> None:
-        _transition(session_factory, job_id, to_status=status, message=message)
-
-    def _call() -> JobResult:
-        current_job.set(JobContext(job_id=job_id, on_stage=_on_stage))
-        with session_scope(session_factory) as worker_session:
-            return run_adaptation_job(
-                worker_session,
-                event,
-                settings,
-                registry=registry,
-                llm_client=llm_client,
-                workdir=workdir,
-            )
-
-    # The worker runs in a copy of this context, so the request's correlation id reaches the
-    # pipeline's logs and audit rows.
-    ctx = contextvars.copy_context()
-    pool = ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(ctx.run, _call)
-    try:
-        return future.result(timeout=settings.job_timeout_s)
-    except FutureTimeoutError as exc:
-        if on_abandoned is not None:
-            future.add_done_callback(lambda _f: on_abandoned())
-        raise JobTimeoutError(
-            f"adaptation job exceeded its {settings.job_timeout_s:.0f}s timeout",
-            timeout_s=settings.job_timeout_s,
-        ) from exc
-    finally:
-        pool.shutdown(wait=False)
-
-
-# ---- process mode ---------------------------------------------------------------------------
-def _portable_registry(registry: object) -> tuple:
-    # An MlflowRegistry holds an MlflowClient, which is rebuilt in the worker from its URIs.
-    if isinstance(registry, MlflowRegistry):
-        return ("mlflow", registry.tracking_uri, registry.registry_uri, registry.skops_trusted_types)
-    return ("object", registry)
-
-
-def _portable_llm(client: LlmClient | None) -> tuple:
-    # Provider SDK clients are rebuilt in the worker from settings rather than pickled.
-    if isinstance(client, InstrumentedLlmClient) and isinstance(
-        client.inner, AnthropicLlmClient | GeminiLlmClient
-    ):
-        return ("settings",)
-    return ("object", client)
-
-
-def _plain(context: dict) -> dict:
-    """``context`` reduced to JSON-safe values, so it always survives the trip to the parent."""
-    return json.loads(json.dumps(context, default=str))
-
-
-def _worker_main(conn: Connection, payload: dict) -> None:
-    """Entry point of a job's worker process. Sends back exactly one message:
-    ("ok", deltas, result) | ("error", deltas, code, message, context) | ("crash", deltas, text),
-    where deltas is how far this worker moved the forwarded metrics (metrics.delta_since)."""
-    if sys.platform != "win32":
-        os.setpgrp()  # lead a process group, so a timeout kills sandbox subprocesses too
-    engine = None
-    before = metrics.snapshot()
-    try:
-        settings: Settings = payload["settings"]
-        configure_logging(settings.log_level, settings.log_json)
-        set_correlation_id(payload["correlation_id"])
-        engine = create_db_engine(payload["db_url"])
-        factory = make_session_factory(engine)
-        job_id = payload["job_id"]
-
-        def _on_stage(status: JobStatus, message: str) -> None:
-            _transition(factory, job_id, to_status=status, message=message)
-
-        current_job.set(JobContext(job_id=job_id, on_stage=_on_stage))
-
-        kind, *spec = payload["registry"]
-        registry = (
-            MlflowRegistry(spec[0], spec[1], skops_trusted_types=spec[2])
-            if kind == "mlflow"
-            else spec[0]
-        )
-        kind, *spec = payload["llm_client"]
-        llm_client = build_llm_client(settings) if kind == "settings" else spec[0]
-
-        with session_scope(factory) as session:
-            result = payload["pipeline"](
-                session,
-                payload["event"],
-                settings,
-                registry=registry,
-                llm_client=llm_client,
-                workdir=payload["workdir"],
-            )
-        conn.send(("ok", metrics.delta_since(before), result.model_dump(mode="json")))
-    except AdaptationError as exc:
-        deltas = metrics.delta_since(before)
-        conn.send(("error", deltas, exc.code, exc.message, _plain(exc.context)))
-    except Exception as exc:  # noqa: BLE001 - reported to the parent, which records it
-        conn.send(("crash", metrics.delta_since(before), f"{type(exc).__name__}: {exc}"))
-    finally:
-        conn.close()
-        if engine is not None:
-            engine.dispose()
-
-
-def _rebuild_error(code: str, message: str, context: dict) -> AdaptationError:
-    """The worker's AdaptationError, rebuilt in the parent with its class, so retry decisions
-    (``_RETRYABLE``) and the recorded error code are the same as in thread mode."""
-    stack: list[type[AdaptationError]] = [AdaptationError]
-    while stack:
-        cls = stack.pop()
-        if cls.code == code:
-            try:
-                return cls(message, **context)
-            except TypeError:
-                break
-        stack.extend(cls.__subclasses__())
-    err = AdaptationError(message, **context)
-    err.code = code
-    return err
-
-
-def _stop_worker(proc: multiprocessing.process.BaseProcess) -> None:
-    """Terminate the worker (and, on POSIX, its process group), then kill it if it is still
-    alive after the grace period. Only ever touches the process this module started."""
-    pid = proc.pid
-    if sys.platform != "win32" and pid is not None:
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            proc.terminate()  # the worker had not become a group leader yet
-    else:
-        proc.terminate()
-    proc.join(_KILL_GRACE_S)
-    if proc.is_alive():
-        if sys.platform != "win32" and pid is not None:
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        proc.kill()
-        proc.join(_KILL_GRACE_S)
-
-
-def _run_in_process(
-    event: DriftEvent,
-    settings: Settings,
-    *,
-    registry: MlflowRegistry,
-    llm_client: LlmClient | None,
-    workdir: str,
-    session_factory,
-    job_id: str,
-) -> JobResult:
-    payload = {
-        "event": event,
-        "settings": settings,
-        "workdir": workdir,
-        "job_id": job_id,
-        "correlation_id": get_correlation_id(),
-        "db_url": session_factory.kw["bind"].url.render_as_string(hide_password=False),
-        "registry": _portable_registry(registry),
-        "llm_client": _portable_llm(llm_client),
-        # Looked up at call time, so a module-level stand-in patched onto this module is used.
-        "pipeline": run_adaptation_job,
+    now = _now()
+    return {
+        "tenant": settings.job_tenant_by_principal.get(actor, settings.job_default_tenant),
+        "worker_class": settings.job_class_by_framework.get(
+            framework or "", settings.job_default_class
+        ),
+        "priority": settings.job_priority_by_severity.get(
+            event.severity or "", settings.job_default_priority
+        ),
+        "deadline_at": (
+            now + timedelta(seconds=settings.job_deadline_s)
+            if settings.job_deadline_s is not None else None
+        ),
+        "available_at": now,
     }
+
+
+def trace_key(event_id: str | None, idempotency_key: str) -> str:
+    """What an event's trace id is derived from (core.tracing): the caller's event_id when it
+    gave one, else the event's idempotency key."""
+    return event_id or idempotency_key
+
+
+def queued_job(job: AdaptationJob) -> QueuedJob:
+    return QueuedJob(job_id=job.job_id, worker_class=job.worker_class, tenant=job.tenant,
+                     priority=job.priority, attempt=job.attempt,
+                     trace_context=job.trace_context)
+
+
+def publish(session_factory, queue: JobQueuePort, job_id: str) -> bool:
+    """Ask ``queue`` to wake a worker for a QUEUED job and record when it did. False when the
+    broker could not be reached: the job stays queued and the reaper publishes it again."""
+    with session_scope(session_factory) as session:
+        job = load_job(session, job_id)
+        if JobStatus(job.status) != JobStatus.QUEUED:
+            return False
+        message = queued_job(job)
+        key = trace_key(job.event.get("event_id"), job.idempotency_key)
     try:
-        pickle.dumps(payload)
-    except Exception as exc:
-        raise ConfigurationError(
-            "job inputs cannot be sent to a worker process",
-            cause=str(exc),
-            hint="in-process fakes need JOB_EXECUTION_MODE=thread",
-        ) from exc
-
-    mp = multiprocessing.get_context("spawn")
-    recv_end, send_end = mp.Pipe(duplex=False)
-    proc = mp.Process(target=_worker_main, args=(send_end, payload), name=f"oran-job-{job_id[:8]}")
-    proc.start()
-    send_end.close()  # only the child writes; EOF then means the child is gone
-    try:
-        if not recv_end.poll(settings.job_timeout_s):
-            _stop_worker(proc)
-            raise JobTimeoutError(
-                f"adaptation job exceeded its {settings.job_timeout_s:.0f}s timeout",
-                timeout_s=settings.job_timeout_s,
-                worker_pid=proc.pid,
-            )
-        try:
-            message = recv_end.recv()
-        except EOFError:
-            message = None
-    finally:
-        recv_end.close()
-        proc.join(_KILL_GRACE_S)
-        if proc.is_alive():
-            _stop_worker(proc)
-
-    if message is None:
-        raise RuntimeError(f"job worker process exited with code {proc.exitcode} and no result")
-    kind, deltas, *rest = message
-    metrics.apply_delta(deltas)
-    if kind == "ok":
-        return JobResult.model_validate(rest[0])
-    if kind == "error":
-        raise _rebuild_error(*rest)
-    raise RuntimeError(rest[0])
-
-
-def _run_with_retries(
-    event: DriftEvent,
-    settings: Settings,
-    *,
-    registry: MlflowRegistry,
-    llm_client: LlmClient | None,
-    workdir: str,
-    session_factory,
-    job_id: str,
-    on_abandoned: Callable[[], None] | None = None,
-) -> JobResult:
-    max_attempts = settings.job_max_retries + 1
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return _run_once(
-                event,
-                settings,
-                registry=registry,
-                llm_client=llm_client,
-                workdir=workdir,
-                session_factory=session_factory,
-                job_id=job_id,
-                on_abandoned=on_abandoned,
-            )
-        except _RETRYABLE as exc:
-            if attempt >= max_attempts:
-                raise
-            backoff = settings.job_retry_backoff_s * (2 ** (attempt - 1))
-            _transition(
-                session_factory,
-                job_id,
-                to_status=JobStatus.DATA_PREPARING,
-                message=f"retry {attempt}/{settings.job_max_retries} after {exc.code}: {exc.message}",
-            )
-            time.sleep(backoff)
-    raise AssertionError("unreachable: loop above always returns or raises")
+        with tracing.continued("job.publish", message.trace_context, key=key,
+                               kind=SpanKind.PRODUCER, job_id=job_id,
+                               worker_class=message.worker_class):
+            queue.publish(message)
+    except JobQueueUnavailableError as exc:
+        log_event(logger, f"could not publish queued job: {exc.message}",
+                  level=logging.WARNING, adaptation_job_id=job_id)
+        return False
+    with session_scope(session_factory) as session:
+        job = load_job(session, job_id)
+        job.published_at = _now()
+    return True
 
 
 def submit_adaptation_job(
@@ -487,20 +340,45 @@ def submit_adaptation_job(
     event: DriftEvent,
     settings: Settings,
     *,
-    registry: MlflowRegistry,
+    registry: ModelRegistryPort | None,
     llm_client: LlmClient | None,
     workdir: str,
     actor: str = "system",
+    queue: JobQueuePort | None = None,
 ) -> JobResponse:
-    """Idempotent, retried, timed-out entry point for one drift event. Safe to call twice (or
-    concurrently) with events that carry the same `idempotency_key()`: every call after the first
-    returns the first call's outcome (or its current progress, if still running) with
-    `duplicate=True`, instead of re-running the pipeline. Never raises for a pipeline-level
-    failure - those are recorded as a FAILED job and returned as a JobResponse; only an
-    infrastructure failure while recording the job itself (e.g. PostgreSQL unreachable) escapes
-    as an exception, since there is nothing to record a job status into in that case."""
+    """Record a drift event as a QUEUED job and wake a worker for it (module docstring). Safe
+    to call twice, or concurrently from several API replicas, with events that carry the same
+    `idempotency_key()`: every call after the first returns the first call's job with
+    `duplicate=True`. Raises ModelBusyError when another job holds the model; an
+    infrastructure failure while recording the job (the database unreachable) escapes as an
+    exception, since there is nothing to record a job status into in that case.
+
+    ``queue`` is the JobQueuePort adapter (built from JOB_QUEUE_BACKEND when not given). With
+    the ``inline`` adapter the job runs here, with ``registry``, ``llm_client`` and
+    ``workdir``, and its outcome is returned.
+
+    The call is the ``intake`` span, the root of the event's trace (core.tracing); its
+    traceparent is stored on the job, so every later span of the job joins that trace."""
+    with tracing.event_span("intake", trace_key(event.event_id, event.idempotency_key()),
+                            event_id=event.event_id, model_id=event.model_id, actor=actor):
+        return _submit(session_factory, event, settings, registry=registry,
+                       llm_client=llm_client, workdir=workdir, actor=actor, queue=queue)
+
+
+def _submit(
+    session_factory,
+    event: DriftEvent,
+    settings: Settings,
+    *,
+    registry: ModelRegistryPort | None,
+    llm_client: LlmClient | None,
+    workdir: str,
+    actor: str,
+    queue: JobQueuePort | None,
+) -> JobResponse:
     key = event.idempotency_key()
     job_id = uuid.uuid4().hex
+    queue = queue if queue is not None else build_job_queue(settings)
 
     with session_scope(session_factory) as session:
         existing = session.execute(
@@ -516,6 +394,8 @@ def submit_adaptation_job(
             status=JobStatus.RECEIVED,
             event=event.model_dump(mode="json"),
             correlation_id=get_correlation_id(),
+            trace_context=tracing.inject(),
+            **_placement(session, event, settings, actor),
         )
         session.add(job)
         try:
@@ -523,9 +403,16 @@ def submit_adaptation_job(
             previous_holder = session.scalar(
                 select(ModelLock.job_id).where(ModelLock.model_id == event.model_id)
             )
+            if _holder_is_active(session, previous_holder):
+                session.rollback()
+                raise ModelBusyError(
+                    f"model '{event.model_id}' already has an adaptation job queued or running",
+                    model_id=event.model_id,
+                    running_job_id=previous_holder,
+                )
             if take_over_expired_lock(session, event.model_id, job_id, settings.model_lock_ttl_s):
                 if previous_holder and previous_holder != job_id:
-                    _fail_abandoned_job(session, previous_holder, job_id)
+                    _fail_abandoned_job(session, settings, previous_holder, job_id)
             else:
                 add_lock(session, event.model_id, job_id, settings.model_lock_ttl_s)
                 session.flush()
@@ -540,7 +427,7 @@ def submit_adaptation_job(
                 return _to_response(existing, duplicate=True)
             holder = session.get(ModelLock, event.model_id)
             raise ModelBusyError(
-                f"model '{event.model_id}' already has an adaptation job running",
+                f"model '{event.model_id}' already has an adaptation job queued or running",
                 model_id=event.model_id,
                 running_job_id=holder.job_id if holder else None,
             ) from None
@@ -553,6 +440,10 @@ def submit_adaptation_job(
                 message="job received",
             )
         )
+        record_job_transition(
+            session, settings, job_id=job_id, model_id=event.model_id, from_status=None,
+            to_status=JobStatus.RECEIVED, message="job received",
+        )
         record_audit(
             session,
             AuditAction.DRIFT_RECEIVED,
@@ -563,60 +454,209 @@ def submit_adaptation_job(
             reason="drift event received",
             metadata={"idempotency_key": key, "event": event.model_dump(mode="json")},
         )
+        apply_transition(session, settings, job, JobStatus.QUEUED,
+                         message=f"job queued for worker class '{job.worker_class}'")
+        session.flush()
+        response = _to_response(job, duplicate=False)
 
-    abandoned = threading.Event()
+    log_event(logger, "job queued", adaptation_job_id=job_id, worker_class=response.worker_class)
+    if queue.runs_inline:
+        # orchestrator.worker builds on this module, so it is imported where it is needed.
+        from oran_adapt.orchestrator.worker import Worker
 
-    def _release() -> None:
-        try:
-            with session_scope(session_factory) as session:
-                release_lock(session, event.model_id, job_id)
-        except Exception as exc:  # noqa: BLE001 - the TTL frees it; never mask the job outcome
-            log_event(
-                logger, f"could not release model lock: {exc}", level=logging.WARNING,
-                adaptation_job_id=job_id,
+        worker = Worker(session_factory, settings, registry=registry, llm_client=llm_client,
+                        workdir=workdir, queue=queue)
+        return worker.run_to_settled(job_id)
+    publish(session_factory, queue, job_id)
+    return response
+
+
+def request_cancel(session_factory, settings: Settings, job_id: str, *,
+                   actor: str) -> tuple[JobResponse, bool]:
+    """Cancel a job. A queued job is recorded CANCELLED at once (True). A running one gets a
+    cancel request (False): its worker stops the attempt at its next checkpoint - a supervisor
+    tick every JOB_HEARTBEAT_S or a stage report - and records it CANCELLED. A job that ended,
+    or is registering or promoting, cannot be cancelled (JobNotCancellableError)."""
+    with session_scope(session_factory) as session:
+        job = load_job(session, job_id, lock=True)
+        status = JobStatus(job.status)
+        if status in TERMINAL_STATUSES or status in _REGISTRY_STAGES:
+            raise JobNotCancellableError(
+                f"job '{job_id}' is {status.value} and cannot be cancelled",
+                job_id=job_id, status=status.value,
             )
-
-    def _on_abandoned() -> None:
-        abandoned.set()
-        _release()
-
-    try:
-        return _execute(
-            event, settings, registry=registry, llm_client=llm_client,
-            workdir=os.path.join(workdir, job_id), session_factory=session_factory,
-            job_id=job_id, on_abandoned=_on_abandoned,
+        if job.cancel_requested_at is None:
+            job.cancel_requested_at = _now()
+            job.cancel_requested_by = actor
+        immediate = status == JobStatus.QUEUED and job.lease_token is None
+        if immediate:
+            error = JobCancelledError("the job was cancelled on request before it ran",
+                                      job_id=job_id, requested_by=actor).to_dict()
+            apply_transition(session, settings, job, JobStatus.CANCELLED,
+                             message=error["message"], error=error)
+            release_lock(session, job.model_id, job_id)
+            session.execute(delete(JobSlot).where(JobSlot.job_id == job_id))
+            metrics.JOB_CANCELLED.labels("queued").inc()
+        record_audit(
+            session, AuditAction.JOB_CANCEL_REQUESTED, component="orchestrator", actor=actor,
+            job_id=job_id, model_id=job.model_id, reason="cancel requested",
+            metadata={"status": status.value, "immediate": immediate},
         )
+        session.flush()
+        response = _to_response(job, duplicate=False)
+    log_event(logger, "job cancel requested", adaptation_job_id=job_id, immediate=immediate)
+    return response, immediate
+
+
+def list_jobs(
+    session: Session,
+    *,
+    limit: int,
+    offset: int = 0,
+    status: JobStatus | None = None,
+    model_id: str | None = None,
+    tenant: str | None = None,
+    quarantined: bool | None = None,
+) -> dict[str, Any]:
+    """A page of jobs, newest first, with the total matching the filters."""
+    filters = []
+    if status is not None:
+        filters.append(AdaptationJob.status == status.value)
+    if model_id is not None:
+        filters.append(AdaptationJob.model_id == model_id)
+    if tenant is not None:
+        filters.append(AdaptationJob.tenant == tenant)
+    if quarantined is not None:
+        filters.append(AdaptationJob.quarantined.is_(quarantined))
+    total = session.scalar(select(func.count()).select_from(AdaptationJob).where(*filters))
+    rows = session.scalars(
+        select(AdaptationJob).where(*filters)
+        .order_by(AdaptationJob.created_at.desc(), AdaptationJob.job_id)
+        .limit(limit).offset(offset)
+    )
+    return {
+        "items": [_to_response(job, duplicate=False).model_dump(mode="json") for job in rows],
+        "total": total or 0,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def _attempt(payload: dict) -> dict:
+    """One pipeline attempt, wherever the job executor runs it. Returns the JobResult as JSON.
+
+    In a fresh worker process (``payload["in_process"]`` false) it first rebuilds what the
+    parent process holds: logging, tracing, the registry's instrumentation, the correlation id
+    and a database engine. Every stage it reports is fenced by the attempt's lease token.
+
+    The attempt is the ``job.attempt.run`` span, a child of the worker's ``job.attempt`` span
+    (``payload["trace_context"]``), and each stage it reports opens a ``stage <STATUS>`` span
+    whose duration is recorded in adaptation_stage_duration_seconds."""
+    settings: Settings = payload["settings"]
+    engine = None
+    registry = payload["registry"]
+    if payload["in_process"]:
+        factory = payload["session_factory"]
+    else:
+        configure_logging(settings.log_level, settings.log_json)
+        bootstrap.configure_tracing(settings)
+        set_correlation_id(payload["correlation_id"])
+        engine = create_db_engine(payload["db_url"])
+        factory = make_session_factory(engine)
+        # An adapter that pickles only its settings arrives without its measured methods.
+        registry = observed.observe(registry, port="registry", name=settings.registry_backend)
+    job_id = payload["job_id"]
+    fence = payload["lease_token"]
+    stages = tracing.StageSpans(
+        on_stage_end=lambda stage, seconds, outcome: metrics.STAGE_DURATION.labels(
+            stage, outcome).observe(seconds)
+    )
+
+    def _on_stage(status: JobStatus, message: str) -> None:
+        _transition(factory, job_id, settings=settings, to_status=status, message=message,
+                    fence=fence)
+        stages.enter(status.value)
+
+    error: BaseException | None = None
+    try:
+        with tracing.continued("job.attempt.run", payload.get("trace_context"),
+                               key=payload["trace_key"], job_id=job_id):
+            try:
+                current_job.set(JobContext(job_id=job_id, on_stage=_on_stage))
+                stages.enter(JobStatus.DATA_PREPARING.value)
+                with session_scope(factory) as session:
+                    result = payload["pipeline"](
+                        session,
+                        payload["event"],
+                        settings,
+                        registry=registry,
+                        llm_client=payload["llm_client"],
+                        workdir=payload["workdir"],
+                    )
+            except BaseException as exc:
+                error = exc
+                raise
+            finally:
+                stages.close(error)
+        dumped: dict = result.model_dump(mode="json")
+        return dumped
     finally:
-        if not abandoned.is_set():
-            _release()
+        if engine is not None:
+            engine.dispose()
+        if not payload["in_process"]:
+            tracing.flush()
 
 
-def _execute(
+def _run_once(
     event: DriftEvent,
     settings: Settings,
     *,
-    registry: MlflowRegistry,
+    executor: JobExecutorPort,
+    registry: ModelRegistryPort | None,
     llm_client: LlmClient | None,
     workdir: str,
     session_factory,
     job_id: str,
-    on_abandoned: Callable[[], None],
-) -> JobResponse:
-    started = time.perf_counter()
-    metrics.ADAPTATION_IN_PROGRESS.inc()
-    try:
-        response = _execute_inner(
-            event, settings, registry=registry, llm_client=llm_client, workdir=workdir,
-            session_factory=session_factory, job_id=job_id, on_abandoned=on_abandoned,
-        )
-    finally:
-        metrics.ADAPTATION_IN_PROGRESS.dec()
-        metrics.ADAPTATION_DURATION.observe(time.perf_counter() - started)
-    _count_outcome(response)
-    return response
+    lease_token: str,
+    timeout_s: float,
+    on_tick: Callable[[], Exception | None] | None = None,
+    on_abandoned: Callable[[], None] | None = None,
+) -> JobResult:
+    """One attempt, bounded by ``timeout_s``, on ``executor``, woken every JOB_HEARTBEAT_S to
+    call ``on_tick``. Raises whatever the pipeline raised, JobTimeoutError, or what
+    ``on_tick`` returned."""
+    payload = {
+        "event": event,
+        "settings": settings,
+        "workdir": workdir,
+        "job_id": job_id,
+        "lease_token": lease_token,
+        "correlation_id": get_correlation_id(),
+        # The worker's attempt span; the attempt's spans are its children.
+        "trace_context": tracing.inject(),
+        "trace_key": trace_key(event.event_id, event.idempotency_key()),
+        "db_url": session_factory.kw["bind"].url.render_as_string(hide_password=False),
+        "registry": registry,
+        "llm_client": llm_client,
+        # Looked up at call time, so a module-level stand-in patched onto this module is used.
+        "pipeline": run_adaptation_job,
+        "in_process": executor.in_process,
+    }
+    if executor.in_process:
+        payload["session_factory"] = session_factory
+    call = JobCall(
+        job_id=job_id,
+        timeout_s=timeout_s,
+        run=_attempt,
+        payload=payload,
+        on_abandoned=on_abandoned,
+        tick_s=settings.job_heartbeat_s,
+        on_tick=on_tick,
+    )
+    return JobResult.model_validate(executor.execute(call))
 
 
-def _count_outcome(response: JobResponse) -> None:
+def count_outcome(response: JobResponse) -> None:
     outcome = (response.result or {}).get("outcome") or "NONE"
     metrics.ADAPTATION_JOBS.labels(response.status.value, outcome).inc()
     if response.status == JobStatus.COMPLETED:
@@ -627,11 +667,8 @@ def _count_outcome(response: JobResponse) -> None:
         metrics.ADAPTATION_FAILURE.labels((response.error or {}).get("code", "UNKNOWN")).inc()
 
 
-def _record_timeout(session_factory, job_id: str, exc: JobTimeoutError) -> JobResponse:
-    with session_scope(session_factory) as session:
-        last_stage = session.execute(
-            select(AdaptationJob.status).where(AdaptationJob.job_id == job_id)
-        ).scalar_one()
+def timeout_error(last_stage: str, exc: JobTimeoutError) -> dict:
+    """The recorded error of a job that ran past its timeout or deadline in ``last_stage``."""
     error = exc.to_dict()
     error["context"]["last_stage"] = last_stage
     metrics.JOB_TIMEOUTS.labels(str(last_stage)).inc()
@@ -639,59 +676,10 @@ def _record_timeout(session_factory, job_id: str, exc: JobTimeoutError) -> JobRe
         error["context"]["needs_reconciliation"] = True
         log_event(
             logger, f"job timed out while {last_stage}: check the live alias",
-            level=logging.WARNING, adaptation_job_id=job_id,
+            level=logging.WARNING, adaptation_job_id=exc.context.get("job_id"),
         )
-    return _transition(
-        session_factory, job_id, to_status=JobStatus.TIMED_OUT, message=str(exc), error=error
-    )
+    return error
 
 
-def _execute_inner(
-    event: DriftEvent,
-    settings: Settings,
-    *,
-    registry: MlflowRegistry,
-    llm_client: LlmClient | None,
-    workdir: str,
-    session_factory,
-    job_id: str,
-    on_abandoned: Callable[[], None],
-) -> JobResponse:
-    try:
-        _transition(
-            session_factory, job_id, to_status=JobStatus.VALIDATING, message="event accepted"
-        )
-        _transition(
-            session_factory, job_id, to_status=JobStatus.DATA_PREPARING, message="pipeline started"
-        )
-        result = _run_with_retries(
-            event,
-            settings,
-            registry=registry,
-            llm_client=llm_client,
-            workdir=workdir,
-            session_factory=session_factory,
-            job_id=job_id,
-            on_abandoned=on_abandoned,
-        )
-    except JobTimeoutError as exc:
-        return _record_timeout(session_factory, job_id, exc)
-    except Exception as exc:  # noqa: BLE001 - deliberate: no pipeline failure escapes un-recorded
-        error = (
-            exc.to_dict()
-            if isinstance(exc, AdaptationError)
-            else {"code": "INTERNAL_ERROR", "message": str(exc)}
-        )
-        return _transition(
-            session_factory, job_id, to_status=JobStatus.FAILED, message=str(exc), error=error
-        )
-
-    final = JobStatus.ROLLED_BACK if result.outcome == "ROLLED_BACK" else JobStatus.COMPLETED
-    return _transition(
-        session_factory,
-        job_id,
-        to_status=final,
-        message=result.reason,
-        result=result.model_dump(mode="json"),
-        strategy=result.strategy.value if result.strategy else None,
-    )
+def in_registry_stage(status: str) -> bool:
+    return JobStatus(status) in _REGISTRY_STAGES

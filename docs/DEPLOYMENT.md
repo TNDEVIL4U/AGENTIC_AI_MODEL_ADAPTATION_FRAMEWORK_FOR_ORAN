@@ -4,23 +4,29 @@
 > (the YAML parses, and paths and settings match the code), but they have **not been built or
 > run**. None of the image tags below has been pulled. Treat the first `docker compose up` as
 > a test run.
+>
+> **Hardening Phase 11:** Kubernetes packaging lives in [operations/helm.md](operations/helm.md)
+> (Helm chart) and [operations/kustomize.md](operations/kustomize.md). The image targets are in
+> [operations/images.md](operations/images.md), and the migration model in
+> [operations/migrations.md](operations/migrations.md). Every image is now pinned by digest,
+> and a one-shot `migrate` service applies the schema; the API no longer migrates on start.
 
 ## Services (`docker-compose.yml`)
 
 | Service | Image | Role | Published port |
 |---------|-------|------|----------------|
 | `postgres` | `postgres:16.4-bookworm` | App database `oran_adapt` and MLflow database `mlflow` (`deploy/postgres/init-mlflow.sql`). Runs with `wal_level=logical` for Debezium. | none |
-| `minio` | `minio/minio:RELEASE.2024-12-18T13-15-44Z` | S3 store for MLflow model artifacts | 127.0.0.1:9001 (console) |
-| `minio-init` | `minio/mc:RELEASE.2024-11-21T17-21-54Z` | Creates the `mlflow` bucket, then exits | none |
-| `mlflow` | built from `docker/mlflow/` | Tracking and registry server. Metadata goes to PostgreSQL; artifacts go to `s3://mlflow`, proxied with `--serve-artifacts`, so the API needs no S3 credentials | 127.0.0.1:5000 |
+| `mlflow` | built from `docker/mlflow/` | Tracking and registry server. Metadata goes to PostgreSQL; artifacts go to the `mlartifacts` volume, proxied with `--serve-artifacts`, so the API needs no storage access | 127.0.0.1:5000 |
 | `kafka` | `apache/kafka:3.8.0` | Single-node broker (KRaft) | none |
 | `debezium` | `quay.io/debezium/connect:2.7.3.Final` | Kafka Connect with the PostgreSQL connector | 127.0.0.1:8083 |
 | `debezium-init` | `curlimages/curl:8.10.1` | Registers `deploy/debezium/kpi-connector.json` once the API is healthy | none |
-| `api` | built from `Dockerfile` | FastAPI app. Applies the migrations on start | 127.0.0.1:8000 |
-| `cdc-consumer` | same image as `api` | `oran-adapt cdc run --mode kafka` (see [CDC.md](CDC.md)) | none |
+| `migrate` | `Dockerfile` target `migrator` | `oran-adapt db upgrade` once; every app service waits for it to complete (Hardening Phase 11) | none |
+| `api` | `Dockerfile` target `api` | FastAPI app. Starts after `migrate`; never changes the schema | 127.0.0.1:8000 |
+| `worker` | `Dockerfile` target `worker` | Claims and runs adaptation jobs; liveness via `oran-adapt worker health` | none |
+| `cdc-consumer` | `Dockerfile` target `worker` | `oran-adapt cdc run --mode kafka` (see [CDC.md](CDC.md)) | none |
 | `prometheus` | `prom/prometheus:v2.54.1` | Scrapes `api:8000/api/v1/metrics` (`deploy/prometheus/prometheus.yml`) | 127.0.0.1:9090 |
 
-Named volumes: `pgdata`, `miniodata`, `kafkadata`, `promdata`. Every published port binds to
+Named volumes: `pgdata`, `mlartifacts`, `kafkadata`, `promdata`. Every published port binds to
 `127.0.0.1` only. To expose the stack, put a TLS-terminating reverse proxy in front of it.
 
 ## Required `.env`
@@ -31,8 +37,6 @@ It refuses to start without the required variables.
 | Variable | Required | Notes |
 |----------|----------|-------|
 | `POSTGRES_PASSWORD` | yes | Used by the app, MLflow and Debezium (Debezium reads it as `${env:...}`, so it never appears in the connector config) |
-| `MINIO_ROOT_PASSWORD` | yes | At least 8 characters |
-| `MINIO_ROOT_USER` | no | Default `oran` |
 | `API_KEYS` | yes, in practice | JSON `{"<sha256 of key>": "ROLE[:name]"}`. With auth on and no keys, every protected endpoint refuses (fail closed). Make entries with `oran-adapt auth new-key --role OPERATOR --name <who>`. Roles: `ADMIN`, `OPERATOR`, `ML_ENGINEER`, `READ_ONLY` |
 | `LLM_PROVIDER` and `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` | depends | Only when an LLM provider is enabled |
 
@@ -100,6 +104,13 @@ The local development virtualenv's pip was upgraded from 25.2, which pip-audit f
 - `docker compose build` and `up`: none of the images has been built, and the tags have not
   been pulled.
 - The end-to-end test `tests/integration/test_docker_compose_e2e.py`. It is skipped unless
-  Docker, `MINIO_ROOT_PASSWORD` and `E2E_API_KEY` are available.
+  Docker, `POSTGRES_PASSWORD` and `E2E_API_KEY` are available.
 - The Debezium → Kafka → consumer path, and connector registration.
-- MLflow with the PostgreSQL backend and S3 (MinIO) artifacts.
+- MLflow with the PostgreSQL backend and volume-backed artifacts.
+- The Helm chart and the kustomize overlays: `helm lint`/`template`, `kubectl kustomize`,
+  kubeconform, image SBOMs and the kind install/upgrade/rollback run only in CI (Hardening
+  Phase 11). None of it has been run on the development laptop.
+
+MinIO was the artifact store until Hardening Phase 0. It was removed because its public Docker
+images are no longer published, so the stack could not start. S3-style storage returns as a
+pluggable registry adapter in Hardening Phase 2.

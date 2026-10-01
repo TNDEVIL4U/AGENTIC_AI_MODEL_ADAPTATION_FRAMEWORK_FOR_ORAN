@@ -1,0 +1,28 @@
+# Adds a GPU worker pool: jobs of class `gpu` run only on nodes with an NVIDIA GPU; everything
+# else stays on the CPU pool. JOB_CLASS_BY_FRAMEWORK routes torch models to it. The in-tree
+# adaptation strategies train on the CPU, so the pool gives GPU nodes to model-type plugins that
+# use the device (docs/operations/helm.md, "GPU pools"). Node labels and taints are your cluster's.
+config:
+  env:
+    ENVIRONMENT: production
+    ARTIFACT_WORKDIR: /tmp/oran-adapt/artifacts
+    SANDBOX_BACKEND: subprocess
+    JOB_CLASS_BY_FRAMEWORK: '{"torch": "gpu"}'
+workers:
+  - name: default
+    classes: [default]
+    replicas: 2
+    resources:
+      requests: {cpu: "1", memory: 2Gi}
+      limits: {memory: 4Gi}
+  - name: gpu
+    classes: [gpu]
+    replicas: 1
+    resources:
+      requests: {cpu: "4", memory: 16Gi, nvidia.com/gpu: 1}
+      limits: {memory: 32Gi, nvidia.com/gpu: 1}
+    nodeSelector: {nvidia.com/gpu.present: "true"}
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+secrets:
+  existingSecret: oran-adapt-env

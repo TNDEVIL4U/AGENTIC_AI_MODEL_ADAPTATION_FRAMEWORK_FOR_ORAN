@@ -356,14 +356,20 @@ server together with its uvicorn worker. Set
 | `ARTIFACT_WORKDIR` | `./data/artifacts` | Scratch dir for training jobs' working files |
 | `LLM_PROVIDER` | `none` | `anthropic` \| `gemini` \| `none` |
 | `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | unset | Required when `LLM_PROVIDER` selects that provider |
-| `ANTHROPIC_MODEL` / `GEMINI_MODEL` | `claude-sonnet-5` / `gemini-3.6-flash` | Model id used for LLM calls |
+| `ANTHROPIC_MODEL` / `GEMINI_MODEL` | none; required with that provider | Model id used for LLM calls |
 | `LLM_TIMEOUT_S` | `60` | Timeout for LLM calls |
 | `SANDBOX_BACKEND` | `subprocess` | `subprocess` (restricted, resource-limited) \| `docker` (network-isolated container) |
 | `SANDBOX_TIMEOUT_S` / `SANDBOX_MEMORY_MB` | `120` / `1024` | Limits on LLM-generated adaptation code |
-| `SANDBOX_DOCKER_IMAGE` | `oran-adapt-sandbox:latest` | Image used when `SANDBOX_BACKEND=docker` |
+| `SANDBOX_DOCKER_IMAGE` | none; required with `SANDBOX_BACKEND=docker` | Image used when `SANDBOX_BACKEND=docker`, pinned by digest (`name@sha256:...`) |
 | `MLFLOW_SKOPS_TRUSTED_TYPES` | `["sklearn.tree._tree.Tree", "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor"]` | Extra types skops may serialize and load for sklearn models. Anything else fails fast with a non-retryable `ARTIFACT_ERROR`. |
 | `TORCH_FINE_TUNE_EPOCHS` / `TORCH_FULL_RETRAIN_EPOCHS` | `5` / `300` | Epochs for torch warm-start fine-tuning / from-scratch retraining |
 | `TORCH_LEARNING_RATE` | `0.01` | Adam learning rate for both torch engines |
+| `MODEL_TYPES` | `[]` (every installed plugin, by name) | Model type plugins to use, in the order they are tried (docs/adapters/model_type.md) |
+| `SEQUENCE_WINDOW` | `8` | Rows per window for a sequence model that declares none |
+| `SEQUENCE_VALIDATION_FRACTION` | `0.2` | Newest share of a sequence model's training windows used to keep its best epoch |
+| `SEQUENCE_FINE_TUNE_EPOCHS` / `SEQUENCE_FULL_RETRAIN_EPOCHS` | `20` / `200` | Epochs for sequence models (torch and Keras) |
+| `SEQUENCE_LEARNING_RATE` | `0.01` | Adam learning rate for torch sequence models |
+| `ONNX_RUNTIME` | `onnxruntime` | `onnxruntime`, or `reference` (the onnx package's evaluator) to score ONNX graphs |
 | `LIVE_ALIAS` | `live` | MLflow alias the pipeline promotes candidates to |
 | `LOG_LEVEL` / `LOG_JSON` | `INFO` / `true` | Logging verbosity/format |
 | `JOB_MAX_RETRIES` / `JOB_RETRY_BACKOFF_S` | `2` / `1.0` | Retry policy for transient MLflow/DB errors |
@@ -371,11 +377,21 @@ server together with its uvicorn worker. Set
 | `ANALYSIS_PSI_REUSE_THRESHOLD` / `ANALYSIS_KS_PVALUE_REUSE_THRESHOLD` / `ANALYSIS_DRIFT_SCORE_REUSE_THRESHOLD` | `0.1` / `0.05` / `0.3` | When Member 1 decides the existing model can just be reused |
 | `DECISION_MIN_DRIFTED_ROWS` | `10` | Minimum drifted rows before any strategy is actionable |
 | `DECISION_FULL_RETRAIN_PSI_THRESHOLD` | `0.5` | PSI above which fine-tuning is ruled out in favor of full retraining |
-| `DECISION_SUPPORTED_FRAMEWORKS` | `["sklearn","xgboost","torch","pytorch"]` | Frameworks with a dedicated training engine |
+| `DECISION_SUPPORTED_FRAMEWORKS` | `[]` (every framework an installed model type plugin can adapt) | Frameworks the decision layer may adapt |
 | `VALIDATION_MIN_ROWS` | `5` | Minimum held-out rows to score a candidate at all |
 | `VALIDATION_HOLDOUT_FRACTION` | `0.2` | Share of the newest drifted rows held back for validation and never trained on (at least `VALIDATION_MIN_ROWS`, always leaving one drifted row for training) |
-| `VALIDATION_ACCURACY_TOLERANCE` | `0.02` | Max accuracy drop allowed for classifiers to pass |
-| `VALIDATION_RMSE_TOLERANCE_RATIO` | `0.05` | Max RMSE increase (as a fraction of current RMSE) allowed for regressors to pass |
+| `GATE_POLICY` / `GATE_POLICY_FILE` | superiority, margin 0, 95 % | The validation gate's versioned policy: a paired-bootstrap interval of the improvement must clear the margin, and every guardrail (slices, calibration, latency, size) must pass. `config/policies/gate.toml` |
+| `DELIVERY_STRATEGY` | `shadow` | How an accepted candidate reaches traffic: `shadow`, `canary`, `blue_green`, `ab`, `manual` (see `docs/adapters/rollout_metrics.md`) |
+| `DELIVERY_POLICY` / `DELIVERY_POLICY_FILE` | see `core/policies.py` | Canary steps and holds, health rules, A/B test, approval deadline. `config/policies/delivery.toml` |
+| `ROLLOUT_METRICS_BACKEND` / `ROLLOUT_TICK_S` | `api` / `30` | Where rollouts read online metrics, and how often they are advanced |
+| `AUTH_BACKEND` | `api-key` | `api-key`, `oidc`, `gateway` or `mtls` (docs/adapters/auth.md). The OIDC/gateway/mTLS settings are listed in `.env.example` |
+| `AUTH_TRUSTED_PROXIES` | `[]` | Addresses/CIDRs whose identity headers (gateway assertion, forwarded client certificate) are believed |
+| `API_RATE_LIMIT_PER_MINUTE` / `API_RATE_LIMIT_BURST` | `600` / `100` | Requests per caller per replica; 429 with `Retry-After` beyond it (0 = off) |
+| `API_AUTH_FAILURE_LIMIT_PER_MINUTE` | `30` | Failed authentications per client address before it is refused (0 = off) |
+| `API_DOCS_ENABLED` / `API_HSTS_MAX_AGE_S` | unset (off in production) / `0` | Interactive API docs; Strict-Transport-Security max-age |
+| `SECRETS_BACKEND` | `env` | `env`, `file` (`SECRETS_DIR`) or `vault` (`SECRETS_VAULT_*`) |
+| `OUTBOUND_ALLOWLIST` | `[]` | Extra hosts, `.suffixes` or CIDRs outbound calls may reach besides the configured endpoints (docs/security.md §5) |
+| `OUTBOUND_REQUIRE_HTTPS` / `OUTBOUND_TLS_MIN_VERSION` / `OUTBOUND_CA_FILE` | on in production / `TLSv1.2` / unset | Outbound TLS policy; certificates are always verified |
 
 Full authoritative list: `src/oran_adapt/core/config.py`.
 
@@ -414,7 +430,8 @@ The LLM-generated-code sandbox uses a separate image, built independently:
 docker build -t oran-adapt-sandbox:latest -f docker/sandbox/Dockerfile docker/sandbox
 ```
 
-Then set `SANDBOX_BACKEND=docker` in `.env` to route LLM-generated adaptation code through
+Then set `SANDBOX_BACKEND=docker` and `SANDBOX_DOCKER_IMAGE` to the built image's digest
+(`docker inspect --format '{{index .RepoDigests 0}}'` after pushing it) in `.env` to route LLM-generated adaptation code through
 `docker run --rm --network none --memory <n>m ...` instead of the restricted local subprocess
 backend.
 
@@ -481,16 +498,16 @@ These are real, code-verified gaps — not hypothetical — surfaced here so an 
 only this manual (not the source) still learns about them. See
 `docs/IMPLEMENTATION_CHECKLIST.md`'s "Known gaps" section for how each was verified.
 
-- **No enforced memory ceiling for the sandbox on Windows.** When `SANDBOX_BACKEND=subprocess`
+- **The subprocess sandbox's memory ceiling is a soft one.** When `SANDBOX_BACKEND=subprocess`
   (the default), LLM-generated adaptation code runs with an enforced wall-clock timeout
-  (`SANDBOX_TIMEOUT_S`) on every OS, but the memory ceiling (`SANDBOX_MEMORY_MB`) is only
-  enforced on POSIX via `resource.setrlimit(RLIMIT_AS, ...)` — that syscall does not exist on
-  Windows, so `_memory_limit_preexec()` in `src/oran_adapt/sandbox/runner.py` is a no-op there.
-  A runaway or malicious LLM-generated script (already restricted by the AST safety scanner to
-  a small import allowlist, but still capable of e.g. allocating a huge array) can therefore
-  consume unbounded memory on a Windows host. The only way to get an actually-enforced memory
-  limit today is `SANDBOX_BACKEND=docker` (see §9), which applies `--memory`/`--memory-swap` at
-  the container level on every host OS — untested here for lack of a local Docker install.
+  (`SANDBOX_TIMEOUT_S`) and a resident-memory watchdog: the parent polls the child's RSS every
+  50 ms (`/proc` on Linux, `K32GetProcessMemoryInfo` on Windows) and kills it once it passes
+  `SANDBOX_MEMORY_MB`. A very fast allocation can briefly overshoot before the next poll, and on
+  other platforms (e.g. macOS) the ceiling is not enforced. An address-space rlimit is not used:
+  numpy/OpenBLAS/torch reserve far more address space than they touch, so a useful `RLIMIT_AS`
+  fails their import before any adaptation code runs. For a hard limit use
+  `SANDBOX_BACKEND=docker` (see §9), which applies `--memory`/`--memory-swap` at the container
+  level on every host OS.
 - **PSI is noisy on small samples.** Drift statistics come from Evidently AI's `ValueDrift`
   metric. Its PSI uses equal-width (Sturges) bins, and with only a few dozen rows per segment it
   can exceed `ANALYSIS_PSI_REUSE_THRESHOLD` (0.1), or even `DECISION_FULL_RETRAIN_PSI_THRESHOLD`

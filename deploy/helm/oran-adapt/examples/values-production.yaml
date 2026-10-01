@@ -1,0 +1,67 @@
+# Production: images pinned by digest from the operator's registry, the Secret synced from a
+# secret store, TLS ingress, deny-by-default network policy, Prometheus Operator monitoring.
+# Every host, registry and store name below is a placeholder for your own.
+image:
+  registry: registry.example.com/oran
+  tag: 0.1.0
+  api: {repository: oran-adapt-api, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+  worker: {repository: oran-adapt-worker, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+  migrator: {repository: oran-adapt-migrator, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+config:
+  env:
+    ENVIRONMENT: production
+    LOG_LEVEL: INFO
+    ARTIFACT_WORKDIR: /tmp/oran-adapt/artifacts
+    SANDBOX_BACKEND: subprocess
+    AUTH_BACKEND: oidc
+    AUTH_OIDC_ISSUER: "https://login.example.com/realms/oran"
+    AUTH_OIDC_AUDIENCE: oran-adapt
+    METRICS_PUBLIC: "false"
+adapters:
+  registry:
+    env: {REGISTRY_BACKEND: mlflow, MLFLOW_TRACKING_URI: "https://mlflow.example.com"}
+  deployment:
+    env:
+      DEPLOYMENT_BACKEND: kserve
+      K8S_API_URL: "https://kubernetes.default.svc"
+      KSERVE_STORAGE_URI_TEMPLATE: "s3://models/{name}/{version}"
+  job_queue:
+    env: {JOB_QUEUE_BACKEND: database}
+secrets:
+  externalSecret:
+    enabled: true
+    secretStoreRef: {kind: ClusterSecretStore, name: vault-backend}
+    data:
+      DATABASE_URL: {key: oran-adapt/production, property: database_url}
+      MLFLOW_TRACKING_TOKEN: {key: oran-adapt/production, property: mlflow_token}
+api:
+  autoscaling: {enabled: true, minReplicas: 3, maxReplicas: 10, targetCPUUtilizationPercentage: 65}
+  pdb: {enabled: true, minAvailable: 2}
+  ingress:
+    enabled: true
+    className: nginx
+    annotations: {cert-manager.io/cluster-issuer: letsencrypt}
+    hosts:
+      - host: oran-adapt.example.com
+        paths: [{path: /api, pathType: Prefix}]
+    tls:
+      - secretName: oran-adapt-tls
+        hosts: [oran-adapt.example.com]
+workers:
+  - name: default
+    classes: [default]
+    replicas: 3
+    resources:
+      requests: {cpu: "2", memory: 4Gi}
+      limits: {memory: 8Gi}
+networkPolicy:
+  enabled: true
+  apiIngressFrom:
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: monitoring}
+metrics:
+  serviceMonitor: {enabled: true, labels: {release: kube-prometheus-stack}}
+  prometheusRule: {enabled: true, labels: {release: kube-prometheus-stack}}

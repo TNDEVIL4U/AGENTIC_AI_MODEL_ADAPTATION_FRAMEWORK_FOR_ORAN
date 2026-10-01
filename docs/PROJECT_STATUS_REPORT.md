@@ -38,7 +38,7 @@ laptop (Docker, the LLM decision call), a few small improvements, and some scope
 | 4 — Adaptation: inspection | Detects framework, estimator type, `partial_fit` / warm-start support | ✅ Done | Unit tests |
 | 5 — Adaptation: sklearn/xgboost engines | `partial_fit` fine-tuning, clone-and-refit full retraining | ✅ Done | Unit tests; demo: SGD, Ridge, RandomForest, XGBoost all REGISTERED |
 | 6 — Adaptation: torch engine | Warm-start fine-tune vs reset-and-retrain | ✅ Done | Unit tests; demo: both torch models REGISTERED |
-| 7 — Sandbox | AST security scanner + subprocess runner for LLM-generated code | 🟡 Partly | Scanner and subprocess runner verified; Docker backend not run; memory limit not enforced on Windows |
+| 7 — Sandbox | AST security scanner + subprocess runner for LLM-generated code | 🟡 Partly | Scanner and subprocess runner verified; Docker backend not run; memory limit is a soft RSS watchdog (Linux and Windows) |
 | 8 — Validation | Compares candidate vs current model (accuracy / RMSE gate, scored by Evidently AI) on a time-based hold-out | ✅ Done | Gate maths verified; hold-out fixed today and tested (40 unseen rows, 360-row training snapshot) |
 | 9 — Orchestrator | analyze → decide → adapt → validate → register, one drift event end to end | ✅ Done | Unit tests; demo sections 3 and 6 |
 | 10 — Hardening | Idempotent events, concurrency, selective retries, job timeout | ✅ Done | Unit tests incl. a real thread race; demo section 4 (`duplicate=True`) |
@@ -111,9 +111,11 @@ decide that scope first.
    `GEMINI_MODEL` (or an Anthropic key).
 3. **Docker sandbox never executed.** Code and tests exist and self-skip. **Needs:** Docker
    Desktop installed.
-4. **Sandbox memory limit is not enforced on Windows** (`RLIMIT_AS` is POSIX-only). Disclosed
-   in README and MANUAL. Only fixable by using the Docker backend (item 3) or a Windows Job
-   Object.
+4. **Sandbox memory limit is a soft one.** A watchdog polls the sandbox process tree's resident
+   memory every 50 ms (Linux and Windows; not enforced elsewhere) and kills it past
+   `SANDBOX_MEMORY_MB`, so a fast spike can briefly overshoot. It replaced `RLIMIT_AS`, which
+   made numpy/torch imports fail on Linux. Disclosed in README and MANUAL; for a hard limit use
+   the Docker backend (item 3).
 5. **Timed-out jobs keep running in the background thread** (Python cannot kill a thread).
    Disclosed in README and MANUAL; the job status in the DB is the source of truth.
 
@@ -167,8 +169,8 @@ These are **defaults, not hardcoded** — each can be changed without editing co
 | `DECISION_FULL_RETRAIN_PSI_THRESHOLD` | 0.5 | PSI at/above this rules out fine-tuning |
 | `VALIDATION_MIN_ROWS` | 5 | Minimum rows to validate at all |
 | `VALIDATION_HOLDOUT_FRACTION` | 0.2 | Share of the newest drifted rows held back for validation |
-| `VALIDATION_ACCURACY_TOLERANCE` | 0.02 | Allowed accuracy drop for classifiers |
-| `VALIDATION_RMSE_TOLERANCE_RATIO` | 0.05 | Allowed relative RMSE rise for regressors |
+| `GATE_POLICY` / `GATE_POLICY_FILE` | superiority, 95 % | Statistical validation gate and guardrails (Hardening Phase 7) |
+| `DELIVERY_STRATEGY` / `DELIVERY_POLICY` | shadow / see `core/policies.py` | Progressive delivery of accepted candidates (Hardening Phase 7) |
 | `TORCH_FINE_TUNE_EPOCHS` / `TORCH_FULL_RETRAIN_EPOCHS` | 5 / 300 | Torch training budgets |
 | `TORCH_LEARNING_RATE` | 0.01 | Adam learning rate for both torch engines |
 | `JOB_MAX_RETRIES` / `JOB_RETRY_BACKOFF_S` / `JOB_TIMEOUT_S` | 2 / 1.0 / 600 | Job hardening |

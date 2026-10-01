@@ -1,0 +1,36 @@
+# Amazon SageMaker end to end: the SageMaker Model Registry (model packages in a group per
+# model, artifacts as model.tar.gz in S3) and a real-time endpoint per model. The adapter has no
+# traffic split, so an accepted candidate waits for a person's approval and then replaces the
+# endpoint's model (manual). Credentials come from the standard AWS chain (the pod's IAM role); no
+# key is in this file. Set API_KEYS in the environment or via SECRETS_BACKEND.
+# Use with:  ORAN_CONFIG_FILE=config/examples/sagemaker.toml
+
+environment = "production"
+database_url = "postgresql+psycopg://oran@db.internal:5432/oran_adapt"
+artifact_workdir = "/var/lib/oran-adapt/artifacts"
+registry_backend = "sagemaker"
+deployment_backend = "sagemaker"
+delivery_strategy = "manual"
+delivery_policy_file = "config/policies/delivery.toml"
+
+[sagemaker]
+region = "eu-west-1"
+s3_bucket = "oran-adapt-models"
+s3_prefix = "registry"
+inference_image = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/oran-inference:1.4"
+deploy_role_arn = "arn:aws:iam::123456789012:role/oran-adapt-sagemaker-deploy"
+group_prefix = "oran-"
+endpoint_prefix = "oran-"
+instance_type = "ml.m5.large"
+instance_count = 1
+
+[drift_mappers]
+generic = "config/mappers/generic-json.toml"
+
+[auth]
+enabled = true
+backend = "api-key"
+
+[log]
+level = "INFO"
+json = true

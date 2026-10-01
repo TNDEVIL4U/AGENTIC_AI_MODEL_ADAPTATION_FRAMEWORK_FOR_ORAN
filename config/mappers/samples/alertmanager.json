@@ -1,0 +1,41 @@
+{
+  "version": "4",
+  "groupKey": "{}:{alertname=\"KpiModelDrift\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "oran-adapt",
+  "groupLabels": {"alertname": "KpiModelDrift"},
+  "commonLabels": {"alertname": "KpiModelDrift"},
+  "commonAnnotations": {},
+  "externalURL": "http://alertmanager.example.com:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KpiModelDrift",
+        "model_id": "cell-a-throughput",
+        "model_version": "1",
+        "dataset_id": "cell-a-kpis",
+        "data_version": "drift-1",
+        "drift_type": "feature",
+        "severity": "warning",
+        "features": "prb_util, cqi"
+      },
+      "annotations": {"drift_score": "0.42", "summary": "PSI above threshold"},
+      "startsAt": "2026-03-01T12:00:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.example.com:9090/graph",
+      "fingerprint": "5e1f3a0c9b7d2e41"
+    },
+    {
+      "status": "resolved",
+      "labels": {"alertname": "KpiModelDrift", "model_id": "cell-b-throughput",
+                 "severity": "info"},
+      "annotations": {"drift_score": "0.05"},
+      "startsAt": "2026-03-01T09:00:00Z",
+      "endsAt": "2026-03-01T11:00:00Z",
+      "generatorURL": "http://prometheus.example.com:9090/graph",
+      "fingerprint": "9a0b1c2d3e4f5a6b"
+    }
+  ]
+}

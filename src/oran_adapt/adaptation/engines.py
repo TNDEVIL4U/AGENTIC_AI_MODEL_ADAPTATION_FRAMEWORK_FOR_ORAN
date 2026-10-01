@@ -6,7 +6,8 @@ fine-tune/full-retrain).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
 
 import pandas as pd
 
@@ -16,43 +17,53 @@ from oran_adapt.adaptation.schemas import CandidateModel, CapabilityAssessment, 
 from oran_adapt.adaptation.torch_engine import fine_tune_torch, full_retrain_torch
 from oran_adapt.core.enums import EngineKind, Strategy
 from oran_adapt.core.errors import UnsupportedAdaptationError
+from oran_adapt.core.frameworks import engine_for
 
 if TYPE_CHECKING:
     from torch import nn
 
-_TORCH_LIKE = {"torch", "pytorch"}
+    from oran_adapt.core.config import Settings
 
+
+@dataclass(frozen=True)
+class TorchBudget:
+    """Epochs and Adam step size for the torch engines (TORCH_* settings)."""
+
+    fine_tune_epochs: int
+    full_retrain_epochs: int
+    learning_rate: float
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> TorchBudget:
+        return cls(
+            fine_tune_epochs=settings.torch_fine_tune_epochs,
+            full_retrain_epochs=settings.torch_full_retrain_epochs,
+            learning_rate=settings.torch_learning_rate,
+        )
 
 def select_engine(
     strategy: Strategy, framework: str, capability: CapabilityAssessment
 ) -> EngineKind:
-    fw = framework.lower()
-
+    """The engine core.frameworks.ENGINES names for (strategy, framework), once the loaded
+    artifact is known to support that kind of training."""
     if strategy == Strategy.FINE_TUNING:
         if not capability.supports_fine_tuning:
             raise UnsupportedAdaptationError(
                 f"{framework} artifact has no fine-tuning capability: {capability.reason}"
             )
-        if fw == "sklearn":
-            return EngineKind.SKLEARN_PARTIAL_FIT
-        if fw in _TORCH_LIKE:
-            return EngineKind.TORCH_FINE_TUNE
-        raise UnsupportedAdaptationError(f"no fine-tuning engine for framework {framework!r}")
-
-    if strategy == Strategy.FULL_RETRAINING:
+        kind = "fine-tuning"
+    elif strategy == Strategy.FULL_RETRAINING:
         if not capability.supports_full_retraining:
             raise UnsupportedAdaptationError(
                 f"{framework} artifact cannot be retrained: {capability.reason}"
             )
-        if fw == "sklearn":
-            return EngineKind.SKLEARN_FULL_RETRAIN
-        if fw == "xgboost":
-            return EngineKind.XGBOOST_FULL_RETRAIN
-        if fw in _TORCH_LIKE:
-            return EngineKind.TORCH_FULL_RETRAIN
-        raise UnsupportedAdaptationError(f"no full-retraining engine for framework {framework!r}")
-
-    raise UnsupportedAdaptationError(f"engine selection is not defined for strategy {strategy}")
+        kind = "full-retraining"
+    else:
+        raise UnsupportedAdaptationError(f"engine selection is not defined for strategy {strategy}")
+    engine = engine_for(strategy, framework)
+    if engine is None:
+        raise UnsupportedAdaptationError(f"no {kind} engine for framework {framework!r}")
+    return engine
 
 
 def run_engine(
@@ -64,13 +75,11 @@ def run_engine(
     y: pd.Series,
     target_column: str,
     artifact_dir: str,
-    torch_fine_tune_epochs: int | None = None,
-    torch_full_retrain_epochs: int | None = None,
-    torch_learning_rate: float | None = None,
+    torch_budget: TorchBudget,
 ) -> CandidateModel:
     """Carry out the engine chosen by select_engine() against the real current model and real
     training data, producing a saved candidate artifact ready for validation/registration.
-    The torch epoch budgets and learning rate default to the engines' own defaults when not given."""
+    ``torch_budget`` sets the torch engines' epochs and learning rate."""
     if engine not in (
         EngineKind.SKLEARN_FULL_RETRAIN,
         EngineKind.XGBOOST_FULL_RETRAIN,
@@ -116,8 +125,6 @@ def run_engine(
             estimator_type=inspection.estimator_type,
             artifact_dir=artifact_dir,
         )
-    # Only the budgets the caller set; the rest keep the torch engines' own defaults.
-    lr_kw: dict[str, Any] = {"lr": torch_learning_rate} if torch_learning_rate else {}
     if engine == EngineKind.TORCH_FULL_RETRAIN:
         return full_retrain_torch(
             cast("nn.Module", current_model),
@@ -127,8 +134,8 @@ def run_engine(
             target_column=target_column,
             estimator_type=inspection.estimator_type,
             artifact_dir=artifact_dir,
-            **({"epochs": torch_full_retrain_epochs} if torch_full_retrain_epochs else {}),
-            **lr_kw,
+            epochs=torch_budget.full_retrain_epochs,
+            lr=torch_budget.learning_rate,
         )
     if engine == EngineKind.TORCH_FINE_TUNE:
         return fine_tune_torch(
@@ -139,7 +146,7 @@ def run_engine(
             target_column=target_column,
             estimator_type=inspection.estimator_type,
             artifact_dir=artifact_dir,
-            **({"epochs": torch_fine_tune_epochs} if torch_fine_tune_epochs else {}),
-            **lr_kw,
+            epochs=torch_budget.fine_tune_epochs,
+            lr=torch_budget.learning_rate,
         )
     raise AssertionError(f"unreachable: engine {engine} passed the support check above")

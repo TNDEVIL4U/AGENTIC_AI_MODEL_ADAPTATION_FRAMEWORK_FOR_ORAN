@@ -1,13 +1,15 @@
 """Member 3 - sandbox execution: runs security-checked adaptation code in an isolated
-subprocess with a wall-clock timeout and (on POSIX) a hard address-space ceiling, and hands
+subprocess with a wall-clock timeout and a resident-memory watchdog, and hands
 inputs/outputs across the process boundary via pickle files rather than a shared object graph -
 the point of a sandbox is that a compromised or merely buggy script's blast radius stops at the
 subprocess, never touching this process's memory, environment or open handles.
 
 This is the "restricted subprocess" backend the Phase 0 audit documents as weaker than Docker
-isolation (no filesystem/network namespace, no cgroup, and no memory ceiling at all on Windows,
-where `resource.setrlimit` does not exist) but real and exercised in tests, unlike the Docker
-backend which cannot run on this machine.
+isolation: no filesystem/network namespace and no cgroup. Its memory limit is a soft one - the
+parent polls the child's resident memory (Linux and Windows; not enforced on other platforms) and
+kills it once it passes `memory_mb`, so a very fast spike can briefly overshoot. An address-space
+rlimit is not used: numpy/OpenBLAS/torch reserve far more address space than they touch, so any
+useful ceiling fails their import before user code runs. The Docker backend is the hard limit.
 """
 
 from __future__ import annotations
@@ -16,13 +18,21 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import uuid
-from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import joblib
 import pandas as pd
 
 from oran_adapt.core.errors import SandboxExecutionError
+from oran_adapt.core.processes import descendants as _descendants
+from oran_adapt.core.processes import rss_bytes as _rss_bytes
+from oran_adapt.core.processes import terminate as _terminate
+
+if TYPE_CHECKING:
+    from oran_adapt.core.config import Settings
 
 # The inputs are pickled by this (trusted) process, so unpickling them inside the sandbox is
 # safe. The output travels the other way: it is written by untrusted code, so it is saved in a
@@ -71,7 +81,36 @@ _OUTPUT_FILES = {
     "torch_state_dict": "output.safetensors",
 }
 _XGBOOST_CLASSES = ("XGBClassifier", "XGBRegressor", "XGBRanker", "Booster")
-_MANIFEST_MAX_BYTES = 4096
+
+
+@dataclass(frozen=True)
+class SandboxLimits:
+    """The output cap and the container limits (SANDBOX_* keys) a sandboxed run is held to."""
+
+    manifest_max_bytes: int
+    docker_pids_limit: int
+    docker_cpus: float
+    docker_tmpfs_mb: int
+    docker_cleanup_timeout_s: float
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> SandboxLimits:
+        return cls(
+            manifest_max_bytes=settings.sandbox_manifest_max_bytes,
+            docker_pids_limit=settings.sandbox_docker_pids_limit,
+            docker_cpus=settings.sandbox_docker_cpus,
+            docker_tmpfs_mb=settings.sandbox_docker_tmpfs_mb,
+            docker_cleanup_timeout_s=settings.sandbox_docker_cleanup_timeout_s,
+        )
+
+
+def _limits(limits: SandboxLimits | None) -> SandboxLimits:
+    """``limits``, or else the schema defaults of the SANDBOX_* keys (their one definition)."""
+    if limits is not None:
+        return limits
+    from oran_adapt.core.config import Settings
+
+    return SandboxLimits.from_settings(Settings.model_construct())
 
 # Only what the interpreter and its installed packages actually need to start correctly - never
 # the parent's full environment, which may hold API keys, DB credentials, etc. VIRTUAL_ENV and
@@ -93,33 +132,63 @@ _INHERITED_ENV_VARS = (
 )
 
 
+# One BLAS/OpenMP thread: each extra thread allocates its own buffers, which on a many-core host
+# inflates the sandbox's memory for no benefit on the small fits it runs.
+_SINGLE_THREAD_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+}
+
+
 def _sandbox_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k in _INHERITED_ENV_VARS}
+    env = {k: v for k, v in os.environ.items() if k in _INHERITED_ENV_VARS}
+    env.update(_SINGLE_THREAD_ENV)
+    return env
 
 
-def _memory_limit_preexec(memory_mb: int) -> Callable[[], None] | None:
-    if os.name != "posix":
-        return None
+_MEMORY_POLL_S = 0.05
 
-    def _apply() -> None:
-        import resource
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    """Kill ``proc`` and everything it started: killing only a launcher would leave the real
+    interpreter running and holding the output pipes open."""
+    for pid in _descendants(proc.pid):
+        _terminate(pid)
+    proc.kill()
 
-        limit_bytes = memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
 
-    return _apply
+def _watch_memory(
+    proc: subprocess.Popen[str], limit_bytes: int, stop: threading.Event, tripped: list[int]
+) -> None:
+    """Kill ``proc``'s tree once its total resident memory passes ``limit_bytes``; record it."""
+    while not stop.wait(_MEMORY_POLL_S):
+        if proc.poll() is not None:
+            return  # exited: its pid may already belong to another process
+        readings = [_rss_bytes(pid) for pid in (proc.pid, *_descendants(proc.pid))]
+        rss = sum(r for r in readings if r is not None)
+        if rss > limit_bytes:
+            tripped.append(rss)
+            _kill_tree(proc)
+            return
 
 
 def _trusted(types: tuple[str, ...] | list[str] | None) -> tuple[str, ...] | list[str]:
+    """``types``, or else the schema default of MLFLOW_SKOPS_TRUSTED_TYPES (its one definition)."""
     if types is not None:
         return types
-    from oran_adapt.registry.client import DEFAULT_SKOPS_TRUSTED_TYPES
+    from oran_adapt.core.config import Settings
 
-    return DEFAULT_SKOPS_TRUSTED_TYPES
+    default: list[str] = Settings.model_fields["mlflow_skops_trusted_types"].get_default(
+        call_default_factory=True
+    )
+    return default
 
 
 def _load_output(
-    workdir: str, current_model: object, skops_trusted_types: tuple[str, ...] | list[str]
+    workdir: str,
+    current_model: object,
+    skops_trusted_types: tuple[str, ...] | list[str],
+    limits: SandboxLimits | None = None,
 ) -> object:
     """Read back the model the sandbox produced, using only loaders that cannot execute code.
     Raises SandboxExecutionError when the output is missing, malformed, or needs a type that is
@@ -127,7 +196,7 @@ def _load_output(
     manifest_path = os.path.join(workdir, "output.json")
     if not os.path.exists(manifest_path):
         raise SandboxExecutionError("sandbox script produced no output artifact")
-    if os.path.getsize(manifest_path) > _MANIFEST_MAX_BYTES:
+    if os.path.getsize(manifest_path) > _limits(limits).manifest_max_bytes:
         raise SandboxExecutionError("sandbox output manifest is too large")
     try:
         with open(manifest_path, encoding="utf-8") as f:
@@ -191,6 +260,7 @@ def run_in_sandbox(
     memory_mb: int,
     workdir: str,
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
+    limits: SandboxLimits | None = None,
 ) -> object:
     """Runs ``code`` (which must define ``adapt(current_model, X, y) -> model``) in a fresh
     subprocess and returns the model it produced. Raises SandboxExecutionError on timeout,
@@ -207,31 +277,50 @@ def run_in_sandbox(
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(script)
 
+    proc = subprocess.Popen(
+        # -P: the workdir is not put on sys.path, so a planted module cannot shadow imports.
+        [sys.executable, "-P", script_path],
+        cwd=workdir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_sandbox_env(),
+    )
+    stop = threading.Event()
+    tripped: list[int] = []
+    watchdog = threading.Thread(
+        target=_watch_memory,
+        args=(proc, memory_mb * 1024 * 1024, stop, tripped),
+        name="sandbox-memory-watchdog",
+        daemon=True,
+    )
+    watchdog.start()
     try:
-        proc = subprocess.run(
-            # -P: the workdir is not put on sys.path, so a planted module cannot shadow imports.
-            [sys.executable, "-P", script_path],
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            env=_sandbox_env(),
-            preexec_fn=_memory_limit_preexec(memory_mb),
-            check=False,
-        )
+        _, stderr = proc.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired as exc:
+        _kill_tree(proc)
+        proc.communicate()
         raise SandboxExecutionError(
             "sandbox execution exceeded the timeout", timeout_s=timeout_s
         ) from exc
+    finally:
+        stop.set()
+        watchdog.join()
 
+    if tripped:
+        raise SandboxExecutionError(
+            "sandbox execution exceeded the memory limit",
+            memory_mb=memory_mb,
+            rss_mb=tripped[0] // (1024 * 1024),
+        )
     if proc.returncode != 0:
         raise SandboxExecutionError(
             "sandbox script exited with a non-zero status",
             returncode=proc.returncode,
-            stderr=proc.stderr[-4000:],
+            stderr=stderr[-4000:],
         )
 
-    return _load_output(workdir, current_model, _trusted(skops_trusted_types))
+    return _load_output(workdir, current_model, _trusted(skops_trusted_types), limits)
 
 
 def _docker_user() -> list[str]:
@@ -254,6 +343,7 @@ def run_in_docker(
     workdir: str,
     image: str,
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
+    limits: SandboxLimits | None = None,
 ) -> object:
     """The Phase 0 audit's "stronger isolation" backend: a real container boundary (its own
     filesystem and network namespace, an enforced memory cgroup on every OS - not just POSIX -
@@ -278,6 +368,7 @@ def run_in_docker(
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(script)
 
+    limits = _limits(limits)
     container = f"oran-sandbox-{uuid.uuid4().hex[:12]}"
     cmd = [
         "docker",
@@ -292,13 +383,13 @@ def run_in_docker(
         "--memory-swap",
         f"{memory_mb}m",
         "--pids-limit",
-        "128",
+        str(limits.docker_pids_limit),
         "--cpus",
-        "1",
+        str(limits.docker_cpus),
         "--read-only",
         "--tmpfs",
         # The container's own private in-memory /tmp, not a host temp path.
-        "/tmp:rw,noexec,nosuid,size=64m",  # nosec B108
+        f"/tmp:rw,noexec,nosuid,size={limits.docker_tmpfs_mb}m",  # nosec B108
         "--cap-drop",
         "ALL",
         "--security-opt",
@@ -318,7 +409,10 @@ def run_in_docker(
     except subprocess.TimeoutExpired as exc:
         # Killing the docker CLI does not stop the container: remove it explicitly.
         subprocess.run(
-            ["docker", "rm", "-f", container], capture_output=True, timeout=60, check=False
+            ["docker", "rm", "-f", container],
+            capture_output=True,
+            timeout=limits.docker_cleanup_timeout_s,
+            check=False,
         )
         raise SandboxExecutionError(
             "docker sandbox execution exceeded the timeout", timeout_s=timeout_s
@@ -335,7 +429,7 @@ def run_in_docker(
             stderr=proc.stderr[-4000:],
         )
 
-    return _load_output(workdir, current_model, _trusted(skops_trusted_types))
+    return _load_output(workdir, current_model, _trusted(skops_trusted_types), limits)
 
 
 def run_sandboxed(
@@ -348,13 +442,16 @@ def run_sandboxed(
     memory_mb: int,
     workdir: str,
     backend: str,
-    docker_image: str = "",
+    docker_image: str | None = None,
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
+    limits: SandboxLimits | None = None,
 ) -> object:
     """Dispatches to `run_in_docker` or `run_in_sandbox` by `backend` ("docker" or
     "subprocess") - the one entry point `adaptation.llm_adapter` calls, so it never chooses
     between the two backends itself."""
     if backend == "docker":
+        if not docker_image:
+            raise SandboxExecutionError("the docker sandbox needs SANDBOX_DOCKER_IMAGE")
         return run_in_docker(
             code,
             current_model=current_model,
@@ -365,6 +462,7 @@ def run_sandboxed(
             workdir=workdir,
             image=docker_image,
             skops_trusted_types=skops_trusted_types,
+            limits=limits,
         )
     return run_in_sandbox(
         code,
@@ -375,4 +473,5 @@ def run_sandboxed(
         memory_mb=memory_mb,
         workdir=workdir,
         skops_trusted_types=skops_trusted_types,
+        limits=limits,
     )

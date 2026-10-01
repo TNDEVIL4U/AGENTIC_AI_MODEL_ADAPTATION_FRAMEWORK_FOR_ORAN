@@ -1,0 +1,218 @@
+# CI for every commit and pull request (Hardening Phase 0).
+#
+#   quality            ruff, mypy (ratchet at 0 errors), full pytest suite (heavy tier included)
+#   build-images       builds the api, worker and migrator targets (with an SPDX SBOM each) and
+#                      the mlflow and sandbox images
+#   packaging          helm lint + helm template for every example values file, kubeconform on
+#                      the output, kustomize build of every overlay (Hardening Phase 11)
+#   supply-chain       secret-leak scan, bandit, pip-audit of requirements.lock (known CVEs) and a
+#                      CycloneDX SBOM (scripts/security_check.py; uploaded as an artifact)
+#   containers         conformance and outage scenarios against real PostgreSQL and Kafka
+#                      started by testcontainers (Hardening Phase 13)
+#   phase-0-baseline   compose stack from a clean checkout -> health, readiness, metrics,
+#                      one drift event + duplicate, job read-back -> teardown
+#                      (scripts/ci/compose_smoke.sh)
+#
+# Everything runs CPU-only on GitHub-hosted runners; nothing here needs the development laptop.
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# No concurrency group: a new push must not cancel a still-running test job (the suite is slow),
+# so runs for successive commits overlap and each reports its own result.
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13.7"
+  TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+  # Dev tools are pinned to the versions the suite was last run with locally.
+  DEV_TOOLS: >-
+    pytest==9.1.1 pytest-asyncio==1.4.0 pytest-cov==7.1.0 coverage==7.16.1 pytest-xdist==3.8.0
+    ruff==0.16.8 mypy==2.3.1
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install (locked runtime deps + pinned dev tools)
+        run: |
+          python -m pip install --upgrade "pip>=26.2"
+          pip install --extra-index-url "$TORCH_INDEX_URL" -c requirements.lock -e .
+          pip install $DEV_TOOLS
+      - name: Lint (ruff)
+        run: ruff check src tests scripts
+      - name: Type check (mypy)
+        run: mypy
+      - name: Tests with coverage
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+          LLM_PROVIDER: none
+        # `python -m pytest` (as run locally) puts the repo root on sys.path; some tests import
+        # shared helpers as `tests.unit.<module>`. On failure the tail of the output becomes an
+        # annotation, which (unlike job logs) is readable without signing in.
+        run: |
+          set +e
+          python -m pytest -p no:cacheprovider -rfEs -m "heavy or not heavy" \
+            --cov=oran_adapt --cov-report=term --cov-report=xml:coverage.xml \
+            --junitxml=junit.xml 2>&1 | tee pytest.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            failed="$(grep -E '^(FAILED|ERROR) ' pytest.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            echo "::error title=pytest failed tests::${failed:-none listed}"
+            msg="$(tail -n 60 pytest.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            echo "::error title=pytest exit ${rc}::${msg}"
+          fi
+          exit "$rc"
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            coverage.xml
+            junit.xml
+
+  supply-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install (locked runtime deps + the security extra)
+        run: |
+          python -m pip install --upgrade "pip>=26.2"
+          pip install --extra-index-url "$TORCH_INDEX_URL" -c requirements.lock -e ".[security]"
+      - name: Secret-leak scan (tracked files)
+        run: python scripts/secret_scan.py
+      # bandit, pip-audit (fails on any advisory not accepted in the script) and the CycloneDX
+      # SBOM of requirements.lock (reports/sbom.cdx.json)
+      - name: bandit, pip-audit, cyclonedx SBOM
+        run: python scripts/security_check.py
+      - name: Upload security reports and SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: reports/
+
+  build-images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # One image per Dockerfile target, each with an SBOM (buildx's SPDX attestation, written to
+      # a local directory and uploaded) and loaded for the smoke below.
+      - name: Build api, worker and migrator targets with SBOMs
+        run: |
+          for target in api worker migrator; do
+            docker buildx build --target "$target" --sbom=true \
+              --output "type=local,dest=reports/sbom-$target" .
+            docker buildx build --target "$target" --load --tag "oran-adapt-$target:ci" .
+          done
+          docker tag oran-adapt-api:ci oran-adapt:ci
+      - name: Upload image SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-sboms
+          path: reports/sbom-*/sbom*.spdx.json
+      - name: Image healthchecks and users
+        run: |
+          for target in api worker migrator; do
+            docker image inspect "oran-adapt-$target:ci" \
+              --format "$target user={{.Config.User}} health={{json .Config.Healthcheck}}"
+          done
+      - name: Build mlflow image
+        run: docker build --tag oran-adapt-mlflow:ci docker/mlflow
+      - name: Build sandbox image
+        run: docker build --tag oran-adapt-sandbox:ci docker/sandbox
+      # Imports only: importing oran_adapt.api.main would build the app with default settings,
+      # whose SQLite path is under the read-only /app. The full start-up is phase-0-baseline's job.
+      - name: Container smoke (api image imports and runs as non-root)
+        run: |
+          docker run --rm --entrypoint sh oran-adapt:ci -c \
+            'test "$(id -u)" != "0" && python -c "import oran_adapt, oran_adapt.api.app, oran_adapt.cli, torch, mlflow, xgboost, sklearn, evidently; print(oran_adapt.__version__, torch.__version__)"'
+
+  packaging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: helm lint and template, every example values file
+        run: |
+          chart=deploy/helm/oran-adapt
+          helm lint "$chart"
+          mkdir -p reports/rendered
+          for values in "$chart"/examples/values-*.yaml; do
+            name="$(basename "$values" .yaml)"
+            helm lint "$chart" --values "$values"
+            helm template ci "$chart" --values "$values" > "reports/rendered/$name.yaml"
+          done
+      - name: promtool check rules (the alert rules as code)
+        run: |
+          docker run --rm -v "$PWD/deploy/helm/oran-adapt/files:/rules:ro" --entrypoint promtool \
+            prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94 \
+            check rules /rules/prometheus-rules.yaml
+      - name: kustomize build, every overlay
+        run: |
+          for overlay in deploy/kustomize/overlays/*/; do
+            kubectl kustomize "$overlay" > "reports/rendered/kustomize-$(basename "$overlay").yaml"
+          done
+      - name: Validate rendered manifests against the Kubernetes schemas
+        run: |
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+          "$(go env GOPATH)/bin/kubeconform" -strict -summary -ignore-missing-schemas \
+            -kubernetes-version 1.30.0 reports/rendered/*.yaml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendered-manifests
+          path: reports/rendered/
+
+  containers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install (locked runtime deps + the containers extra)
+        run: |
+          python -m pip install --upgrade "pip>=26.2"
+          pip install --extra-index-url "$TORCH_INDEX_URL" -c requirements.lock -e ".[containers]"
+          pip install $DEV_TOOLS
+      - name: testcontainers tier (PostgreSQL, Kafka)
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+        run: python -m pytest -p no:cacheprovider -rfEs -m "heavy or not heavy" tests/integration/test_testcontainers.py
+
+  phase-0-baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose smoke (clean bring-up, endpoints, one event, teardown)
+        run: bash scripts/ci/compose_smoke.sh

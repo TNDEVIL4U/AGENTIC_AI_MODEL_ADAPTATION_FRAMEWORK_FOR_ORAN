@@ -1,0 +1,22 @@
+# Local development: SQLite for both stores, no LLM, trigger-fed CDC, auth off.
+# Use with:  ORAN_CONFIG_FILE=config/examples/development.toml
+# Any environment variable (e.g. DATABASE_URL) overrides the matching key here.
+
+environment = "development"
+database_url = "sqlite:///./data/oran_adapt.db"
+mlflow_tracking_uri = "sqlite:///./data/mlflow.db"
+artifact_workdir = "./data/artifacts"
+
+auth_enabled = false
+cdc_mode = "polling"
+
+[log]
+level = "DEBUG"
+json = false
+
+[llm]
+provider = "none"
+
+[job]
+execution_mode = "process"
+timeout_s = 600.0

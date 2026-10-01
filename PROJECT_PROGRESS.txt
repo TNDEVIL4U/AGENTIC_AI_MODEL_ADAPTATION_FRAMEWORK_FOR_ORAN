@@ -45,8 +45,8 @@ Phase 6  Adaptation: PyTorch engine ......................... DONE
 
 Phase 7  Sandbox ............................................ PARTLY DONE
          AST security scanner and subprocess runner for LLM-generated
-         code. Both are verified. The Docker backend has not been run,
-         and the memory limit is not enforced on Windows.
+         code. Both are verified. The Docker backend has not been run.
+         The memory limit is a soft RSS watchdog (Linux and Windows).
 
 Phase 8  Validation ......................................... DONE
          Compares the candidate with the current model (accuracy / RMSE
@@ -112,8 +112,11 @@ A. Needs a different machine or an external service
       GEMINI_MODEL or an Anthropic API key.
 
 B. Known limitations in the current code
-   4. The sandbox memory limit is not enforced on Windows (RLIMIT_AS is
-      POSIX-only). Fix: use the Docker backend or a Windows Job Object.
+   4. The subprocess sandbox memory limit is a soft one: a watchdog polls
+      the process tree's RSS every 50 ms (Linux and Windows) and kills it
+      past the limit, so a fast spike can briefly overshoot. It replaced
+      RLIMIT_AS, which broke numpy/torch imports on Linux. Hard limit: use
+      the Docker backend.
    5. Timed-out jobs keep running in their background thread (Python cannot
       kill a thread). The job status in the DB is the source of truth.
    6. mypy reports 50 existing errors. A ratchet stops new ones, but the 50
