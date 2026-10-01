@@ -356,11 +356,11 @@ server together with its uvicorn worker. Set
 | `ARTIFACT_WORKDIR` | `./data/artifacts` | Scratch dir for training jobs' working files |
 | `LLM_PROVIDER` | `none` | `anthropic` \| `gemini` \| `none` |
 | `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | unset | Required when `LLM_PROVIDER` selects that provider |
-| `ANTHROPIC_MODEL` / `GEMINI_MODEL` | `claude-sonnet-5` / `gemini-3.6-flash` | Model id used for LLM calls |
+| `ANTHROPIC_MODEL` / `GEMINI_MODEL` | none; required with that provider | Model id used for LLM calls |
 | `LLM_TIMEOUT_S` | `60` | Timeout for LLM calls |
 | `SANDBOX_BACKEND` | `subprocess` | `subprocess` (restricted, resource-limited) \| `docker` (network-isolated container) |
 | `SANDBOX_TIMEOUT_S` / `SANDBOX_MEMORY_MB` | `120` / `1024` | Limits on LLM-generated adaptation code |
-| `SANDBOX_DOCKER_IMAGE` | `oran-adapt-sandbox:latest` | Image used when `SANDBOX_BACKEND=docker` |
+| `SANDBOX_DOCKER_IMAGE` | none; required with `SANDBOX_BACKEND=docker` | Image used when `SANDBOX_BACKEND=docker`, pinned by digest (`name@sha256:...`) |
 | `MLFLOW_SKOPS_TRUSTED_TYPES` | `["sklearn.tree._tree.Tree", "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor"]` | Extra types skops may serialize and load for sklearn models. Anything else fails fast with a non-retryable `ARTIFACT_ERROR`. |
 | `TORCH_FINE_TUNE_EPOCHS` / `TORCH_FULL_RETRAIN_EPOCHS` | `5` / `300` | Epochs for torch warm-start fine-tuning / from-scratch retraining |
 | `TORCH_LEARNING_RATE` | `0.01` | Adam learning rate for both torch engines |
@@ -430,7 +430,8 @@ The LLM-generated-code sandbox uses a separate image, built independently:
 docker build -t oran-adapt-sandbox:latest -f docker/sandbox/Dockerfile docker/sandbox
 ```
 
-Then set `SANDBOX_BACKEND=docker` in `.env` to route LLM-generated adaptation code through
+Then set `SANDBOX_BACKEND=docker` and `SANDBOX_DOCKER_IMAGE` to the built image's digest
+(`docker inspect --format '{{index .RepoDigests 0}}'` after pushing it) in `.env` to route LLM-generated adaptation code through
 `docker run --rm --network none --memory <n>m ...` instead of the restricted local subprocess
 backend.
 

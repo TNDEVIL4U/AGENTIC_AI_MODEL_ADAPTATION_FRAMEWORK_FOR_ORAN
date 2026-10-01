@@ -199,3 +199,11 @@ Phase 10, only when `LLM_ENABLED=true`, which also requires a provider) and that
   clone-to-canary walkthrough (`scripts/walkthrough.py`, `deploy/compose/walkthrough.yml`),
   ADRs (`docs/adr/`), and the integration, adapter-authoring, operations and migration guides,
   and `docs/LIMITATIONS.md`.
+- **Since Hardening Phase 15:** no setting that names a site's own resource has a default. An
+  LLM provider needs its model id, the `docker` sandbox needs an image pinned by digest, and
+  Kafka CDC needs its topic and consumer group. The compose stack's names, tags and ports are
+  variables, the Debezium connector is templated through `${env:...}`, and the MLflow image's
+  pins are in `docker/mlflow/requirements.txt`. The final audits are
+  `docs/AUDIT-HARDCODING.md` (zero literals remaining) and `docs/AUDIT-FINDINGS.md` (ten
+  findings, each with a passing test), both checked by `scripts/audit.py`, and
+  `scripts/verify.sh all` runs every phase gate. See also `docs/PRODUCTION-READINESS.md`.

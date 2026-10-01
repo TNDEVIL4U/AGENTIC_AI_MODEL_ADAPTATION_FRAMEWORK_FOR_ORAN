@@ -226,6 +226,13 @@ def _secret(settings: Settings, key: str) -> str:
     return str(value.get_secret_value())
 
 
+def _model(settings: Settings, key: str) -> str:
+    value = getattr(settings, key)
+    if not value:
+        raise LlmUnavailableError(f"{key.upper()} is not set", key=key.upper())
+    return str(value)
+
+
 def _common(settings: Settings) -> dict[str, Any]:
     return {"max_tokens": settings.llm_max_output_tokens,
             "policy": OutboundPolicy.from_settings(settings)}
@@ -233,14 +240,16 @@ def _common(settings: Settings) -> dict[str, Any]:
 
 def _anthropic(settings: Settings) -> AnthropicLlmClient:
     return AnthropicLlmClient(
-        _secret(settings, "anthropic_api_key"), settings.anthropic_model, settings.llm_timeout_s,
+        _secret(settings, "anthropic_api_key"), _model(settings, "anthropic_model"),
+        settings.llm_timeout_s,
         base_url=settings.anthropic_base_url, **_common(settings),
     )
 
 
 def _gemini(settings: Settings) -> GeminiLlmClient:
     return GeminiLlmClient(
-        _secret(settings, "gemini_api_key"), settings.gemini_model, settings.llm_timeout_s,
+        _secret(settings, "gemini_api_key"), _model(settings, "gemini_model"),
+        settings.llm_timeout_s,
         base_url=settings.gemini_base_url, **_common(settings),
     )
 

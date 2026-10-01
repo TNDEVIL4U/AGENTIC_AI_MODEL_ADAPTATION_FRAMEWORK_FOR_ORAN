@@ -219,7 +219,8 @@ class _BrokerConsumer:
 def _cdc_context(adapter, migrated_settings, kafka_cls=KafkaCdcSource):
     session_factory = make_session_factory(create_db_engine(migrated_settings.database_url))
     if adapter == "kafka":
-        settings = migrated_settings.model_copy(update={"cdc_kafka_topic": _Broker.topic})
+        settings = migrated_settings.model_copy(update={"cdc_kafka_topic": _Broker.topic,
+                                                        "cdc_consumer_group": "oran-adapt-cdc"})
         broker = _Broker()
 
         def open_kafka():

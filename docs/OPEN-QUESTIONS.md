@@ -250,7 +250,7 @@ Defaults and assumptions, with the key that changes each:
 | The circuit breaker is per process and per provider (3 failures open it, 60 s to half-open). | No shared store is assumed; each worker learns on its own. | `LLM_BREAKER_FAILURE_THRESHOLD`, `LLM_BREAKER_RESET_S` |
 | No retries by default (0; backoff 0.5 s doubling when set). SDK retries are always off. | A failed call falls back to the rules at once; retries cost money. | `LLM_MAX_RETRIES`, `LLM_RETRY_BACKOFF_S` |
 | The newest built-in prompt version is used. | Pin a version to freeze behaviour across upgrades. | `LLM_PROMPT_VERSIONS`, `LLM_PROMPT_DIR` |
-| Default model ids `claude-sonnet-5` and `gemini-3.6-flash` (hardcoding C4, C5). | Used only when the LLM is on with that provider. | `ANTHROPIC_MODEL`, `GEMINI_MODEL` |
+| No default model id (hardcoding C4, C5, closed in Hardening Phase 15): selecting `anthropic` or `gemini` requires its model key. | A default id goes stale when the provider retires the model, and which model a site may use is its decision. | `ANTHROPIC_MODEL`, `GEMINI_MODEL` |
 | MLflow's usage telemetry is off. | Nothing leaves the deployment unasked. | `MLFLOW_TELEMETRY` |
 | MLflow infers each saved model's pip requirements (a subprocess per save) unless a list is given. | Correct by default; pin the list to save seconds per save. | `MLFLOW_PIP_REQUIREMENTS` |
 | **Unverified locally:** the live Anthropic, Gemini and OpenAI-compatible services (local wire-format doubles only). | The gate runs with egress blocked. | - |
@@ -323,6 +323,22 @@ default (`docs/PHASE14_REPORT.md`).
 | A delivery that splits traffic (`canary`, `ab`, and shadow or approval that continues as a canary) with a deployment adapter that cannot split is a configuration error, raised by `config lint` and at startup. | Found while writing the example configs: before, it failed only when the deployer was built. | `DELIVERY_STRATEGY`, `DEPLOYMENT_BACKEND` |
 | The example configs choose per stack: canary on KServe, manual on SageMaker, shadow on Vertex and BentoML, blue/green on Seldon and Triton, and `registry-alias` when air-gapped. | Only `registry-alias`, `kserve` and `webhook` split traffic. The others get the safest strategy they support. | `config/examples/*.toml` |
 | **Unverified locally:** the walkthrough against the compose stack (`deploy/compose/walkthrough.yml`), and every example against its real service. | No Docker on the development laptop, and no cloud or cluster. The in-process walkthrough runs in the gate. | - |
+
+## Audit and production readiness
+
+Hardening Phase 15 closed the last settings that needed a decision and the compose stack's
+literals, and wrote the final audits (`docs/PHASE15_REPORT.md`, `docs/AUDIT-HARDCODING.md`,
+`docs/AUDIT-FINDINGS.md`, `docs/PRODUCTION-READINESS.md`).
+
+| Assumption | Why | Key |
+|---|---|---|
+| An LLM provider's model id has no default. | A default id goes stale when the provider retires the model, and a site should choose the model it pays for. | `ANTHROPIC_MODEL`, `GEMINI_MODEL` |
+| The `docker` sandbox needs an image pinned by digest. | `:latest` can change under a running deployment, and the sandbox runs generated code. | `SANDBOX_DOCKER_IMAGE` |
+| `CDC_MODE=kafka` needs its topic and consumer group. | The old topic default named one table, and a shared default group would split one topic's partitions between unrelated installations. | `CDC_KAFKA_TOPIC`, `CDC_CONSUMER_GROUP` |
+| `MLFLOW_SKOPS_TRUSTED_TYPES` keeps its name. | It names the skops format that MLflow and the native handler share, and a rename would break every deployment that sets it. | `MLFLOW_SKOPS_TRUSTED_TYPES` |
+| Threshold and budget keys stay typed schema defaults. | Each is bounded, overridable and shown by `config effective`; the gate and delivery thresholds already live in versioned policies. | `ANALYSIS_*`, `DECISION_*`, `TORCH_*`, `JOB_*` |
+| The compose stack's names, tags and published ports are variables with defaults. Its service names and internal `mlflow` database are fixed. | The compose stack is for development; service names are its own topology. | `.env.example` (compose section) |
+| **Unverified locally:** the compose variables and the connector's `${env:...}` templating. | No Docker on the development laptop. The files parse, and static tests check them. | - |
 
 ## Not yet behind a port
 

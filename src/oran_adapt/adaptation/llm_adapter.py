@@ -62,7 +62,7 @@ def adapt_via_llm(
     sandbox_memory_mb: int,
     workdir: str,
     sandbox_backend: str,
-    sandbox_docker_image: str,
+    sandbox_docker_image: str | None,
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
     sandbox_limits: SandboxLimits | None = None,
     settings: Settings | None = None,

@@ -261,11 +261,13 @@ class Settings(BaseSettings):
     llm_enabled: bool = False
     llm_provider: str = "none"
     anthropic_api_key: SecretStr | None = None
-    anthropic_model: str = "claude-sonnet-5"
+    # Model ids have no default: which model a site may use is its decision, and a default
+    # id goes stale when the provider retires it. Required with the provider (C4, C5).
+    anthropic_model: str | None = None
     # Messages API base URL; unset means the SDK default (api.anthropic.com).
     anthropic_base_url: str | None = None
     gemini_api_key: SecretStr | None = None
-    gemini_model: str = "gemini-3.6-flash"
+    gemini_model: str | None = None
     # generate_content base URL; unset means the SDK default (generativelanguage.googleapis.com).
     gemini_base_url: str | None = None
     llm_timeout_s: float = Field(60.0, gt=0)
@@ -303,7 +305,9 @@ class Settings(BaseSettings):
     sandbox_backend: Literal["docker", "subprocess"] = "subprocess"
     sandbox_timeout_s: int = Field(120, gt=0)
     sandbox_memory_mb: int = Field(1024, gt=63)
-    sandbox_docker_image: str = "oran-adapt-sandbox:latest"
+    # Required with SANDBOX_BACKEND=docker, and pinned by digest (image@sha256:...): a mutable
+    # tag could change the code that runs LLM-written adaptations without a config change.
+    sandbox_docker_image: str | None = None
     sandbox_docker_pids_limit: int = Field(128, ge=16)
     sandbox_docker_cpus: float = Field(1.0, gt=0)
     sandbox_docker_tmpfs_mb: int = Field(64, ge=1)
@@ -779,8 +783,11 @@ class Settings(BaseSettings):
     # A data version records at most this many source transaction ids (lineage).
     cdc_max_tx_ids_per_version: int = Field(1000, ge=1)
     kafka_bootstrap_servers: str | None = None
-    cdc_kafka_topic: str = "oran.public.kpi_sample"  # Debezium: <prefix>.<schema>.<table>
-    cdc_consumer_group: str = "oran-adapt-cdc"
+    # Both required with CDC_MODE=kafka. The topic names the source table (Debezium:
+    # <prefix>.<schema>.<table>); the group holds the offsets, so two installations on one
+    # cluster sharing a default group would split the partitions between them.
+    cdc_kafka_topic: str | None = None
+    cdc_consumer_group: str | None = None
     cdc_kafka_poll_timeout_s: float = Field(1.0, gt=0)
     cdc_kafka_auto_offset_reset: Literal["earliest", "latest"] = "earliest"
     # The source table's row image: primary key, dataset id, timestamp and payload columns.
@@ -966,6 +973,20 @@ class Settings(BaseSettings):
                         key=key.upper(),
                         selected_by=selector.upper(),
                     )
+        return self
+
+    @model_validator(mode="after")
+    def _sandbox_image_pinned(self) -> Settings:
+        """The docker sandbox runs a named image, pinned by digest."""
+        if self.sandbox_backend != "docker":
+            return self
+        image = self.sandbox_docker_image or ""
+        if "@sha256:" not in image:
+            raise ConfigurationError(
+                "SANDBOX_BACKEND=docker requires SANDBOX_DOCKER_IMAGE pinned by digest "
+                f"(name@sha256:...), got {image!r}",
+                key="SANDBOX_DOCKER_IMAGE", selected_by="SANDBOX_BACKEND",
+            )
         return self
 
     @model_validator(mode="after")

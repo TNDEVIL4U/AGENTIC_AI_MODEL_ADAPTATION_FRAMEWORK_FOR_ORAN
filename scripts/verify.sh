@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Local phase gate:  scripts/verify.sh <phase>   (alias: make verify PHASE=<phase>)
+#                    scripts/verify.sh all       (every phase gate plus the audit scans)
 #
 # A hardening phase is complete when this passes locally. Fails fast, in order:
 #   1. ruff + mypy (the mypy baseline is 0 errors, so any error is a new one)
@@ -10,13 +11,19 @@
 #   5. the phase acceptance script scripts/acceptance/phase<N>.py
 # The whole run has a 300 s budget; exceeding it fails the gate (move slow tests to `heavy`).
 #
+# `all` runs steps 1-3 once, the whole gate tier (pytest -m "not heavy", every file) once
+# instead of each phase's scoped tests and smoke tier, then every acceptance script 1-15 and
+# scripts/audit.py. The acceptance scripts read that one test report (_gate.py), so no test
+# runs twice. It is the release check, not a per-phase gate: its budget is ALL_BUDGET_S.
+#
 # Resource limits (CLAUDE.md): pytest-xdist is capped at 2 workers; override with VERIFY_WORKERS.
 set -euo pipefail
 
 BUDGET_S=300
+ALL_BUDGET_S=3600
 phase="${1:-}"
 if [[ -z "$phase" ]]; then
-    echo "usage: scripts/verify.sh <phase 1-15>" >&2
+    echo "usage: scripts/verify.sh <phase 1-15 | all>" >&2
     exit 2
 fi
 
@@ -56,15 +63,24 @@ case "$phase" in
     # the acceptance runs every conformance test, the scenario matrix and the skip policy.
     13) scope="conformance.import.artifact_store core.import.state_machine" ;;
     14) scope="core.event_mapping adapters.opa" ;;  # mappers, OPA; acceptance: docs, examples, walkthrough
-    15) scope="core api orchestrator registry sandbox" ;;
-    *) echo "unknown phase '$phase' (expected 1-15)" >&2; exit 2 ;;
+    15) scope="adapters.kafka_cdc adapters.llm_providers sandbox.runner" ;;  # audit: required keys, pins
+    all) scope="" ;;
+    *) echo "unknown phase '$phase' (expected 1-15 or all)" >&2; exit 2 ;;
 esac
 
-acceptance="scripts/acceptance/phase${phase}.py"
-if [[ ! -f "$acceptance" ]]; then
-    echo "missing acceptance script $acceptance" >&2
-    exit 1
+if [[ "$phase" == all ]]; then
+    acceptances=(); for n in $(seq 1 15); do acceptances+=("scripts/acceptance/phase${n}.py"); done
+    budget=$ALL_BUDGET_S
+else
+    acceptances=("scripts/acceptance/phase${phase}.py")
+    budget=$BUDGET_S
 fi
+for acceptance in "${acceptances[@]}"; do
+    if [[ ! -f "$acceptance" ]]; then
+        echo "missing acceptance script $acceptance" >&2
+        exit 1
+    fi
+done
 
 # CPU only, and no LLM calls from the gate (tests that need one inject a fake).
 export CUDA_VISIBLE_DEVICES="" LLM_PROVIDER=none
@@ -83,6 +99,29 @@ step "2/5 import boundary"
 step "3/5 no-gaps lint"
 "$py" scripts/lint_no_gaps.py
 
+# The acceptance script reads this report instead of re-running the same tests (_gate.py).
+mkdir -p .pytest_cache/oran-verify
+export ORAN_GATE_JUNIT="$root/.pytest_cache/oran-verify/scoped.xml"
+if [[ "$phase" == all ]]; then
+    step "4/5 gate tier (every test file, not heavy)"
+    export ORAN_GATE_STARTED="$(date +%s)"
+    "$py" -m pytest -q -m "not heavy" -n "$workers" --junitxml "$ORAN_GATE_JUNIT" tests
+    for acceptance in "${acceptances[@]}"; do
+        step "5/5 acceptance ($acceptance)"
+        "$py" "$acceptance"
+    done
+    step "5/5 audit scans (scripts/audit.py)"
+    "$py" scripts/audit.py
+    elapsed=$((SECONDS - start))
+    if (( elapsed > budget )); then
+        echo "verify all: checks passed but took ${elapsed}s (> ${budget}s budget)" >&2
+        exit 1
+    fi
+    echo
+    echo "verify all: PASS in ${elapsed}s"
+    exit 0
+fi
+
 step "4/5 scoped tests (phase $phase: $scope)"
 pattern="oran_adapt\\.($(tr ' ' '|' <<<"$scope"))\\b"
 mapfile -t scoped < <(grep -rlE --include='test_*.py' "$pattern" tests | sort)
@@ -91,23 +130,21 @@ if (( ${#scoped[@]} == 0 )); then
     exit 1
 fi
 printf '  %s\n' "${scoped[@]}"
-# The acceptance script reads this report instead of re-running the same tests (_gate.py).
-mkdir -p .pytest_cache/oran-verify
-export ORAN_GATE_JUNIT="$root/.pytest_cache/oran-verify/scoped.xml"
 export ORAN_GATE_STARTED="$(date +%s)"
 "$py" -m pytest -q -m "not heavy" -n "$workers" --ff --junitxml "$ORAN_GATE_JUNIT" "${scoped[@]}"
 step "4/5 smoke tier (files not run above)"
 # The scoped run already ran the smoke tests in its own files; run the rest of the tier.
 ignored=()
 for f in "${scoped[@]}"; do ignored+=(--ignore "$f"); done
-"$py" -m pytest -q -m smoke -n "$workers" --ff "${ignored[@]}"
+"$py" -m pytest -q -m smoke -n "$workers" --ff \
+    --junitxml "$(dirname "$ORAN_GATE_JUNIT")/smoke.xml" "${ignored[@]}"
 
-step "5/5 acceptance ($acceptance)"
-"$py" "$acceptance"
+step "5/5 acceptance (${acceptances[0]})"
+"$py" "${acceptances[0]}"
 
 elapsed=$((SECONDS - start))
-if (( elapsed > BUDGET_S )); then
-    echo "verify phase $phase: checks passed but took ${elapsed}s (> ${BUDGET_S}s budget)" >&2
+if (( elapsed > budget )); then
+    echo "verify phase $phase: checks passed but took ${elapsed}s (> ${budget}s budget)" >&2
     exit 1
 fi
 echo

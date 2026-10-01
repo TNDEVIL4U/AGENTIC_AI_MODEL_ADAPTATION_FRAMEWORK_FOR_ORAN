@@ -335,11 +335,36 @@ No category count changes. New literals, and why they are not keys:
 | `scripts/acceptance/phase14.py` | the seven target stacks, the required docs, a 240 s walkthrough timeout | the phase's acceptance criteria |
 | `adapters/opa.py` | the `/v1/data/` path prefix | OPA's Data API contract; the rule path is `POLICY_OPA_PATH` |
 
+## Hardening Phase 15 status
+
+**Closed:** the last seven C items and five D items. The final state of every baseline literal
+is in [AUDIT-HARDCODING.md](AUDIT-HARDCODING.md), which `scripts/audit.py` checks.
+
+| # | Now |
+|---|---|
+| C4, C5 | no default model id; `ANTHROPIC_MODEL` / `GEMINI_MODEL` are required keys of their provider |
+| C6 | no default image; `SANDBOX_BACKEND=docker` requires `SANDBOX_DOCKER_IMAGE` pinned by digest |
+| C10, C11 | no default topic or group; both are required keys of the `kafka` CDC source |
+| C12 | decision: `MLFLOW_SKOPS_TRUSTED_TYPES` keeps its name (it names the skops format; a rename would break deployments) |
+| C14 | decision: threshold and budget keys stay typed, bounded schema defaults, shown by `oran-adapt config effective` |
+| D4-D6 | `docker-compose.yml` names, tags and published ports are variables with defaults (`.env.example`); service names and the internal `mlflow` database are the stack's topology |
+| D7 | `docker/mlflow/requirements.txt`, kept equal to `requirements.lock` by `tests/unit/test_phase15_audit.py` |
+| D8 | `deploy/debezium/kpi-connector.json` reads its names through `${env:...}` (Kafka Connect's `EnvVarConfigProvider`) |
+
+D4-D8 are unverified locally, because there is no Docker on the development laptop. New
+literals, and why they are not keys:
+
+| Where | Value | Why it is not a key |
+|---|---|---|
+| `scripts/audit.py` | the expected IDs and the baseline-literal probes | the audit's own criteria |
+| `scripts/verify.sh` | `ALL_BUDGET_S=3600` | the release check's budget; every phase gate keeps 300 s |
+| `scripts/acceptance/phase15.py` | the audit docs, a 600 s audit timeout | the phase's acceptance criteria |
+
 ## Burn-down counters
 
-| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 | Open after Phase 10 | Open after Phase 11 | Open after Phase 12 | Open after Phase 13 | Open after Phase 14 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 7 |
-| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 5 | 5 | 5 | 5 |
+| Category | Count at baseline | Open after Phase 1 | Open after Phase 2 | Open after Phase 3 | Open after Phase 4 | Open after Phase 5 | Open after Phase 6 | Open after Phase 7 | Open after Phase 8 | Open after Phase 9 | Open after Phase 10 | Open after Phase 11 | Open after Phase 12 | Open after Phase 13 | Open after Phase 14 | Open after Phase 15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A (use-site literals) | 24 | 0 (A17, A24 kept, see above) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| B (duplicated defaults) | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| C (settings needing a decision) | 14 | 10 | 9 | 8 | 8 | 8 | 8 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 0 |
+| D (infrastructure) | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 5 | 5 | 5 | 5 | 0 |

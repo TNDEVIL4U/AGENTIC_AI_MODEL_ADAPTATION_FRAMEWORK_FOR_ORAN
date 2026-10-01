@@ -22,9 +22,9 @@ Settings (environment variable = field name, see `core/config.py`):
 |----------|---------|---------|
 | `CDC_MODE` | `disabled` | `kafka`, `polling` or `disabled` |
 | `CDC_BATCH_SIZE` | `500` | Events per batch |
-| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka brokers (`kafka:9092` in compose) |
-| `CDC_KAFKA_TOPIC` | `oran.public.kpi_sample` | Debezium topic: `<topic.prefix>.<schema>.<table>` |
-| `CDC_CONSUMER_GROUP` | `oran-adapt-cdc` | Kafka consumer group |
+| `KAFKA_BOOTSTRAP_SERVERS` | required with `kafka` | Kafka brokers (`kafka:9092` in compose) |
+| `CDC_KAFKA_TOPIC` | required with `kafka` | Debezium topic: `<topic.prefix>.<schema>.<table>`; `oran.public.kpi_sample` in compose |
+| `CDC_CONSUMER_GROUP` | required with `kafka` | Kafka consumer group, unique per installation (it holds the offsets); `oran-adapt-cdc` in compose |
 | `CDC_KAFKA_POLL_TIMEOUT_S` | `1.0` | How long one Kafka poll waits |
 | `CDC_KEY_COLUMN` | `id` | Source column holding the row key (also the Debezium key field) |
 | `CDC_DATASET_COLUMN` | `dataset_id` | Source column naming the dataset |
@@ -85,10 +85,18 @@ one version. With nothing pending it returns nothing, so running it twice does n
   event carries only the primary key, but events are filed under the row's `dataset_id`, so
   deletes need the full old row. This costs more WAL per update or delete on that table.
 - The connector config is in `deploy/debezium/kpi-connector.json`. The `debezium-init` service
-  sends it with `PUT /connectors/oran-kpi-sample/config` (idempotent) once the API is healthy,
-  which means the migrations, including the table, have run. Key settings:
-  - `plugin.name=pgoutput`, `topic.prefix=oran`, `table.include.list=public.kpi_sample`
-  - slot and publication `oran_kpi_sample` (`publication.autocreate.mode=filtered`)
+  sends it with `PUT /connectors/${CDC_CONNECTOR_NAME}/config` (idempotent; default
+  `oran-kpi-sample`) once the API is healthy, which means the migrations, including the table,
+  have run. Its names come from compose variables through Kafka Connect's
+  `EnvVarConfigProvider` (`${env:...}`), so following another table or database is a change
+  to `.env`, not to the file (Hardening Phase 15; unverified locally, no Docker). Key
+  settings, with the compose defaults:
+  - `plugin.name=pgoutput`, `topic.prefix=${env:CDC_TOPIC_PREFIX}` (`oran`),
+    `table.include.list=public.${env:CDC_SOURCE_TABLE}` (`kpi_sample`)
+  - `database.user` and `database.dbname` from `POSTGRES_USER` and `POSTGRES_DB`
+  - slot and publication `oran_${env:CDC_SOURCE_TABLE}` (`publication.autocreate.mode=filtered`)
+  - the `cdc-consumer` worker's `CDC_KAFKA_TOPIC` is derived from the same two variables
+    (`<prefix>.public.<table>`), and `CDC_POLLING_TABLE` from `CDC_SOURCE_TABLE`
   - `snapshot.mode=initial`: existing rows are streamed once as reads (`op: r`)
   - JSON converter with schemas disabled, which is the plain envelope that `from_debezium` parses
   - `database.password=${env:POSTGRES_PASSWORD}`, so the secret is resolved inside the Connect

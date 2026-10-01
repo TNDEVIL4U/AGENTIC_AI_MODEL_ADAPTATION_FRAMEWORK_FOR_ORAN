@@ -1,0 +1,4 @@
+# The MLflow server image's packages (docker/mlflow/Dockerfile). Keep in step with
+# requirements.lock: tests/unit/test_phase15_audit.py fails when they differ.
+mlflow==3.16.1
+psycopg[binary]==3.3.6

@@ -442,7 +442,7 @@ def run_sandboxed(
     memory_mb: int,
     workdir: str,
     backend: str,
-    docker_image: str = "",
+    docker_image: str | None = None,
     skops_trusted_types: tuple[str, ...] | list[str] | None = None,
     limits: SandboxLimits | None = None,
 ) -> object:
@@ -450,6 +450,8 @@ def run_sandboxed(
     "subprocess") - the one entry point `adaptation.llm_adapter` calls, so it never chooses
     between the two backends itself."""
     if backend == "docker":
+        if not docker_image:
+            raise SandboxExecutionError("the docker sandbox needs SANDBOX_DOCKER_IMAGE")
         return run_in_docker(
             code,
             current_model=current_model,

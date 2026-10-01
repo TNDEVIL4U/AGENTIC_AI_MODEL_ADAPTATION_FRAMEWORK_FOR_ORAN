@@ -185,3 +185,11 @@ shipped), and the assumption that an example configuration is right because it l
 example now passes `config lint`, and lint now rejects a traffic-splitting strategy on a
 deployment adapter that cannot split. Three drafted examples had that mistake. The defaults
 are recorded as ADRs, and a test keeps them in step with `Settings`.
+
+**Closed in Hardening Phase 15** (`docs/PHASE15_REPORT.md`): the assumption that a default can
+stand in for a site's own resource. There is no default model id, sandbox image, Kafka topic
+or consumer group, and startup names the missing key. Also closed: the assumption that the
+compose stack and the Debezium connector follow one table and one database. Both take their
+names from variables, which is unverified locally. The program's claims are now audited
+mechanically. `scripts/audit.py` fails when a baseline literal comes back, or when a finding's
+named test is missing or did not pass.

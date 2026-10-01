@@ -163,7 +163,7 @@ edit by hand: change the adapter's descriptor and regenerate.
 
 | Adapter | Features | Required keys | Production keys | Packages | Description |
 |---|---|---|---|---|---|
-| `kafka` | `at_least_once`, `external_offsets`, `network` | `CDC_KAFKA_TOPIC`, `KAFKA_BOOTSTRAP_SERVERS` | - | `confluent-kafka` | Debezium change events from a Kafka topic, committed after storage |
+| `kafka` | `at_least_once`, `external_offsets`, `network` | `CDC_CONSUMER_GROUP`, `CDC_KAFKA_TOPIC`, `KAFKA_BOOTSTRAP_SERVERS` | - | `confluent-kafka` | Debezium change events from a Kafka topic, committed after storage |
 | `polling` | `exactly_once_offsets`, `offline` | - | - | - | trigger-fed cdc_changelog table, offset committed with the events |
 
 | Feature | `kafka` | `polling` |

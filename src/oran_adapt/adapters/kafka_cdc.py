@@ -40,7 +40,10 @@ class KafkaCdcSource:
     the factory builds a real Consumer from the settings."""
 
     def __init__(self, settings: Settings, consumer: Any) -> None:
-        self.topic = settings.cdc_kafka_topic
+        if not settings.cdc_kafka_topic or not settings.cdc_consumer_group:
+            raise CdcUnavailableError(
+                "CDC_MODE=kafka requires CDC_KAFKA_TOPIC and CDC_CONSUMER_GROUP")
+        self.topic: str = settings.cdc_kafka_topic
         self.schema_ref = settings.cdc_schema_ref
         self.mapping = CdcRowMapping.from_settings(settings)
         self.timeout = settings.cdc_kafka_poll_timeout_s
@@ -108,7 +111,7 @@ SPEC = AdapterSpec(
             "cdc_time_column",
             "cdc_payload_column",
         ),
-        required_keys=("kafka_bootstrap_servers", "cdc_kafka_topic"),
+        required_keys=("kafka_bootstrap_servers", "cdc_kafka_topic", "cdc_consumer_group"),
         distributions=("confluent-kafka",),
     ),
     factory=_build,

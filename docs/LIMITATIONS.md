@@ -13,7 +13,7 @@ doubles or not at all. Treat each item as **unverified** until a site has run it
 
 | Area | What ran locally | Not run |
 |---|---|---|
-| Containers | nothing | `docker compose up`, image builds and SBOMs, the compose walkthrough (`deploy/compose/walkthrough.yml`) |
+| Containers | compose and connector files parse; static tests of both | `docker compose up`, image builds and SBOMs, the compose walkthrough (`deploy/compose/walkthrough.yml`), the compose variables and the connector's `${env:...}` templating (Hardening Phase 15) |
 | Kubernetes packaging | chart and manifest structure tests | `helm lint/template`, `kustomize build`, kubeconform, a kind install/upgrade/rollback |
 | Cloud registries and endpoints | API emulators (`tests/unit/registry_emulators.py` and the deployment emulators) | AWS SageMaker/S3, Google Vertex AI/GCS |
 | Serving systems | KServe/Seldon/k8s API emulator; Triton and BentoML stubs; git + a controller emulator for GitOps | a real cluster, KServe, Seldon, Triton, BentoML, Argo CD, Flux |
@@ -72,9 +72,22 @@ to a canary.
   its own ([adapters/llm.md](adapters/llm.md)).
 - **Triton needs a shared model repository.** The framework stages artifacts into a directory
   that the Triton server also mounts.
+- **Some settings have no default and must be set when their feature is chosen.** An LLM
+  provider needs its model id (`ANTHROPIC_MODEL`, `GEMINI_MODEL`, `LLM_OPENAI_MODEL`). The
+  `docker` sandbox needs `SANDBOX_DOCKER_IMAGE` pinned by digest. `CDC_MODE=kafka` needs
+  `KAFKA_BOOTSTRAP_SERVERS`, `CDC_KAFKA_TOPIC` and `CDC_CONSUMER_GROUP`. A default model id
+  goes stale when the provider retires it, a `:latest` image changes under a running
+  deployment, and a shared default consumer group splits one topic's partitions between
+  unrelated installations. Startup and `oran-adapt config lint` name the missing key.
+- **The compose stack is for development.** Its service names, internal ports and the
+  internal `mlflow` database are fixed topology. Names, tags and published ports are
+  variables (`.env.example`). Production uses the Helm chart or kustomize tree.
 
 ## 4. Where this is tracked
 
 - [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md): open decisions, each with the default chosen.
 - [assumption-inventory.md](assumption-inventory.md): assumptions and the phase that closed each.
 - The `PHASE*_REPORT.md` files: the "Unverified locally" section of each phase.
+- [AUDIT-HARDCODING.md](AUDIT-HARDCODING.md) and [AUDIT-FINDINGS.md](AUDIT-FINDINGS.md): the
+  final audit, checked by `scripts/audit.py`.
+- [PRODUCTION-READINESS.md](PRODUCTION-READINESS.md): what to verify before going live.

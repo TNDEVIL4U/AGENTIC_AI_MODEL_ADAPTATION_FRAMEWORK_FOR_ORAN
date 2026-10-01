@@ -134,8 +134,9 @@ def test_an_enabled_provider_comes_wrapped_in_the_guard() -> None:
 # ---- provider conformance ----------------------------------------------------------------------
 def _settings_for(kind: str, url: str) -> Settings:
     keys = {
-        "anthropic": {"anthropic_base_url": url, "anthropic_api_key": KEY},
-        "gemini": {"gemini_base_url": url, "gemini_api_key": KEY},
+        "anthropic": {"anthropic_base_url": url, "anthropic_api_key": KEY,
+                      "anthropic_model": "m"},
+        "gemini": {"gemini_base_url": url, "gemini_api_key": KEY, "gemini_model": "m"},
         "openai-compatible": {"llm_openai_base_url": url, "llm_openai_model": "local",
                               "llm_openai_api_key": KEY},
     }[kind]

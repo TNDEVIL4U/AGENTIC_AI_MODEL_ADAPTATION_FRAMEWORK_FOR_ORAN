@@ -301,7 +301,9 @@ def test_kafka_consumer_commits_after_storing_and_skips_redeliveries(
     session_factory, migrated_settings
 ) -> None:
     settings = migrated_settings.model_copy(
-        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092"}
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092",
+                "cdc_kafka_topic": "oran.public.kpi_sample",
+                "cdc_consumer_group": "oran-adapt-cdc"}
     )
     batch = [
         _Msg(_debezium("c", None, _row(1, 0.5), lsn=1), 0),
@@ -328,7 +330,9 @@ def test_kafka_consumer_commits_after_storing_and_skips_redeliveries(
 # ---- chaos: Kafka down, consumer failure ------------------------------------------------------
 def test_kafka_unavailable_stores_and_commits_nothing(session_factory, migrated_settings) -> None:
     settings = migrated_settings.model_copy(
-        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092"}
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092",
+                "cdc_kafka_topic": "oran.public.kpi_sample",
+                "cdc_consumer_group": "oran-adapt-cdc"}
     )
     broken = _FakeConsumer([
         [_Msg(_debezium("c", None, _row(1, 0.5)), 0), _Msg(None, 1, error="_ALL_BROKERS_DOWN")],
