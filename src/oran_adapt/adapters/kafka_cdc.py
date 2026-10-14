@@ -18,6 +18,11 @@ if TYPE_CHECKING:
     from oran_adapt.core.config import Settings
 
 
+def _topic_not_created(err: Any) -> bool:
+    name = getattr(err, "name", None)
+    return callable(name) and name() == "UNKNOWN_TOPIC_OR_PART"
+
+
 def _kafka_consumer(settings: Settings) -> Any:
     # Checked before the client exists: librdkafka aborts the whole process (an assertion in
     # Consumer_init) on a None group.id, and settings copied with model_copy skip validation.
@@ -64,12 +69,16 @@ class KafkaCdcSource:
             messages = self._consumer.consume(num_messages=limit, timeout=self.timeout)
         except Exception as exc:  # KafkaException; the client library is optional
             raise CdcUnavailableError(f"Kafka consume failed: {exc}", topic=self.topic) from exc
-        if not messages:
+        if not any(m.error() is None for m in messages):
             self._probe()
         events: list[CdcEvent] = []
         offsets: dict[str, int] = {}
         for msg in messages:
             err = msg.error()
+            if err is not None and _topic_not_created(err):
+                # Debezium creates the topic with the table's first change; until then there
+                # is simply nothing to read (the probe above still catches a dead broker).
+                continue
             if err is not None:
                 # Includes broker-down / transport errors. Nothing is stored or committed, so
                 # the batch is read again once Kafka is back.
@@ -85,7 +94,7 @@ class KafkaCdcSource:
             if event is not None:
                 events.append(event)
             offsets[str(msg.partition())] = msg.offset()
-        self._uncommitted = bool(messages)
+        self._uncommitted = bool(offsets)
         return events, (json.dumps(offsets, sort_keys=True) if offsets else None)
 
     def _probe(self) -> None:

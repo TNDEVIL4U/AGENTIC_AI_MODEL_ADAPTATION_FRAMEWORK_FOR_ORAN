@@ -247,7 +247,9 @@ class Settings(BaseSettings):
     vertex_endpoint_prefix: str = ""
     # MLflow client HTTP behaviour, applied to MLFLOW_HTTP_REQUEST_* unless those are set.
     mlflow_http_max_retries: int = Field(1, ge=0)
-    mlflow_http_backoff_factor: float = Field(0.0, ge=0)
+    # An int: MLflow parses MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR with int(), so "0.0" made every
+    # HTTP call to a tracking server fail before it was sent.
+    mlflow_http_backoff_factor: int = Field(0, ge=0)
     mlflow_http_timeout_s: float = Field(10.0, gt=0)
     # MLflow's usage telemetry to its vendor (off: no call leaves the deployment unasked).
     mlflow_telemetry: bool = False

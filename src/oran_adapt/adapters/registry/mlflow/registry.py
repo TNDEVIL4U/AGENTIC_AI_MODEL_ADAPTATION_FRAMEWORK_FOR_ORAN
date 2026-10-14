@@ -40,14 +40,14 @@ class MlflowRegistry:
         *,
         artifact_policy: ArtifactPolicy,
         http_max_retries: int,
-        http_backoff_factor: float,
+        http_backoff_factor: int,
         http_timeout_s: float,
         telemetry: bool = False,
     ) -> None:
         # MLflow's default HTTP policy (7 retries with exponential backoff) makes an outage take
         # minutes to surface. Fail fast unless the operator set MLflow's own variables.
         os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", str(http_max_retries))
-        os.environ.setdefault("MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR", str(http_backoff_factor))
+        os.environ.setdefault("MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR", str(int(http_backoff_factor)))
         os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", str(int(http_timeout_s)))
         if not telemetry:
             # MLflow reports usage to its vendor's servers unless told not to; the framework
