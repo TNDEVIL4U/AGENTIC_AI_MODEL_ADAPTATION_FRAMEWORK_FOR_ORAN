@@ -42,15 +42,30 @@ _DEPLOYMENTS = text(
     " WHERE m.name = :model AND v.version = :version"
     " AND d.started_at <= :end AND (d.ended_at IS NULL OR d.ended_at >= :start)"
 )
-_IN_WINDOW = "deployment_id IN :ids AND ts >= :start AND ts <= :end"
-_DECISIONS = text(f"SELECT score, inference_ms FROM model_decision WHERE {_IN_WINDOW}")
-_DECISION_IDS = f"SELECT decision_id FROM model_decision WHERE {_IN_WINDOW}"
-_TERMS = text(f"SELECT name, contribution FROM score_term WHERE decision_id IN ({_DECISION_IDS})")
-_CLIPPED = text(f"SELECT clipped FROM control_action WHERE decision_id IN ({_DECISION_IDS})")
-_DELIVERIES = text(
-    f"SELECT outcome FROM control_delivery WHERE decision_id IN ({_DECISION_IDS})"
+# Plain literals: every value is a bound parameter, nothing is formatted into the SQL.
+_DECISIONS = text(
+    "SELECT score, inference_ms FROM model_decision"
+    " WHERE deployment_id IN :ids AND ts >= :start AND ts <= :end"
 )
-_METRICS = text(f"SELECT name, value FROM model_metric WHERE {_IN_WINDOW}")
+_TERMS = text(
+    "SELECT name, contribution FROM score_term WHERE decision_id IN ("
+    "SELECT decision_id FROM model_decision"
+    " WHERE deployment_id IN :ids AND ts >= :start AND ts <= :end)"
+)
+_CLIPPED = text(
+    "SELECT clipped FROM control_action WHERE decision_id IN ("
+    "SELECT decision_id FROM model_decision"
+    " WHERE deployment_id IN :ids AND ts >= :start AND ts <= :end)"
+)
+_DELIVERIES = text(
+    "SELECT outcome FROM control_delivery WHERE decision_id IN ("
+    "SELECT decision_id FROM model_decision"
+    " WHERE deployment_id IN :ids AND ts >= :start AND ts <= :end)"
+)
+_METRICS = text(
+    "SELECT name, value FROM model_metric"
+    " WHERE deployment_id IN :ids AND ts >= :start AND ts <= :end"
+)
 _FAILED = frozenset({"nack", "timeout", "error"})
 _DELIVERED = frozenset({"sent", "ack"})
 
