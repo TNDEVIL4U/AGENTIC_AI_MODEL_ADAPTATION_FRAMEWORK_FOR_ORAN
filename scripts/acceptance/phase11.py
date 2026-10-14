@@ -86,8 +86,12 @@ def ci_wiring(tmp: Path) -> str:
     for needle in ("helm lint", "helm template", "examples/values-", "kubectl kustomize",
                    "kubeconform"):
         assert needle in packaging, f"packaging job lacks {needle!r}"
-    images = "\n".join(str(step.get("run", "")) for step in ci["jobs"]["build-images"]["steps"])
-    assert "--sbom=true" in images and "for target in api worker migrator" in images
+    steps = ci["jobs"]["build-images"]["steps"]
+    images = "\n".join(str(step.get("run", "")) for step in steps)
+    assert "for target in api worker migrator" in images
+    sboms = {step["with"]["image"] for step in steps
+             if str(step.get("uses", "")).startswith("anchore/sbom-action")}
+    assert sboms == {f"oran-adapt-{t}:ci" for t in ("api", "worker", "migrator")}, sboms
     smoke = "\n".join(str(s.get("run", "")) for s in ci["jobs"]["phase-0-baseline"]["steps"])
     assert "scripts/ci/compose_smoke.sh" in smoke
     e2e = yaml.safe_load((ROOT / ".github/workflows/k8s-e2e.yml").read_text(encoding="utf-8"))

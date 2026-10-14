@@ -21,13 +21,13 @@ edit by hand: change the adapter's descriptor and regenerate.
 | [`model_handler`](#model-handler) | `MODEL_FORMAT` | `mlflow-flavors` | `mlflow-flavors`, `native` |
 | [`model_type`](#model-type) | - | - | `catboost`, `keras`, `lightgbm`, `onnx`, `sklearn`, `statsmodels`, `torch`, `torch-sequence`, `xgboost` |
 | [`deployment`](#deployment) | `DEPLOYMENT_BACKEND` | `registry-alias` | `bentoml`, `gitops`, `k8s`, `kserve`, `registry-alias`, `sagemaker`, `seldon`, `triton`, `vertex`, `webhook` |
-| [`dataset`](#dataset) | `DATASET_BACKENDS` | `none` | `file`, `fsspec`, `gcs`, `http`, `s3` |
+| [`dataset`](#dataset) | `DATASET_BACKENDS` | `none` | `file`, `fsspec`, `gcs`, `http`, `rankpi`, `s3`, `sql` |
 | [`cdc_source`](#cdc-source) | `CDC_MODE` | `disabled` | `kafka`, `polling` |
 | [`job_executor`](#job-executor) | `JOB_EXECUTION_MODE` | `process` | `process`, `thread` |
 | [`job_queue`](#job-queue) | `JOB_QUEUE_BACKEND` | `database` | `celery`, `database`, `inline`, `kubernetes`, `rq` |
 | [`notification`](#notification) | `NOTIFICATION_BACKEND` | `log` | `email`, `kafka`, `log`, `nats`, `pagerduty`, `pubsub`, `slack`, `sns`, `sqs`, `webhook` |
 | [`llm`](#llm) | `LLM_PROVIDER` | `none` | `anthropic`, `gemini`, `openai-compatible` |
-| [`rollout_metrics`](#rollout-metrics) | `ROLLOUT_METRICS_BACKEND` | `api` | `api`, `prometheus` |
+| [`rollout_metrics`](#rollout-metrics) | `ROLLOUT_METRICS_BACKEND` | `api` | `api`, `prometheus`, `rankpi` |
 | [`auth`](#auth) | `AUTH_BACKEND` | `api-key` | `api-key`, `gateway`, `mtls`, `oidc` |
 | [`policy`](#policy) | `POLICY_BACKEND` | `static-rbac` | `opa`, `static-rbac` |
 | [`secrets`](#secrets) | `SECRETS_BACKEND` | `env` | `env`, `file`, `vault` |
@@ -150,14 +150,17 @@ edit by hand: change the adapter's descriptor and regenerate.
 | `fsspec` | `fingerprint`, `network` | `DATASET_FSSPEC_PREFIXES` | - | `fsspec` | objects on any fsspec filesystem under DATASET_FSSPEC_PREFIXES |
 | `gcs` | `fingerprint`, `network`, `pinned` | `DATASET_GCS_BUCKETS` | - | - | gs:// objects on DATASET_GCS_BUCKETS, pinned to their generation |
 | `http` | `fingerprint`, `network` | `DATASET_HTTP_ALLOWED_HOSTS` | - | - | https:// objects on DATASET_HTTP_ALLOWED_HOSTS (spooled, no redirects) |
+| `rankpi` | `fingerprint`, `network`, `query` | `DATASET_RANKPI_RELATIONS`, `DATASET_RANKPI_URL` | - | - | the OAI RAN KPI database: bounded queries of allow-listed views, closed runs without collector data loss, no cumulative counters |
 | `s3` | `fingerprint`, `network`, `pinned` | `DATASET_S3_BUCKETS` | - | `boto3` | s3:// objects on DATASET_S3_BUCKETS, pinned to their version id |
+| `sql` | `fingerprint`, `network`, `query` | `DATASET_SQL_RELATIONS`, `DATASET_SQL_SOURCES` | - | - | rows of an allow-listed table or view (DATASET_SQL_RELATIONS) of a DATASET_SQL_SOURCES database, filtered by URI parameters, read as CSV |
 
-| Feature | `file` | `fsspec` | `gcs` | `http` | `s3` |
-|---|---|---|---|---|---|
-| `fingerprint` | yes | yes | yes | yes | yes |
-| `local` | yes | - | - | - | - |
-| `network` | - | yes | yes | yes | yes |
-| `pinned` | - | - | yes | - | yes |
+| Feature | `file` | `fsspec` | `gcs` | `http` | `rankpi` | `s3` | `sql` |
+|---|---|---|---|---|---|---|---|
+| `fingerprint` | yes | yes | yes | yes | yes | yes | yes |
+| `local` | yes | - | - | - | - | - | - |
+| `network` | - | yes | yes | yes | yes | yes | yes |
+| `pinned` | - | - | yes | - | - | yes | - |
+| `query` | - | - | - | - | yes | - | yes |
 
 ## cdc-source
 
@@ -254,11 +257,12 @@ edit by hand: change the adapter's descriptor and regenerate.
 |---|---|---|---|---|---|
 | `api` | `push` | - | - | - | observations POSTed to /api/v1/rollouts/{id}/observations |
 | `prometheus` | `pull` | `ROLLOUT_PROMETHEUS_QUERIES`, `ROLLOUT_PROMETHEUS_URL` | - | - | PromQL range queries per metric over each arm's window |
+| `rankpi` | `pull` | `ROLLOUT_RANKPI_URL` | - | - | decision scores, reward terms, clipping, delivery failures and model_metric rows from the rankpi ML lifecycle store |
 
-| Feature | `api` | `prometheus` |
-|---|---|---|
-| `pull` | - | yes |
-| `push` | yes | - |
+| Feature | `api` | `prometheus` | `rankpi` |
+|---|---|---|---|
+| `pull` | - | yes | yes |
+| `push` | yes | - | - |
 
 ## auth
 

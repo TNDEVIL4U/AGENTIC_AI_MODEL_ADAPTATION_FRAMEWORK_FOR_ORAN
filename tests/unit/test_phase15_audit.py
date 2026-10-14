@@ -55,6 +55,22 @@ def test_kafka_cdc_requires_its_topic_and_consumer_group(missing) -> None:
 
 
 @pytest.mark.smoke
+@pytest.mark.parametrize("missing", ["kafka_bootstrap_servers", "cdc_kafka_topic",
+                                     "cdc_consumer_group"])
+def test_kafka_consumer_is_not_built_without_its_keys(missing) -> None:
+    # model_copy skips the validator above; the adapter must refuse before librdkafka sees a
+    # None (a None group.id aborts the whole process).
+    from oran_adapt.adapters.kafka_cdc import _build
+    from oran_adapt.core.errors import CdcUnavailableError
+
+    settings = Settings(_env_file=None).model_copy(update={
+        "cdc_mode": "kafka", "kafka_bootstrap_servers": "kafka:9092",
+        "cdc_kafka_topic": "site.public.kpi", "cdc_consumer_group": "site-cdc", missing: None})
+    with pytest.raises(CdcUnavailableError, match=missing.upper()):
+        _build(settings)
+
+
+@pytest.mark.smoke
 @pytest.mark.parametrize("provider", ["anthropic", "gemini"])
 def test_an_llm_provider_requires_its_model_id(provider) -> None:
     keys = {"llm_enabled": True, "llm_provider": provider, f"{provider}_api_key": "k"}

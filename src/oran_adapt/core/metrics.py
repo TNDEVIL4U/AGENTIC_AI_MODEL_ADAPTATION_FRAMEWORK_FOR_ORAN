@@ -349,7 +349,12 @@ def serve(port: int, addr: str = "") -> None:
     thread that ends with the process."""
     from prometheus_client import start_http_server
 
-    start_http_server(port, addr=addr)
+    # An empty WORKER_METRICS_ADDR means the library's default (all interfaces): passed as ""
+    # it reaches getaddrinfo, which refuses an empty host name on Linux.
+    if addr:
+        start_http_server(port, addr=addr)
+    else:
+        start_http_server(port)
 
 
 def render() -> tuple[bytes, str]:

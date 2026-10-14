@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import itertools
 import math
-import pickle
+import pickle  # nosec B403 - the check pickles an adapter it was handed, never foreign data
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -112,7 +112,7 @@ def check_window_bounds(port: RolloutMetricsPort, ctx: Context) -> None:
 
 def check_pickle(port: RolloutMetricsPort, ctx: Context) -> None:
     """The controller runs in worker processes: the adapter must survive pickling."""
-    copy = pickle.loads(pickle.dumps(port))
+    copy = pickle.loads(pickle.dumps(port))  # nosec B301 - our own object, just pickled
     _stats(copy, ctx, ctx.window("pickle"))
 
 

@@ -58,7 +58,9 @@ COVERAGE: dict[str, list[tuple[str, str, dict[str, str | None]]]] = {
         name: name for name in ("registry-alias", "webhook", "bentoml", "gitops", "triton",
                                 "kserve", "seldon", "k8s", "sagemaker", "vertex")})],
     "dataset": [("test_phase5_data_by_reference.py", "test_dataset_adapter_conformance", {
-        name: name for name in ("file", "fsspec", "http", "gcs", "s3")})],
+        name: name for name in ("file", "fsspec", "http", "gcs", "s3")}),
+                ("test_rankpi_integration.py", "test_sql_dataset_conformance", {
+                    "sql": None, "rankpi": None})],
     "cdc_source": [(_P13, "test_cdc_source_conformance", {
         "polling": "polling", "kafka": "kafka"})],
     "job_executor": [(_P13, "test_job_executor_conformance", {
@@ -74,6 +76,8 @@ COVERAGE: dict[str, list[tuple[str, str, dict[str, str | None]]]] = {
         ("test_phase7_gate_delivery.py", "test_api_source_conformance", {"api": None}),
         ("test_phase7_gate_delivery.py", "test_prometheus_source_conformance",
          {"prometheus": None}),
+        ("test_rankpi_integration.py", "test_rankpi_rollout_metrics_conformance",
+         {"rankpi": None}),
     ],
     "auth": [("test_phase9_security.py", "test_auth_adapters_pass_the_conformance_suite", {
         name: None for name in ("api-key", "oidc", "gateway", "mtls")})],

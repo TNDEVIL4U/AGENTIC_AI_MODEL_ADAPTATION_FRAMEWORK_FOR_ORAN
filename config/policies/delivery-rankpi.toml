@@ -1,0 +1,60 @@
+# Progressive delivery for RAN control policies read from the rankpi ML lifecycle store
+# (ROLLOUT_METRICS_BACKEND=rankpi, docs/integration/rankpi.md). Use with
+# DELIVERY_POLICY_FILE=config/policies/delivery-rankpi.toml. A "request" is one model_decision.
+version = "1"
+min_samples = 100
+
+# shadow: the candidate's deployment runs with mode = 'shadow' and serves nothing.
+shadow_max_s = 86400
+shadow_then = "manual"
+
+canary_steps = [10, 50, 100]
+canary_step_hold_s = 1800
+
+ab_percent = 50
+ab_duration_s = 3600
+ab_metric = "score"
+ab_direction = "higher"
+ab_confidence = 0.95
+ab_inconclusive = "rollback"
+
+approval_ttl_s = 86400
+approval_then = "promote"
+
+# The total score alone is not enough: its throughput term is unbounded while the starvation and
+# fairness penalties are capped, so a policy that starves one slice can score higher. Watch the
+# guard terms on their own as well.
+[[health]]
+metric = "score"
+direction = "higher"
+max_degradation = 0.05
+
+[[health]]
+metric = "clipped"
+direction = "lower"
+max_degradation = 0.02
+
+[[health]]
+metric = "delivery_failed"
+direction = "lower"
+max_degradation = 0.01
+
+[[health]]
+metric = "inference_ms"
+direction = "lower"
+max_ratio = 2.0
+required = false
+
+# Reward components (score_term.<name>, the weighted contribution). Confirm each term's sign in
+# the reward code first: a penalty stored as a negative contribution is "higher" is better.
+[[health]]
+metric = "score_term.starvation"
+direction = "higher"
+max_degradation = 0.0
+required = false
+
+[[health]]
+metric = "score_term.fairness"
+direction = "higher"
+max_degradation = 0.0
+required = false

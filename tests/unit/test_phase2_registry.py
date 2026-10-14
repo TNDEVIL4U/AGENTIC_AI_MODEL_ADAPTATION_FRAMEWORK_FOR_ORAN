@@ -433,3 +433,42 @@ def test_live_runs_skip_without_config(monkeypatch) -> None:
             monkeypatch.delenv(key)
     with pytest.raises(pytest.skip.Exception, match="SAGEMAKER_REGION"):
         _live("sagemaker")
+
+
+def test_mlflow_registry_reaches_a_tracking_server_over_http(monkeypatch, tmp_path) -> None:
+    # The compose API reported "MLflow is not reachable" against a healthy server: the backoff
+    # factor went into MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR as "0.0", which MLflow parses with
+    # int(), so every HTTP call failed before it was sent. SQLite stores never take that path.
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from oran_adapt.adapters.registry.mlflow.registry import MlflowRegistry
+
+    class _Tracking(BaseHTTPRequestHandler):
+        def _answer(self) -> None:
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            body = json.dumps({}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = do_POST = _answer
+
+        def log_message(self, *args) -> None:
+            return None
+
+    for key in ("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR",
+                "MLFLOW_HTTP_REQUEST_TIMEOUT"):
+        monkeypatch.delenv(key, raising=False)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Tracking)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        settings = Settings(_env_file=None, mlflow_tracking_uri=f"http://127.0.0.1:{server.server_port}",
+                            artifact_workdir=str(tmp_path))
+        MlflowRegistry.from_settings(settings).ping()
+    finally:
+        server.shutdown()

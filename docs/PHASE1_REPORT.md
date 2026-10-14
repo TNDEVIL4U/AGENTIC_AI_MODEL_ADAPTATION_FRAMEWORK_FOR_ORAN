@@ -82,7 +82,7 @@ from a file.
 | `ARTIFACT_WORKDIR` | `str` | `'./data/artifacts'` | in production |
 | `REGISTRY_BACKEND` | `str` | `'mlflow'` | no |
 | `MLFLOW_HTTP_MAX_RETRIES` | `int` | `1` | no |
-| `MLFLOW_HTTP_BACKOFF_FACTOR` | `float` | `0.0` | no |
+| `MLFLOW_HTTP_BACKOFF_FACTOR` | `int` | `0` | no |
 | `MLFLOW_HTTP_TIMEOUT_S` | `float` | `10.0` | no |
 | `REGISTRY_TAGS_CHECKSUM` | `str` | `'artifact.sha256'` | no |
 | `REGISTRY_TAGS_STATUS` | `str` | `'oran.status'` | no |

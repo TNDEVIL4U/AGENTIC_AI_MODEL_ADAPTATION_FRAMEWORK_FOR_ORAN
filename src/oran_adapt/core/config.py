@@ -247,7 +247,9 @@ class Settings(BaseSettings):
     vertex_endpoint_prefix: str = ""
     # MLflow client HTTP behaviour, applied to MLFLOW_HTTP_REQUEST_* unless those are set.
     mlflow_http_max_retries: int = Field(1, ge=0)
-    mlflow_http_backoff_factor: float = Field(0.0, ge=0)
+    # An int: MLflow parses MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR with int(), so "0.0" made every
+    # HTTP call to a tracking server fail before it was sent.
+    mlflow_http_backoff_factor: int = Field(0, ge=0)
     mlflow_http_timeout_s: float = Field(10.0, gt=0)
     # MLflow's usage telemetry to its vendor (off: no call leaves the deployment unasked).
     mlflow_telemetry: bool = False
@@ -486,7 +488,8 @@ class Settings(BaseSettings):
     drift_mappers: dict[str, str] = Field(default_factory=dict)
     drift_mapper_max_events: int = Field(100, ge=1)
     # Where the rollout controller reads each arm's online metrics (oran_adapt.rollout_metrics):
-    # "api" (observations POSTed to /api/v1/rollouts/{id}/observations) or "prometheus".
+    # "api" (observations POSTed to /api/v1/rollouts/{id}/observations), "prometheus" or
+    # "rankpi".
     rollout_metrics_backend: str = "api"
     # How often a worker advances active rollouts (also: oran-adapt rollout tick).
     rollout_tick_s: float = Field(30.0, gt=0)
@@ -500,6 +503,12 @@ class Settings(BaseSettings):
     rollout_prometheus_requests_query: str | None = None
     rollout_prometheus_step_s: float = Field(60.0, gt=0)
     rollout_prometheus_timeout_s: float = Field(10.0, gt=0)
+    # "rankpi": the arm's model_deployment rows in the rankpi ML lifecycle store
+    # (adapters.rollout_metrics_rankpi). ROLLOUT_RANKPI_MODEL_NAMES maps a framework model name
+    # to its ran_model.name when they differ.
+    rollout_rankpi_url: SecretStr | None = None
+    rollout_rankpi_model_names: dict[str, str] = Field(default_factory=dict)
+    rollout_rankpi_timeout_s: float = Field(30.0, gt=0)
 
     # Leakage checks run on the training rows before any engine fits (adaptation.leakage).
     # Training rows that are held-out rows, copies of them, or newer than the oldest held-out
@@ -772,6 +781,28 @@ class Settings(BaseSettings):
     dataset_gcs_buckets: list[str] = Field(default_factory=list)
     dataset_gcs_endpoint: str = Field("https://storage.googleapis.com", min_length=1)
     dataset_gcs_credentials: Literal["adc", "none"] = "adc"
+    # sql: data by database query. DATASET_SQL_SOURCES is a JSON object of source name ->
+    # SQLAlchemy URL (credentials: keep it in the secrets backend); DATASET_SQL_RELATIONS lists
+    # the "source.relation" patterns (fnmatch) a reference may read. Each query runs read-only
+    # (PostgreSQL) under DATASET_SQL_STATEMENT_TIMEOUT_S, also used by "rankpi".
+    dataset_sql_sources: SecretStr | None = None
+    dataset_sql_relations: list[str] = Field(default_factory=list)
+    dataset_sql_statement_timeout_s: float = Field(300.0, gt=0)
+    # rankpi: the OAI RAN KPI database (docs/integration/rankpi.md). The relation allow-list
+    # holds the derived views; dimension tables (IMSI, IPs) and identity joins stay unreadable
+    # unless added. A reference must name a closed run (run.ended_at set) or a "to" bound, and
+    # a run whose collector dropped more than DATASET_RANKPI_MAX_DROPPED rows is refused (unset:
+    # not checked). Cumulative counters and dead fields are refused as columns unless
+    # DATASET_RANKPI_ALLOW_CUMULATIVE.
+    dataset_rankpi_url: SecretStr | None = None
+    dataset_rankpi_relations: list[str] = Field(default_factory=lambda: [
+        "v_ue_rate", "v_slice_rate", "v_slice_kpi", "v_slice_prb_share", "v_cell_rate",
+        "v_ue_kpm", "v_kpm_ue", "v_kpm_slice",
+    ])
+    dataset_rankpi_time_column: str = Field("ts", min_length=1)
+    dataset_rankpi_require_closed_run: bool = True
+    dataset_rankpi_max_dropped: int | None = Field(0, ge=0)
+    dataset_rankpi_allow_cumulative: bool = False
 
     # Change data capture from the source table (see docs/CDC.md): "disabled", or a cdc_source
     # adapter - "kafka" (Debezium via Kafka, production) or "polling" (trigger-fed changelog).

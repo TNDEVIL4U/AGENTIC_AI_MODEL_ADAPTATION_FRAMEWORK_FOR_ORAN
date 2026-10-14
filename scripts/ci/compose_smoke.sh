@@ -103,23 +103,44 @@ for svc in $ONE_SHOT_SERVICES; do
 done
 
 # ---- every long-running service converged ---------------------------------------------------
-docker compose ps -a --format json | python3 -c '
+# Readiness can pass before a container's own healthcheck has run once (the worker image has a
+# 60 s start period): while some service still reads "starting", look again; anything else that
+# is not running and healthy fails at once.
+converged() {
+  docker compose ps -a --format json | python3 -c '
 import json, sys
 one_shot = set(sys.argv[1].split())
 text = sys.stdin.read().strip()
 rows = json.loads(text) if text.startswith("[") else [json.loads(l) for l in text.splitlines() if l]
-bad = []
+bad, starting = [], []
 for r in rows:
     svc, state, health = r["Service"], r["State"], r.get("Health", "")
     if svc in one_shot:
         continue
     shown = health or "-"
-    if state != "running" or health not in ("", "healthy"):
+    if state == "running" and health == "starting":
+        starting.append(svc)
+    elif state != "running" or health not in ("", "healthy"):
         bad.append(f"{svc}: state={state} health={shown}")
     print(f"{svc:14} {state:8} {shown}")
 if bad:
     sys.exit("not converged:\n  " + "\n  ".join(bad))
+if starting:
+    print("still starting: " + ", ".join(starting))
+    sys.exit(3)
 ' "$ONE_SHOT_SERVICES"
+}
+deadline=$((SECONDS + 240))
+while :; do
+  rc=0
+  converged || rc=$?
+  (( rc == 0 )) && break
+  if (( rc != 3 || SECONDS >= deadline )); then
+    echo "services did not converge (exit ${rc})" >&2
+    exit 1
+  fi
+  sleep 10
+done
 
 # ---- schema and worker liveness (Phase 11) ---------------------------------------------------
 docker compose exec -T api oran-adapt db status | python3 -c '
@@ -195,8 +216,13 @@ steps = [t["to_status"] for t in b["transitions"]]
 assert steps[0] == "RECEIVED" and steps[-1] == "FAILED", steps
 print("job transitions:", " -> ".join(steps))'
 
-metrics_text="$(curl -fsS "${BASE_URL}/metrics")"
-grep -q '^adaptation_jobs_total' <<<"$metrics_text" \
-  || { echo "metrics: adaptation_jobs_total missing after a job" >&2; exit 1; }
+# Jobs run in the worker (Phase 6), so their counters are on the worker's own metrics endpoint
+# (WORKER_METRICS_PORT, Phase 12), not on the API's /metrics.
+metrics_text="$(docker compose exec -T worker python -c '
+import os, urllib.request
+port = os.environ["WORKER_METRICS_PORT"]
+print(urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5).read().decode())')"
+grep -q '^adaptation_jobs_total{.*status="FAILED"' <<<"$metrics_text" \
+  || { echo "metrics: worker has no adaptation_jobs_total for the FAILED job" >&2; exit 1; }
 grep -E '^adaptation_jobs_total' <<<"$metrics_text"
 echo "phase-0-baseline smoke: PASS"

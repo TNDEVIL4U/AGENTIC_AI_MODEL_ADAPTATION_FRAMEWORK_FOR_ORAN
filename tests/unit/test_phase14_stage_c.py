@@ -290,6 +290,9 @@ class _FakeConsumer:
             raise item
         return item[:num_messages]
 
+    def list_topics(self, topic, timeout):
+        return None
+
     def commit(self, asynchronous=True):
         self.commits += 1
 
@@ -327,6 +330,38 @@ def test_kafka_consumer_commits_after_storing_and_skips_redeliveries(
     assert _sample("cdc_events_total", {"source": "debezium", "operation": "UPDATE"}) == before + 1
 
 
+class _KafkaErr:
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def name(self) -> str:
+        return self._name
+
+
+class _DownConsumer(_FakeConsumer):
+    def list_topics(self, topic, timeout):
+        raise RuntimeError("KafkaException: _TRANSPORT")
+
+
+def test_kafka_topic_not_created_yet_is_no_events_not_an_outage(
+    session_factory, migrated_settings
+) -> None:
+    # Debezium creates the topic with the source table's first change: until then the consumer
+    # reads UNKNOWN_TOPIC_OR_PART, and crashing on it kept the compose cdc-consumer restarting.
+    settings = migrated_settings.model_copy(
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092",
+                "cdc_kafka_topic": "oran.public.kpi_sample",
+                "cdc_consumer_group": "oran-adapt-cdc"}
+    )
+    waiting = _FakeConsumer([[_Msg(None, -1, error=_KafkaErr("UNKNOWN_TOPIC_OR_PART"))]])
+    summary = run_cdc_once(session_factory, settings, source=KafkaCdcSource(settings, waiting))
+    assert (summary["fetched"], summary["stored"], waiting.commits) == (0, 0, 0)
+    # An empty batch from a dead broker is still an outage (the metadata probe fails).
+    down = _DownConsumer([[]])
+    with pytest.raises(CdcUnavailableError, match="unreachable"):
+        run_cdc_once(session_factory, settings, source=KafkaCdcSource(settings, down))
+
+
 # ---- chaos: Kafka down, consumer failure ------------------------------------------------------
 def test_kafka_unavailable_stores_and_commits_nothing(session_factory, migrated_settings) -> None:
     settings = migrated_settings.model_copy(
@@ -353,7 +388,8 @@ def test_kafka_mode_without_client_library_is_reported(migrated_settings, monkey
 
     monkeypatch.setitem(sys.modules, "confluent_kafka", None)  # import fails
     settings = migrated_settings.model_copy(
-        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092"}
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092",
+                "cdc_kafka_topic": "site.public.kpi", "cdc_consumer_group": "site-cdc"}
     )
     with pytest.raises(CdcUnavailableError, match="confluent-kafka"):
         build_cdc_source(settings)

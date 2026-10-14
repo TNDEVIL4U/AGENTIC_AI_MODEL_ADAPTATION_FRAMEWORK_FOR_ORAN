@@ -12,7 +12,7 @@ docs/adapters/llm.md explains each rule.
 
 from __future__ import annotations
 
-import pickle
+import pickle  # nosec B403 - the check pickles an adapter it was handed, never foreign data
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -81,7 +81,7 @@ def check_errors_do_not_echo_key(port: LLMPort, ctx: LlmContext) -> None:
 
 def check_pickles(port: LLMPort, ctx: LlmContext) -> None:
     try:
-        copy = pickle.loads(pickle.dumps(port))
+        copy = pickle.loads(pickle.dumps(port))  # nosec B301 - our own object, just pickled
     except Exception as exc:
         raise ConformanceFailure(f"the adapter does not pickle: {type(exc).__name__}") from exc
     text = _complete(copy)

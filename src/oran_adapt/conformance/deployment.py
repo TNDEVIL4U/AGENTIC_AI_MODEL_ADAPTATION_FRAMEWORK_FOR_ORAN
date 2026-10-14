@@ -18,7 +18,7 @@ reads back what ``deploy``/``restore`` asked for. docs/adapters/deployment.md ex
 from __future__ import annotations
 
 import itertools
-import pickle
+import pickle  # nosec B403 - the check pickles an adapter it was handed, never foreign data
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -118,7 +118,7 @@ def check_idempotent_redeploy(port: DeploymentPort, ctx: Context) -> None:
 
 def check_pickle(port: DeploymentPort, ctx: Context) -> None:
     """Jobs run in worker processes: the adapter must survive pickling and still work."""
-    copy = pickle.loads(pickle.dumps(port))
+    copy = pickle.loads(pickle.dumps(port))  # nosec B301 - our own object, just pickled
     model = ctx.name("pickle")
     target = ctx.provision(model)
     deployer = ctx.deployer(copy)

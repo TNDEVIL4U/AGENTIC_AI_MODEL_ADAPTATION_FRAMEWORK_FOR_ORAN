@@ -11,6 +11,9 @@ How the framework connects to the systems around it:
 The last section runs all three end to end, first in-process and then against the compose
 stack.
 
+For the OAI RAN KPI testbed database (`rankpi`), data by query and rollout health from its ML
+lifecycle store are in [integration/rankpi.md](integration/rankpi.md).
+
 Every adapter named here is listed with its features and keys in the generated
 [capability matrix](capability-matrix.md). The worked configurations for common stacks are in
 `config/examples/`; each one passes `oran-adapt config lint`.

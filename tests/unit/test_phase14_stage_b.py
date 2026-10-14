@@ -251,8 +251,10 @@ def test_retrain_via_api_is_audited_with_actor_and_correlation_id(
     tail = [a for a in actions if a != "MODEL_VERSION_EVALUATED"][2:]
     assert tail[0] == "ADAPTATION_DECISION_CREATED"
     assert tail[1] in ("RETRAIN_STARTED", "FINE_TUNE_STARTED")
+    # GATE_DECIDED: every gate verdict is audited since Hardening Phase 7.
     assert tail[2:] == [
-        "VALIDATION_STARTED", "VALIDATION_PASSED", "MODEL_REGISTERED", "MODEL_PROMOTED",
+        "VALIDATION_STARTED", "GATE_DECIDED", "VALIDATION_PASSED", "MODEL_REGISTERED",
+        "MODEL_PROMOTED",
     ]
 
     with session_scope(session_factory) as session:
