@@ -290,6 +290,9 @@ class _FakeConsumer:
             raise item
         return item[:num_messages]
 
+    def list_topics(self, topic, timeout):
+        return None
+
     def commit(self, asynchronous=True):
         self.commits += 1
 
@@ -353,7 +356,8 @@ def test_kafka_mode_without_client_library_is_reported(migrated_settings, monkey
 
     monkeypatch.setitem(sys.modules, "confluent_kafka", None)  # import fails
     settings = migrated_settings.model_copy(
-        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092"}
+        update={"cdc_mode": "kafka", "kafka_bootstrap_servers": "broker:9092",
+                "cdc_kafka_topic": "site.public.kpi", "cdc_consumer_group": "site-cdc"}
     )
     with pytest.raises(CdcUnavailableError, match="confluent-kafka"):
         build_cdc_source(settings)

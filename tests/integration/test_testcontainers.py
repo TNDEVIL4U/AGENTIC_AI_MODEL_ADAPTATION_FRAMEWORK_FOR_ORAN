@@ -76,6 +76,15 @@ def test_kafka_cdc_conformance_against_a_real_broker(pg_settings) -> None:
             # No defaults since Hardening Phase 15, and model_copy skips the validator.
             "cdc_kafka_topic": "ci.public.kpi_sample", "cdc_consumer_group": "ci-cdc",
         })
+        # In production Debezium creates the topic before anyone subscribes; a consumer that
+        # subscribes to a missing topic is told UNKNOWN_TOPIC_OR_PART, an outage.
+        kafka_admin = pytest.importorskip("confluent_kafka.admin")
+        admin = kafka_admin.AdminClient({"bootstrap.servers":
+                                                   settings.kafka_bootstrap_servers})
+        for future in admin.create_topics(
+            [kafka_admin.NewTopic(settings.cdc_kafka_topic, num_partitions=1,
+                                  replication_factor=1)]).values():
+            future.result(timeout=30)
         producer = producer_module.Producer({"bootstrap.servers":
                                              settings.kafka_bootstrap_servers})
         ids = itertools.count(10_000)
@@ -94,13 +103,18 @@ def test_kafka_cdc_conformance_against_a_real_broker(pg_settings) -> None:
 
         ctx = cdc_suite.Context(session_factory=session_factory, emit=emit,
                                 reopen=lambda: build_cdc_source(settings),
-                                break_source=broker.stop)
+                                break_source=lambda: broker.get_wrapped_container().stop())
         assert cdc_suite.run(build_cdc_source(settings), ctx) == list(cdc_suite.CHECKS)
 
 
-def test_postgres_going_away_is_a_typed_outage(postgres, pg_settings) -> None:
-    engine = create_db_engine(pg_settings.database_url)
-    check_database(engine)
-    postgres.stop()
-    with pytest.raises(DatabaseUnavailableError):
-        check_database(create_db_engine(pg_settings.database_url))
+def test_postgres_going_away_is_a_typed_outage() -> None:
+    # Its own container: stopping the module's shared one made that fixture's teardown fail
+    # removing a container that was already gone.
+    containers = pytest.importorskip("testcontainers.postgres",
+                                     reason="install the 'containers' extra [owner=TNDEVIL4U expires=2027-03-31]")
+    with containers.PostgresContainer("postgres:16-alpine", driver="psycopg") as pg:
+        url = pg.get_connection_url()
+        check_database(create_db_engine(url))
+        pg.get_wrapped_container().stop()
+        with pytest.raises(DatabaseUnavailableError):
+            check_database(create_db_engine(url))

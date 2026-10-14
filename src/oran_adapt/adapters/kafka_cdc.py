@@ -64,6 +64,8 @@ class KafkaCdcSource:
             messages = self._consumer.consume(num_messages=limit, timeout=self.timeout)
         except Exception as exc:  # KafkaException; the client library is optional
             raise CdcUnavailableError(f"Kafka consume failed: {exc}", topic=self.topic) from exc
+        if not messages:
+            self._probe()
         events: list[CdcEvent] = []
         offsets: dict[str, int] = {}
         for msg in messages:
@@ -85,6 +87,15 @@ class KafkaCdcSource:
             offsets[str(msg.partition())] = msg.offset()
         self._uncommitted = bool(messages)
         return events, (json.dumps(offsets, sort_keys=True) if offsets else None)
+
+    def _probe(self) -> None:
+        """An empty batch is also what librdkafka returns while every broker is down: it
+        reports that through callbacks, not as message errors. A metadata request tells "no new
+        changes" from an outage."""
+        try:
+            self._consumer.list_topics(self.topic, timeout=self.timeout)
+        except Exception as exc:  # KafkaException; the client library is optional
+            raise CdcUnavailableError(f"Kafka unreachable: {exc}", topic=self.topic) from exc
 
     def ack(self) -> None:
         if self._uncommitted:

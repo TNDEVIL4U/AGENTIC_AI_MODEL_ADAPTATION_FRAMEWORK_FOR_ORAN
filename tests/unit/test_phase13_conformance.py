@@ -202,12 +202,16 @@ class _BrokerConsumer:
         assert topics == [self.broker.topic]
 
     def consume(self, num_messages, timeout):
-        if self.broker.down:
-            raise ConnectionError("broker unreachable")
+        if self.broker.down:  # as librdkafka: nothing arrives, the outage is not raised here
+            return []
         start = self.position
         batch = self.broker.log[start:start + num_messages]
         self.position = start + len(batch)
         return [_BrokerMsg(value, start + n) for n, value in enumerate(batch)]
+
+    def list_topics(self, topic, timeout):
+        if self.broker.down:
+            raise ConnectionError("broker unreachable")
 
     def commit(self, asynchronous=True):
         self.broker.committed[self.group] = self.position
