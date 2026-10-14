@@ -45,8 +45,9 @@ docker build --target migrator -t oran-adapt-migrator:<version> .
 
 ## SBOM
 
-The CI `build-images` job builds each target with `docker buildx build --sbom=true` and uploads
-the SPDX documents as the `image-sboms` artifact (`reports/sbom-<target>/`). The `supply-chain`
+The CI `build-images` job builds each target with `docker build`, scans each image with Syft
+(`anchore/sbom-action`) and uploads the SPDX documents as the `image-sboms` artifact
+(`reports/sbom-<target>/sbom.spdx.json`). The `supply-chain`
 job produces the Python dependency SBOM (CycloneDX) from `requirements.lock`. Neither runs on the
 development laptop, which has no Docker.
 

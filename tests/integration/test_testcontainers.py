@@ -78,7 +78,7 @@ def test_kafka_cdc_conformance_against_a_real_broker(pg_settings) -> None:
         })
         # In production Debezium creates the topic before anyone subscribes; a consumer that
         # subscribes to a missing topic is told UNKNOWN_TOPIC_OR_PART, an outage.
-        kafka_admin = pytest.importorskip("confluent_kafka.admin")
+        kafka_admin = pytest.importorskip("confluent_kafka.admin", reason="install the 'containers' extra [owner=TNDEVIL4U expires=2027-03-31]")
         admin = kafka_admin.AdminClient({"bootstrap.servers":
                                                    settings.kafka_bootstrap_servers})
         for future in admin.create_topics(
