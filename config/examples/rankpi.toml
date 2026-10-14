@@ -1,0 +1,50 @@
+# The OAI RAN KPI testbed (rankpi database, PostgreSQL/TimescaleDB): training and drifted data
+# are read by query from its rate views, candidates are registered in MLflow and run in shadow
+# first, and their online health comes from the rankpi ML lifecycle store (model_decision,
+# score_term, control_action, control_delivery, model_metric). docs/integration/rankpi.md.
+# Secrets are NOT in this file: set DATASET_RANKPI_URL and ROLLOUT_RANKPI_URL (a read-only role,
+# e.g. postgresql+psycopg://reader@127.0.0.1:5433/rankpi with the password from ours/env.sh)
+# and API_KEYS in the environment or via SECRETS_BACKEND.
+# Use with:  ORAN_CONFIG_FILE=config/examples/rankpi.toml
+
+environment = "production"
+database_url = "postgresql+psycopg://oran@127.0.0.1:5432/oran_adapt"
+mlflow_tracking_uri = "http://127.0.0.1:5000"
+artifact_workdir = "/var/lib/oran-adapt/artifacts"
+registry_backend = "mlflow"
+deployment_backend = "registry-alias"
+job_queue_backend = "database"
+# Shadow first: candidates score mirrored traffic and wait for an operator before going live.
+delivery_strategy = "shadow"
+delivery_policy_file = "config/policies/delivery-rankpi.toml"
+gate_policy_file = "config/policies/gate.toml"
+
+[dataset]
+backends = "rankpi"
+time_column = "ts"
+
+[dataset_rankpi]
+relations = ["v_ue_rate", "v_slice_rate", "v_slice_kpi", "v_slice_prb_share", "v_cell_rate",
+             "v_ue_kpm", "v_kpm_ue", "v_kpm_slice"]
+time_column = "ts"
+require_closed_run = true
+max_dropped = 0
+allow_cumulative = false
+
+[rollout_metrics]
+backend = "rankpi"
+
+[rollout_rankpi.model_names]
+# framework model name = ran_model.name
+# slice-prb-policy = "ppo_slice_v3"
+
+[drift_mappers]
+generic = "config/mappers/generic-json.toml"
+
+[auth]
+enabled = true
+backend = "api-key"
+
+[log]
+level = "INFO"
+json = true

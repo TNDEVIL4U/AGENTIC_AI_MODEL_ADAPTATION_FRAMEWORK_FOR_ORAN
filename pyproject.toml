@@ -112,10 +112,13 @@ http = "oran_adapt.adapters.datasets:HTTP"
 fsspec = "oran_adapt.adapters.datasets:FSSPEC"
 s3 = "oran_adapt.adapters.datasets_cloud:S3"
 gcs = "oran_adapt.adapters.datasets_cloud:GCS"
+sql = "oran_adapt.adapters.datasets_sql:SQL"
+rankpi = "oran_adapt.adapters.datasets_sql:RANKPI"
 
 [project.entry-points."oran_adapt.rollout_metrics"]
 api = "oran_adapt.adapters.rollout_metrics:API"
 prometheus = "oran_adapt.adapters.rollout_metrics:PROMETHEUS"
+rankpi = "oran_adapt.adapters.rollout_metrics_rankpi:RANKPI"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov", "pytest-xdist>=3.8", "ruff"]

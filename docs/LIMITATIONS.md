@@ -19,6 +19,7 @@ doubles or not at all. Treat each item as **unverified** until a site has run it
 | Serving systems | KServe/Seldon/k8s API emulator; Triton and BentoML stubs; git + a controller emulator for GitOps | a real cluster, KServe, Seldon, Triton, BentoML, Argo CD, Flux |
 | Job queues | client and app doubles | Celery with a broker, RQ with Redis, Kubernetes Jobs |
 | CDC and brokers | protocol doubles | Kafka/Debezium, SQS, SNS, Pub/Sub, NATS |
+| Data by query (`sql`, `rankpi`) and `rankpi` rollout metrics | SQLite stand-ins with the documented rankpi columns | the live `rankpi` PostgreSQL/TimescaleDB, its view column names ([integration/rankpi.md](integration/rankpi.md#5-assumptions-to-confirm-on-site)) |
 | Notifications | local receivers | Slack, PagerDuty, a real SMTP relay |
 | Identity and secrets | local IdP, gateway and Vault doubles | a real OIDC provider, Envoy/ingress mTLS, Vault/OpenBao |
 | Policy | an OPA Data API double (httpx mock transport) | an OPA server running Rego |
