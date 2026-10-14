@@ -216,8 +216,13 @@ steps = [t["to_status"] for t in b["transitions"]]
 assert steps[0] == "RECEIVED" and steps[-1] == "FAILED", steps
 print("job transitions:", " -> ".join(steps))'
 
-metrics_text="$(curl -fsS "${BASE_URL}/metrics")"
-grep -q '^adaptation_jobs_total' <<<"$metrics_text" \
-  || { echo "metrics: adaptation_jobs_total missing after a job" >&2; exit 1; }
+# Jobs run in the worker (Phase 6), so their counters are on the worker's own metrics endpoint
+# (WORKER_METRICS_PORT, Phase 12), not on the API's /metrics.
+metrics_text="$(docker compose exec -T worker python -c '
+import os, urllib.request
+port = os.environ["WORKER_METRICS_PORT"]
+print(urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5).read().decode())')"
+grep -q '^adaptation_jobs_total{.*status="FAILED"' <<<"$metrics_text" \
+  || { echo "metrics: worker has no adaptation_jobs_total for the FAILED job" >&2; exit 1; }
 grep -E '^adaptation_jobs_total' <<<"$metrics_text"
 echo "phase-0-baseline smoke: PASS"
