@@ -278,9 +278,9 @@ class SqlDataset:
             return
         ids = [int(r) for r in runs]
         if guard.require_closed:
-            ended: dict[int, Any] = dict(conn.execute(
+            ended: dict[int, Any] = {row[0]: row[1] for row in conn.execute(
                 text("SELECT run_id, ended_at FROM run WHERE run_id IN :ids")
-                .bindparams(bindparam("ids", expanding=True)), {"ids": ids}).all())
+                .bindparams(bindparam("ids", expanding=True)), {"ids": ids})}
             for run_id in ids:
                 if run_id not in ended:
                     raise DatasetNotFoundError(f"run {run_id} does not exist", uri=uri)
@@ -289,9 +289,9 @@ class SqlDataset:
                                       "NULL); register it once the run has ended",
                                       run_id=run_id)
         if guard.max_dropped is not None:
-            dropped: dict[int, Any] = dict(conn.execute(
+            dropped: dict[int, Any] = {row[0]: row[1] for row in conn.execute(
                 text("SELECT run_id, dropped FROM v_run_summary WHERE run_id IN :ids")
-                .bindparams(bindparam("ids", expanding=True)), {"ids": ids}).all())
+                .bindparams(bindparam("ids", expanding=True)), {"ids": ids})}
             for run_id in ids:
                 lost = dropped.get(run_id)
                 if lost is None and run_id not in dropped:
