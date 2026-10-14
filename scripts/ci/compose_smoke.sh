@@ -103,23 +103,44 @@ for svc in $ONE_SHOT_SERVICES; do
 done
 
 # ---- every long-running service converged ---------------------------------------------------
-docker compose ps -a --format json | python3 -c '
+# Readiness can pass before a container's own healthcheck has run once (the worker image has a
+# 60 s start period): while some service still reads "starting", look again; anything else that
+# is not running and healthy fails at once.
+converged() {
+  docker compose ps -a --format json | python3 -c '
 import json, sys
 one_shot = set(sys.argv[1].split())
 text = sys.stdin.read().strip()
 rows = json.loads(text) if text.startswith("[") else [json.loads(l) for l in text.splitlines() if l]
-bad = []
+bad, starting = [], []
 for r in rows:
     svc, state, health = r["Service"], r["State"], r.get("Health", "")
     if svc in one_shot:
         continue
     shown = health or "-"
-    if state != "running" or health not in ("", "healthy"):
+    if state == "running" and health == "starting":
+        starting.append(svc)
+    elif state != "running" or health not in ("", "healthy"):
         bad.append(f"{svc}: state={state} health={shown}")
     print(f"{svc:14} {state:8} {shown}")
 if bad:
     sys.exit("not converged:\n  " + "\n  ".join(bad))
+if starting:
+    print("still starting: " + ", ".join(starting))
+    sys.exit(3)
 ' "$ONE_SHOT_SERVICES"
+}
+deadline=$((SECONDS + 240))
+while :; do
+  rc=0
+  converged || rc=$?
+  (( rc == 0 )) && break
+  if (( rc != 3 || SECONDS >= deadline )); then
+    echo "services did not converge (exit ${rc})" >&2
+    exit 1
+  fi
+  sleep 10
+done
 
 # ---- schema and worker liveness (Phase 11) ---------------------------------------------------
 docker compose exec -T api oran-adapt db status | python3 -c '
