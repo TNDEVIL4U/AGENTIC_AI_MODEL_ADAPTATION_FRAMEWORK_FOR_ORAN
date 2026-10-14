@@ -125,6 +125,7 @@ jobs:
         run: |
           for target in api worker migrator; do
             docker build --target "$target" --tag "oran-adapt-$target:ci" .
+            mkdir -p "reports/sbom-$target"  # sbom-action writes the file, not its directory
           done
           docker tag oran-adapt-api:ci oran-adapt:ci
       # One SPDX SBOM per target, scanned from the built image with Syft (the scanner buildx's
