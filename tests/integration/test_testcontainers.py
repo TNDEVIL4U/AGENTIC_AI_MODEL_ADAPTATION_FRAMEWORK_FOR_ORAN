@@ -118,3 +118,156 @@ def test_postgres_going_away_is_a_typed_outage() -> None:
         pg.get_wrapped_container().stop()
         with pytest.raises(DatabaseUnavailableError):
             check_database(create_db_engine(url))
+
+
+# ---- rankpi on real PostgreSQL --------------------------------------------------------------
+# The OAI RAN KPI database's documented columns (schema.sql, schema_model.sql), with the derived
+# relations as real views, so the PostgreSQL-only paths run: read-only transactions, the
+# statement timeout, server-side streaming, view reflection and timestamptz values.
+_RANKPI_DDL = (
+    ("CREATE TABLE run (run_id serial PRIMARY KEY, label text, started_at timestamptz,"
+     " ended_at timestamptz)"),
+    "CREATE TABLE collector_totals (run_id int PRIMARY KEY, dropped bigint NOT NULL)",
+    "CREATE VIEW v_run_summary AS SELECT run_id, dropped FROM collector_totals",
+    ("CREATE TABLE slice_rate (ts timestamptz, run_id int, sst smallint, sd int,"
+     " dl_thp_kbps numeric, prb_share numeric)"),
+    ("CREATE VIEW v_slice_kpi AS SELECT ts, run_id, sst, sd, dl_thp_kbps, prb_share"
+     " FROM slice_rate"),
+    ("CREATE TABLE e2sm_mac_ue (ts timestamptz, run_id int, rnti int, wb_cqi int,"
+     " dl_aggr_tbs bigint)"),
+    ("CREATE TABLE ran_model (model_id serial PRIMARY KEY, name text UNIQUE, kind text"
+     " CHECK (kind IN ('drl','bandit','heuristic','static','human','random')))"),
+    ("CREATE TABLE ran_model_version (version_id serial PRIMARY KEY,"
+     " model_id int REFERENCES ran_model, version text, status text"
+     " CHECK (status IN ('dev','candidate','deployed','retired','failed')),"
+     " UNIQUE (model_id, version))"),
+    ("CREATE TABLE model_deployment (deployment_id serial PRIMARY KEY,"
+     " version_id int REFERENCES ran_model_version, mode text"
+     " CHECK (mode IN ('train','eval','shadow','deploy','replay')),"
+     " started_at timestamptz, ended_at timestamptz)"),
+    ("CREATE TABLE model_decision (decision_id serial PRIMARY KEY,"
+     " deployment_id int REFERENCES model_deployment, step int, ts timestamptz,"
+     " score numeric, inference_ms numeric, UNIQUE (deployment_id, step))"),
+    ("CREATE TABLE score_term (decision_id int REFERENCES model_decision, name text,"
+     " raw_value numeric, weight numeric, contribution numeric, PRIMARY KEY (decision_id, name))"),
+    ("CREATE TABLE control_action (action_id serial PRIMARY KEY,"
+     " decision_id int REFERENCES model_decision, raw_value numeric, requested_value numeric,"
+     " applied_value numeric, clipped boolean)"),
+    ("CREATE TABLE control_delivery (delivery_id serial PRIMARY KEY,"
+     " decision_id int REFERENCES model_decision, outcome text"
+     " CHECK (outcome IN ('sent','ack','nack','timeout','error','suppressed')))"),
+    ("CREATE TABLE model_metric (metric_id serial PRIMARY KEY,"
+     " deployment_id int REFERENCES model_deployment, name text, step int, ts timestamptz,"
+     " value numeric, UNIQUE (deployment_id, name, step))"),
+)
+
+
+@pytest.fixture(scope="module")
+def rankpi_url(postgres) -> str:
+    from sqlalchemy import create_engine, text
+
+    base = postgres.get_connection_url()
+    with create_engine(base, isolation_level="AUTOCOMMIT").connect() as conn:
+        conn.execute(text("CREATE DATABASE rankpi"))
+    url = base.rsplit("/", 1)[0] + "/rankpi"
+    t0 = datetime(2026, 9, 29, 12, 0, tzinfo=UTC)
+    with create_engine(url).begin() as conn:
+        for ddl in _RANKPI_DDL:
+            conn.execute(text(ddl))
+        conn.execute(text("INSERT INTO run (run_id, label, started_at, ended_at) VALUES"
+                          " (5, 'closed', :t, :e), (6, 'open', :t, NULL), (7, 'lossy', :t, :e)"),
+                     {"t": t0, "e": t0.replace(hour=13)})
+        conn.execute(text("INSERT INTO collector_totals VALUES (5, 0), (6, 0), (7, 4)"))
+        conn.execute(text("INSERT INTO slice_rate VALUES (:ts, :run, 1, :sd, :thp, 0.5)"),
+                     [{"ts": t0.replace(second=s), "run": run, "sd": sd, "thp": 100 + s}
+                      for run in (5, 6, 7) for s in range(10) for sd in (1, 2)])
+        conn.execute(text("INSERT INTO e2sm_mac_ue VALUES (:ts, 5, 17, 12, :tbs)"),
+                     [{"ts": t0.replace(second=s), "tbs": 1000 * s} for s in range(5)])
+        conn.execute(text("INSERT INTO ran_model (name, kind) VALUES ('ppo_slice', 'drl')"))
+        conn.execute(text("INSERT INTO ran_model_version (model_id, version, status) VALUES"
+                          " (1, '3', 'candidate'), (1, '2', 'deployed')"))
+        conn.execute(text("INSERT INTO model_deployment (version_id, mode, started_at) VALUES"
+                          " (1, 'shadow', :t), (2, 'deploy', :t)"), {"t": t0})
+        for i, (score, clipped, outcome) in enumerate(
+                [(0.4, False, "ack"), (0.6, True, "timeout"), (0.5, False, "sent")]):
+            conn.execute(text("INSERT INTO model_decision (deployment_id, step, ts, score,"
+                              " inference_ms) VALUES (1, :s, :ts, :sc, 3.5)"),
+                         {"s": i, "ts": t0.replace(second=i), "sc": score})
+            conn.execute(text("INSERT INTO score_term VALUES (:d, 'starvation', 1, 1, -0.2)"),
+                         {"d": i + 1})
+            conn.execute(text("INSERT INTO control_action (decision_id, clipped) VALUES"
+                              " (:d, :c)"), {"d": i + 1, "c": clipped})
+            conn.execute(text("INSERT INTO control_delivery (decision_id, outcome) VALUES"
+                              " (:d, :o)"), {"d": i + 1, "o": outcome})
+        conn.execute(text("INSERT INTO model_decision (deployment_id, step, ts, score) VALUES"
+                          " (2, 0, :ts, 9.0)"), {"ts": t0})
+    return url
+
+
+def test_rankpi_dataset_on_postgres(rankpi_url, settings) -> None:
+    import pandas as pd
+
+    from oran_adapt.core.errors import DatasetNotFoundError, DataSourceNotAllowedError
+    from oran_adapt.datastore.access import DataAccess
+    from oran_adapt.plugins import resolve
+
+    port = resolve("dataset", "rankpi", config_key="dataset_backends").factory(
+        settings.model_copy(update={"dataset_rankpi_url": _secret(rankpi_url),
+                                    "dataset_rankpi_relations": ["v_*", "e2sm_mac_ue"]}))
+    uri = "rankpi:///v_slice_kpi?run_id=5&columns=ts,sst,sd,dl_thp_kbps"
+    with port.open(uri) as fh:
+        frame = pd.read_csv(fh)
+    assert len(frame) == 20 and frame["ts"].is_monotonic_increasing
+    assert frame["ts"].iloc[0].endswith("+00:00")  # timestamptz kept its offset
+    scan = DataAccess([port]).scan(uri, fmt="csv", timestamp_column="ts")
+    assert scan.row_count == 20 and scan.fingerprint == port.stat(uri).fingerprint
+    with port.open("rankpi:///v_slice_kpi?run_id=5&sd=2&from=2026-09-29T12:00:05+00:00") as fh:
+        assert len(pd.read_csv(fh)) == 5
+    for bad, error in (("rankpi:///v_slice_kpi?run_id=6", DataSourceNotAllowedError),
+                       ("rankpi:///v_slice_kpi?run_id=7", DataSourceNotAllowedError),
+                       ("rankpi:///v_slice_kpi?run_id=99", DatasetNotFoundError),
+                       ("rankpi:///e2sm_mac_ue?run_id=5", DataSourceNotAllowedError),
+                       ("rankpi:///v_missing?run_id=5", DatasetNotFoundError)):
+        with pytest.raises(error):
+            port.stat(bad)
+
+
+def test_rankpi_reads_run_in_a_read_only_transaction(rankpi_url, settings) -> None:
+    from sqlalchemy import create_engine, text
+
+    from oran_adapt.adapters.datasets_sql import SqlDataset
+
+    port = SqlDataset("rankpi", {"": rankpi_url}, ["v_*"], time_column="ts", max_bytes=1 << 20,
+                      statement_timeout_s=7)
+    with port._engine("").connect() as raw:
+        conn = port._begin(raw)
+        assert conn.execute(text("SHOW transaction_read_only")).scalar() == "on"
+        assert conn.execute(text("SHOW statement_timeout")).scalar() == "7s"
+        with pytest.raises(Exception, match="read-only"):
+            conn.execute(text("DELETE FROM run"))
+    with create_engine(rankpi_url).connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM run")).scalar() == 3
+
+
+def test_rankpi_rollout_metrics_on_postgres(rankpi_url) -> None:
+    from datetime import timedelta
+
+    from oran_adapt.adapters.rollout_metrics_rankpi import RankpiRolloutMetrics
+    from oran_adapt.ports import ArmWindow
+
+    t0 = datetime(2026, 9, 29, 12, 0, tzinfo=UTC)
+    port = RankpiRolloutMetrics(rankpi_url, model_names={"slice-model": "ppo_slice"})
+    port.ping()
+    stats = port.observe(None, ArmWindow(rollout_id="r", model="slice-model", arm="candidate",
+                                         version="3", start=t0, end=t0 + timedelta(minutes=1)))
+    assert stats.count == 3
+    assert stats.samples["score"] == [0.4, 0.6, 0.5]
+    assert stats.samples["score_term.starvation"] == [-0.2, -0.2, -0.2]
+    assert sorted(stats.samples["clipped"]) == [0.0, 0.0, 1.0]
+    assert sorted(stats.samples["delivery_failed"]) == [0.0, 0.0, 1.0]
+
+
+def _secret(value: str):
+    from pydantic import SecretStr
+
+    return SecretStr(value)

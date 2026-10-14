@@ -130,8 +130,12 @@ against the database:
   rollout adapter reads them.
 
 The tests (`tests/unit/test_rankpi_integration.py`) run both adapters through their port's
-conformance suite against SQLite stand-ins with those columns. They have not been run against
-the live `rankpi` database.
+conformance suite against SQLite stand-ins with those columns.
+`tests/integration/test_testcontainers.py` runs them again on real PostgreSQL 16, with the
+derived relations as real views. That covers the read-only transaction, the statement timeout,
+server-side streaming and `timestamptz` values. CI runs it in the `containers` job. Neither has
+been run against the live `rankpi` database (TimescaleDB hypertables, the real view
+definitions).
 
 ## 6. The ten integration findings and where each is handled
 
