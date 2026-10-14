@@ -411,3 +411,18 @@ def test_the_chart_ships_the_dashboards_and_scrapes_the_workers() -> None:
     values = yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
     assert "dashboards" in values["metrics"] and "podMonitor" in values["metrics"]
     assert values["worker"]["metricsPort"]
+
+
+@pytest.mark.smoke
+def test_worker_metrics_serve_on_the_default_address() -> None:
+    # WORKER_METRICS_ADDR defaults to "", which prometheus_client hands to getaddrinfo when
+    # passed explicitly; the compose worker died on it. Empty must mean the library default.
+    import socket
+    import urllib.request
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    metrics.serve(port, "")
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as response:
+        assert response.status == 200

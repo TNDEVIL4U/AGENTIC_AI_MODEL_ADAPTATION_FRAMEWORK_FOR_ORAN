@@ -73,6 +73,8 @@ def test_kafka_cdc_conformance_against_a_real_broker(pg_settings) -> None:
     with kafka.KafkaContainer("confluentinc/cp-kafka:7.6.1") as broker:
         settings = pg_settings.model_copy(update={
             "cdc_mode": "kafka", "kafka_bootstrap_servers": broker.get_bootstrap_server(),
+            # No defaults since Hardening Phase 15, and model_copy skips the validator.
+            "cdc_kafka_topic": "ci.public.kpi_sample", "cdc_consumer_group": "ci-cdc",
         })
         producer = producer_module.Producer({"bootstrap.servers":
                                              settings.kafka_bootstrap_servers})

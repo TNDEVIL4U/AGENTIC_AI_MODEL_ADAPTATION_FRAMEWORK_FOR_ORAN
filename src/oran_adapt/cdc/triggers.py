@@ -42,7 +42,8 @@ def _sqlite_row(ref: str, columns: Sequence[str], json_columns: Sequence[str]) -
 def _sqlite(table: str, key: str, columns: Sequence[str],
             json_columns: Sequence[str]) -> list[str]:
     new, old = _sqlite_row("NEW", columns, json_columns), _sqlite_row("OLD", columns, json_columns)
-    head = f"INSERT INTO cdc_changelog ({_CHANGELOG_COLUMNS}) VALUES ('{table}'"
+    # Every name below passed _identifier (plain identifiers only), so nothing is injectable.
+    head = f"INSERT INTO cdc_changelog ({_CHANGELOG_COLUMNS}) VALUES ('{table}'"  # nosec B608
     return [
         (f"CREATE TRIGGER {table}_cdc_insert AFTER INSERT ON {table}\n"
          f"BEGIN {head}, 'INSERT', CAST(NEW.{key} AS TEXT), NULL, {new}, NULL, "
@@ -57,6 +58,7 @@ def _sqlite(table: str, key: str, columns: Sequence[str],
 
 
 def _postgresql(table: str, key: str) -> list[str]:
+    # table and key passed _identifier (plain identifiers only), so nothing is injectable.
     return [
         f"""CREATE OR REPLACE FUNCTION {table}_cdc() RETURNS trigger AS $$
 BEGIN
@@ -69,7 +71,7 @@ BEGIN
     to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
   RETURN NULL;
 END;
-$$ LANGUAGE plpgsql""",
+$$ LANGUAGE plpgsql""",  # nosec B608
         (f"CREATE TRIGGER {table}_cdc AFTER INSERT OR UPDATE OR DELETE ON {table}\n"
          f"FOR EACH ROW EXECUTE FUNCTION {table}_cdc()"),
     ]

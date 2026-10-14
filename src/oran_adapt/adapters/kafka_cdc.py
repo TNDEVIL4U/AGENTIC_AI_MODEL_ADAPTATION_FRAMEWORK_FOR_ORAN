@@ -19,6 +19,13 @@ if TYPE_CHECKING:
 
 
 def _kafka_consumer(settings: Settings) -> Any:
+    # Checked before the client exists: librdkafka aborts the whole process (an assertion in
+    # Consumer_init) on a None group.id, and settings copied with model_copy skip validation.
+    missing = [key.upper() for key in ("kafka_bootstrap_servers", "cdc_kafka_topic",
+                                       "cdc_consumer_group") if not getattr(settings, key)]
+    if missing:
+        raise CdcUnavailableError(f"CDC_MODE=kafka requires {', '.join(missing)}",
+                                  missing=missing)
     try:
         from confluent_kafka import Consumer  # optional dependency: pip install oran-adapt[kafka]
     except ImportError as exc:

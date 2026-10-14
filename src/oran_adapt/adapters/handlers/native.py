@@ -187,7 +187,10 @@ class NativeHandler:
                 return keras.saving.load_model(target, safe_mode=True)
             import torch
 
-            return torch.load(target, map_location="cpu", weights_only=False)
+            # A whole pickled module: loaded only after its registered SHA-256 was checked
+            # (module docstring), like the MLflow pytorch flavor.
+            return torch.load(target, map_location="cpu",  # nosec B614
+                              weights_only=False)
         except (ArtifactError, UnsupportedAdaptationError):
             raise
         except Exception as exc:

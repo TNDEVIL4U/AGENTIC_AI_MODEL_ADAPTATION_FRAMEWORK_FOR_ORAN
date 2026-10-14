@@ -16,7 +16,7 @@ model). docs/adapters/registry.md explains each rule.
 from __future__ import annotations
 
 import os
-import pickle
+import pickle  # nosec B403 - the check pickles an adapter it was handed, never foreign data
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -177,7 +177,7 @@ def check_pickle(registry: ModelRegistryPort, ctx: Context) -> None:
     """A job worker process receives the registry pickled; the copy reads the same data."""
     name = ctx.name("pickle")
     version = registry.create_version(name, ctx.artifact("pickle"), tags={"k": "v"})
-    copy: ModelRegistryPort = pickle.loads(pickle.dumps(registry))
+    copy: ModelRegistryPort = pickle.loads(pickle.dumps(registry))  # nosec B301 - our own object, just pickled
     expect(dict(copy.get_version(name, version).tags).get("k") == "v", "pickled copy differs")
 
 
