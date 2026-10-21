@@ -62,11 +62,14 @@ def banner(n: int, title: str) -> None:
     print(f"\n[{n:2d}/15] {title}\n{'-' * 72}")
 
 
-def kpi_frame(n: int, *, shift: float, seed: int) -> pd.DataFrame:
-    """Synthetic cell KPIs; ``shift`` moves the PRB-utilisation distribution (the drift)."""
+def kpi_frame(n: int, *, shift: float, seed: int, slope: float = 2.0) -> pd.DataFrame:
+    """Synthetic cell KPIs. ``shift`` moves the PRB-utilisation distribution (covariate drift);
+    ``slope`` changes how throughput depends on it (concept drift). A covariate shift alone
+    leaves the deployed model valid, so the deployment gate correctly rejects a retrained
+    candidate; the drifted window therefore changes both."""
     rng = np.random.default_rng(seed)
     df = pd.DataFrame({f: rng.normal(shift if f == "prb_util" else 0.0, 1.0, n) for f in FEATURES})
-    df[TARGET] = 2.0 * df["prb_util"] + 0.5 * df["cqi"] + rng.normal(0, 0.1, n)
+    df[TARGET] = slope * df["prb_util"] + 0.5 * df["cqi"] + rng.normal(0, 0.1, n)
     return df
 
 
@@ -89,6 +92,9 @@ def run() -> None:
         auth_enabled=False,  # a local demo; see RUN.md section 3 for API keys
         # One process, no worker: each submitted job runs inside its request.
         job_queue_backend="inline",
+        # A validated candidate waits for a recorded human approval (stage 10) instead of the
+        # default shadow rollout, so the demo can show promotion end to end in one run.
+        delivery_strategy="manual",
     )
     print(f"Demo folder: {run_dir}")
     upgrade_to_head(settings.database_url)
@@ -101,7 +107,7 @@ def run() -> None:
         before = client.get("/api/v1/metrics").text
 
         historical = kpi_frame(200, shift=0.0, seed=1)
-        drifted = kpi_frame(200, shift=3.0, seed=2)
+        drifted = kpi_frame(200, shift=3.0, seed=2, slope=1.2)
         model = Ridge().fit(historical[FEATURES], historical[TARGET])
 
         banner(1, "Model onboarding")
@@ -197,12 +203,19 @@ def run() -> None:
 
         banner(9, "MLflow registration")
         new_version = result["registered_version"]
-        check(result["outcome"] == "REGISTERED" and new_version == "2", f"result: {result}")
+        rollout = result.get("rollout") or {}
+        check(result["outcome"] == "DELIVERING" and new_version == "2"
+              and rollout.get("state") == "AWAITING_APPROVAL", f"result: {result}")
         tags = app.state.registry.get_version(MODEL_ID.replace("-", "_"), new_version).tags
         check(len(tags.get("artifact.sha256", "")) == 64, "no artifact checksum tag")
         print(f"version {new_version} registered, sha256 {tags['artifact.sha256'][:12]}...")
 
         banner(10, "Promotion")
+        approved = client.post(f"/api/v1/rollouts/{rollout['rollout_id']}/approve",
+                               json={"reason": "demo: gate passed, approved by operator"})
+        check(approved.status_code == 200 and approved.json()["state"] == "PROMOTED",
+              f"approval: {approved.status_code} {approved.text[:300]}")
+        print(f"rollout {rollout['rollout_id'][:8]} approved -> {approved.json()['state']}")
         promotions = client.get(f"/api/v1/models/{MODEL_ID}/promotions").json()
         check(promotions and promotions[0]["to_version"] == new_version, f"{promotions}")
         print(
