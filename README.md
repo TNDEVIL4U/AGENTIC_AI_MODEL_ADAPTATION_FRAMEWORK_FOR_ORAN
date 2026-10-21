@@ -26,11 +26,11 @@ project. **Part B** explains how the files link together.
 
 ## Team
 
-| Member | Name | Roll No. | Contribution | Code owned |
+| Member | Name | Roll No. | Contribution | Code owned |Tamilselvan R
 |---|---|---|---|---|
-| Member 1 | **Ramanujam P** | 2024503525 | Drift analysis and model reuse. Model intake, independent verification of degradation (KS test and PSI via Evidently AI), scoring every registered version on the current data, and the reuse decision that restores a fitting earlier model without retraining | `analysis/`, `datastore/access.py`, `adaptation/data.py` |
+| Member 1 | **Tamilselvan R** | 2024503515 | Drift analysis and model reuse. Model intake, independent verification of degradation (KS test and PSI via Evidently AI), scoring every registered version on the current data, and the reuse decision that restores a fitting earlier model without retraining | `analysis/`, `datastore/access.py`, `adaptation/data.py` |
 | Member 2 | **Nitesh N D** | 2024503529 | Agentic AI Decision Engine. Hard constraints no LLM may overrule, LLM strategy selection validated by Pydantic, the deterministic rules-only fallback, and the explained decision report | `decision/`, `llm/` |
-| Member 3 | **Tamilselvan R** | 2024503515 | Generic Model Adapters. Model inspection and capability detection, fine-tune and full-retrain engines (scikit-learn, XGBoost, PyTorch), leakage checks, model-type plugins, and LLM-generated adaptation run in a security-checked sandbox | `adaptation/`, `sandbox/`, `adapters/model_types/` |
+| Member 3 | **Ramanujam P** | 2024503525 | Generic Model Adapters. Model inspection and capability detection, fine-tune and full-retrain engines (scikit-learn, XGBoost, PyTorch), leakage checks, model-type plugins, and LLM-generated adaptation run in a security-checked sandbox | `adaptation/`, `sandbox/`, `adapters/model_types/` |
 | Member 4 | **Bhuvaneshwar T S** | 2024503565 | Validation, registration and integration. The paired-bootstrap deployment gate with guardrails, MLflow registration, promotion and rollback, progressive delivery, the orchestrator that joins all four members, the REST API, and repository maintenance | `validation/`, `orchestrator/`, `registry/`, `delivery/`, `api/` |
 
 The member numbers match the code. Each module's docstring names its owner, and
