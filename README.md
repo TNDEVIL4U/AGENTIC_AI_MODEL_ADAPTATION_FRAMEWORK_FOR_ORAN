@@ -26,15 +26,24 @@ project. **Part B** explains how the files link together.
 
 ## Team
 
-| Member | Name | Roll No. | Contribution | Code owned |Tamilselvan R
-|---|---|---|---|---|
-| Member 1 | **Tamilselvan R** | 2024503515 | Drift analysis and model reuse. Model intake, independent verification of degradation (KS test and PSI via Evidently AI), scoring every registered version on the current data, and the reuse decision that restores a fitting earlier model without retraining | `analysis/`, `datastore/access.py`, `adaptation/data.py` |
-| Member 2 | **Nitesh N D** | 2024503529 | Agentic AI Decision Engine. Hard constraints no LLM may overrule, LLM strategy selection validated by Pydantic, the deterministic rules-only fallback, and the explained decision report | `decision/`, `llm/` |
-| Member 3 | **Ramanujam P** | 2024503525 | Generic Model Adapters. Model inspection and capability detection, fine-tune and full-retrain engines (scikit-learn, XGBoost, PyTorch), leakage checks, model-type plugins, and LLM-generated adaptation run in a security-checked sandbox | `adaptation/`, `sandbox/`, `adapters/model_types/` |
-| Member 4 | **Bhuvaneshwar T S** | 2024503565 | Validation, registration and integration. The paired-bootstrap deployment gate with guardrails, MLflow registration, promotion and rollback, progressive delivery, the orchestrator that joins all four members, the REST API, and repository maintenance | `validation/`, `orchestrator/`, `registry/`, `delivery/`, `api/` |
+| Name | Roll No. | Individual contribution | Code |
+|---|---|---|---|
+| **Tamilselvan R** | 2024503515 | Model Intake Agent and Independent Verification (KS-test confirmation) | [`api/routes_adaptation.py`](src/oran_adapt/api/routes_adaptation.py) · [`orchestrator/jobs.py`](src/oran_adapt/orchestrator/jobs.py) · [`registry/onboarding.py`](src/oran_adapt/registry/onboarding.py) · [`analysis/engine.py`](src/oran_adapt/analysis/engine.py) · [`analysis/retrieval.py`](src/oran_adapt/analysis/retrieval.py) · [`analysis/merge.py`](src/oran_adapt/analysis/merge.py) · [`analysis/comparison.py`](src/oran_adapt/analysis/comparison.py) · [`analysis/reuse.py`](src/oran_adapt/analysis/reuse.py) |
+| **Nitesh N D** | 2024503529 | Similar Model Exchange and the historical dataset registry (PostgreSQL) | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py) · [`analysis/reuse_decision.py`](src/oran_adapt/analysis/reuse_decision.py) · [`datastore/versioning.py`](src/oran_adapt/datastore/versioning.py) · [`datastore/access.py`](src/oran_adapt/datastore/access.py) · [`datastore/current_data.py`](src/oran_adapt/datastore/current_data.py) · [`db/models.py`](src/oran_adapt/db/models.py) · [`migrations/`](migrations/) · [`adapters/datasets_sql.py`](src/oran_adapt/adapters/datasets_sql.py) |
+| **Ramanujam P** | 2024503525 | Agentic AI Decision Engine and the MLKTL Scenario Module (PSI severity) | [`decision/engine.py`](src/oran_adapt/decision/engine.py) · [`decision/constraints.py`](src/oran_adapt/decision/constraints.py) · [`decision/llm_selector.py`](src/oran_adapt/decision/llm_selector.py) · [`decision/fallback.py`](src/oran_adapt/decision/fallback.py) · [`decision/report.py`](src/oran_adapt/decision/report.py) · [`analysis/summary.py`](src/oran_adapt/analysis/summary.py) · [`llm/client.py`](src/oran_adapt/llm/client.py) |
+| **Bhuvaneshwar T S** | 2024503565 | Validation & Registration Agent, deployment gate, experiments and evaluation | [`validation/engine.py`](src/oran_adapt/validation/engine.py) · [`validation/gate.py`](src/oran_adapt/validation/gate.py) · [`registry/publishing.py`](src/oran_adapt/registry/publishing.py) · [`registry/promotion.py`](src/oran_adapt/registry/promotion.py) · [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) · [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) · [`scripts/demo.py`](scripts/demo.py) · [`scripts/demo_models.py`](scripts/demo_models.py) · [`scripts/walkthrough.py`](scripts/walkthrough.py) |
 
-The member numbers match the code. Each module's docstring names its owner, and
-`orchestrator/pipeline.py` calls the members in order: Member 1 → 2 → 3 → 4.
+**Shared by the team:**
+
+- the Generic Model Adapters that run Finetune and Regenerate: [`adaptation/`](src/oran_adapt/adaptation/) and [`sandbox/`](src/oran_adapt/sandbox/);
+- the orchestrator that joins the modules into Algorithm 1: [`orchestrator/pipeline.py`](src/oran_adapt/orchestrator/pipeline.py);
+- the platform layers: [`api/`](src/oran_adapt/api/), [`core/`](src/oran_adapt/core/), [`adapters/`](src/oran_adapt/adapters/).
+
+Module docstrings use the labels *Member 1–4* for the four pipeline stages (analysis,
+decision, adaptation, validation). Those labels name stages, not people; the table above is
+the team's allocation.
+
+Every path in this README is a link to the file in the repository.
 
 ---
 
@@ -42,11 +51,11 @@ The member numbers match the code. Each module's docstring names its owner, and
 
 | | |
 |---|---|
-| Application code | 186 Python modules, about 33,000 lines, under `src/oran_adapt/` |
+| Application code | 186 Python modules, about 33,000 lines, under [`src/oran_adapt/`](src/oran_adapt/) |
 | Tests | 951 collected: 904 in the default gate tier, 336 in the fast `smoke` tier, 47 in the `heavy` tier (CI only) |
 | REST API | 39 endpoints under `/api/v1` |
 | CLI | `oran-adapt` with 11 command groups: `db`, `data`, `model`, `event`, `auth`, `config`, `jobs`, `rollout`, `worker`, `cdc`, `notifications` |
-| Pluggable adapters | registries, deployment, model types, LLM providers, queues, auth, notifications, data sources; one entry-point group per port in `pyproject.toml` |
+| Pluggable adapters | registries, deployment, model types, LLM providers, queues, auth, notifications, data sources; one entry-point group per port in [`pyproject.toml`](pyproject.toml) |
 | Defaults | SQLite and a local MLflow store, no LLM, shadow delivery. It runs offline with no GPU and no Docker |
 
 ---
@@ -84,7 +93,7 @@ cp .env.example .env                   # Windows: copy .env.example .env
 > import. That pushes the sandbox tests past their 512 MB limit, and they fail for reasons
 > unrelated to the code.
 
-On Windows, `.\scripts\run_local.ps1 setup` performs the same steps.
+On Windows, [`scripts/run_local.ps1`](scripts/run_local.ps1) `setup` performs the same steps. Copy-paste versions of every step are in [`RUN.md`](RUN.md).
 
 Confirm the installation:
 
@@ -111,13 +120,13 @@ Then:
 
 | # | Command | Time | Expected result |
 |---|---|---|---|
-| 1 | `python scripts/walkthrough.py` | ~30 s | 8 self-checking steps, ending `Walkthrough complete: the drift alert produced a candidate serving a canary slice.` |
-| 2 | `python scripts/demo.py` | ~40 s | 15 checked stages, ending `Demo passed: all 15 stages checked.` |
+| 1 | `python scripts/walkthrough.py` ([`source`](scripts/walkthrough.py)) | ~30 s | 8 self-checking steps, ending `Walkthrough complete: the drift alert produced a candidate serving a canary slice.` |
+| 2 | `python scripts/demo.py` ([`source`](scripts/demo.py)) | ~40 s | 15 checked stages, ending `Demo passed: all 15 stages checked.` |
 | 3 | `python -m pytest -m smoke -q` | ~1.5 min | `336 passed` |
 | 4 | `python -m pytest -q` | 15–20 min | the default gate tier (904 tests) passes; Postgres and Docker tests skip themselves when those are absent |
 | 5 | `python -m ruff check src tests` | seconds | `All checks passed!` |
-| 6 | `python scripts/security_check.py --skip-audit` | 1–3 min | bandit, mypy and SBOM reports in `reports/` |
-| 7 | `python -m oran_adapt.cli config lint config/examples/development.toml` | seconds | `"ok": true` |
+| 6 | `python scripts/security_check.py --skip-audit` ([`source`](scripts/security_check.py)) | 1–3 min | bandit, mypy and SBOM reports in `reports/` |
+| 7 | `python -m oran_adapt.cli config lint config/examples/development.toml` ([`file`](config/examples/development.toml)) | seconds | `"ok": true` |
 
 **What the walkthrough proves.**
 
@@ -150,7 +159,7 @@ Then:
 | 14 | Prometheus metrics |
 | 15 | duplicate-event handling |
 
-Each run writes to a new folder, `data/demo/run-<timestamp>/`, and deletes nothing. The last
+[`docs/DEMO_MANUAL.md`](docs/DEMO_MANUAL.md) explains the output stage by stage. Each run writes to a new folder, `data/demo/run-<timestamp>/`, and deletes nothing. The last
 line prints the `mlflow ui` command for that run.
 
 On Windows the same checks are `.\scripts\run_local.ps1 demo | quicktest | test | lint | security`.
@@ -209,7 +218,7 @@ helm install oran-adapt deploy/helm/oran-adapt -f deploy/helm/oran-adapt/example
 ```
 
 CI builds the images and runs the compose smoke test on every push. A weekly job
-(`.github/workflows/k8s-e2e.yml`) installs, upgrades and rolls back the Helm chart on a
+([`.github/workflows/k8s-e2e.yml`](.github/workflows/k8s-e2e.yml), with [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for every push) installs, upgrades and rolls back the Helm chart on a
 kind cluster.
 
 ## A.8 Phase gates
@@ -231,25 +240,25 @@ python scripts/audit.py          # re-runs the test behind every audit claim
 AGENTIC_AI_MODEL_ADAPTATION_FRAMEWORK_FOR_ORAN/
 ├── src/oran_adapt/            application code
 │   ├── api/                   FastAPI app (app.py, main.py), 7 route modules, auth, rate limits
-│   ├── orchestrator/          pipeline.py (Algorithm 1), jobs.py, worker.py, locks.py   [Member 4]
-│   ├── analysis/              drift statistics, version scoring, reuse decision          [Member 1]
-│   ├── decision/              constraints, LLM selector, fallback, decision report       [Member 2]
+│   ├── orchestrator/          pipeline.py (Algorithm 1), jobs.py, worker.py, locks.py   [shared · Tamilselvan: jobs.py intake]
+│   ├── analysis/              drift statistics, version scoring, reuse decision          [Tamilselvan · Nitesh · Ramanujam]
+│   ├── decision/              constraints, LLM selector, fallback, decision report       [Ramanujam]
 │   ├── adaptation/            inspector, capability, fine-tune / retrain / torch engines,
-│   │                          leakage checks, llm_adapter                                 [Member 3]
-│   ├── sandbox/               AST security scan and isolated runner for generated code    [Member 3]
-│   ├── validation/            gate.py (paired bootstrap + guardrails), engine, metrics    [Member 4]
-│   ├── registry/              onboarding, publishing, promotion, deployment read-back     [Member 4]
-│   ├── delivery/              rollout controller: shadow, canary, A/B, manual, blue-green [Member 4]
-│   ├── datastore/             content-hashed dataset versions, lineage, data by reference
+│   │                          leakage checks, llm_adapter                                 [shared]
+│   ├── sandbox/               AST security scan and isolated runner for generated code    [shared]
+│   ├── validation/            gate.py (paired bootstrap + guardrails), engine, metrics    [Bhuvaneshwar]
+│   ├── registry/              onboarding, publishing, promotion, deployment read-back     [Bhuvaneshwar · Tamilselvan]
+│   ├── delivery/              rollout controller: shadow, canary, A/B, manual, blue-green [Bhuvaneshwar]
+│   ├── datastore/             content-hashed dataset versions, lineage, data by reference [Nitesh]
 │   ├── notifications/         durable outbox, HMAC signing, dispatcher
 │   ├── cdc/                   change-data capture from a source database
-│   ├── llm/                   provider-neutral LLM client                                 [Member 2]
+│   ├── llm/                   provider-neutral LLM client                                 [Ramanujam]
 │   ├── ports/                 the interfaces (one per port)
 │   ├── adapters/              the implementations: registries, serving, queues, auth, model types,
 │   │                          sql and rankpi datasets, rankpi rollout metrics, ...
 │   ├── conformance/           test suites every adapter of a port must pass
 │   ├── core/                  config.py (every setting), enums, schemas, errors, policies
-│   ├── db/                    SQLAlchemy models, session handling, migration runner
+│   ├── db/                    SQLAlchemy models, session handling, migration runner       [Nitesh]
 │   ├── bootstrap.py           composition root: reads config, resolves adapters, wires the app
 │   ├── plugins.py             entry-point discovery for adapters
 │   └── cli.py                 the oran-adapt command
@@ -267,6 +276,18 @@ AGENTIC_AI_MODEL_ADAPTATION_FRAMEWORK_FOR_ORAN/
 └── docker-compose.yml         the local container stack
 ```
 
+**Quick access:**
+
+| Area | Open |
+|---|---|
+| Application code | [`src/oran_adapt/`](src/oran_adapt/) — [`api`](src/oran_adapt/api/) · [`orchestrator`](src/oran_adapt/orchestrator/) · [`analysis`](src/oran_adapt/analysis/) · [`decision`](src/oran_adapt/decision/) · [`adaptation`](src/oran_adapt/adaptation/) · [`sandbox`](src/oran_adapt/sandbox/) · [`validation`](src/oran_adapt/validation/) · [`registry`](src/oran_adapt/registry/) · [`delivery`](src/oran_adapt/delivery/) · [`datastore`](src/oran_adapt/datastore/) · [`notifications`](src/oran_adapt/notifications/) · [`cdc`](src/oran_adapt/cdc/) · [`llm`](src/oran_adapt/llm/) · [`ports`](src/oran_adapt/ports/) · [`adapters`](src/oran_adapt/adapters/) · [`conformance`](src/oran_adapt/conformance/) · [`core`](src/oran_adapt/core/) · [`db`](src/oran_adapt/db/) |
+| Entry points | [`bootstrap.py`](src/oran_adapt/bootstrap.py) · [`plugins.py`](src/oran_adapt/plugins.py) · [`cli.py`](src/oran_adapt/cli.py) · [`api/main.py`](src/oran_adapt/api/main.py) |
+| Tests | [`tests/unit/`](tests/unit/) · [`tests/integration/`](tests/integration/) · [`conftest.py`](tests/conftest.py) |
+| Scripts | [`walkthrough.py`](scripts/walkthrough.py) · [`demo.py`](scripts/demo.py) · [`demo_models.py`](scripts/demo_models.py) · [`verify.sh`](scripts/verify.sh) · [`audit.py`](scripts/audit.py) · [`lint_no_gaps.py`](scripts/lint_no_gaps.py) |
+| Configuration | [`config/examples/`](config/examples/) · [`config/mappers/`](config/mappers/) · [`config/policies/`](config/policies/) · [`.env.example`](.env.example) |
+| Packaging and deployment | [`pyproject.toml`](pyproject.toml) · [`requirements.lock`](requirements.lock) · [`Dockerfile`](Dockerfile) · [`docker-compose.yml`](docker-compose.yml) · [`docker/`](docker/) · [`deploy/`](deploy/) · [`migrations/`](migrations/) |
+| Documentation | [`RUN.md`](RUN.md) · [`docs/MANUAL.md`](docs/MANUAL.md) · [`docs/`](docs/) |
+
 ## B.2 The dependency rule
 
 ```
@@ -279,72 +300,74 @@ api / cli / worker  ──►  orchestrator  ──►  analysis · decision · 
 ```
 
 The core packages never import a vendor SDK such as MLflow, boto3 or Kubernetes. They talk
-only to the interfaces in `ports/`. At start-up, `bootstrap.py` reads `core/config.py` and
-picks the adapter for each port from the entry points in `pyproject.toml`.
-`tests/unit/test_import_boundary.py` fails the build if the rule is broken. That is how one
+only to the interfaces in [`ports/`](src/oran_adapt/ports/). At start-up, [`bootstrap.py`](src/oran_adapt/bootstrap.py) reads [`core/config.py`](src/oran_adapt/core/config.py) and
+picks the adapter for each port from the entry points in [`pyproject.toml`](pyproject.toml).
+[`tests/unit/test_import_boundary.py`](tests/unit/test_import_boundary.py) fails the build if the rule is broken. That is how one
 pipeline runs unchanged against MLflow, a plain filesystem, SageMaker or Vertex.
 
 ## B.3 Paper architecture (Fig. 1) → code
 
-| Paper block | File | Function | Member |
+| Paper block | Files | Function | Owner |
 |---|---|---|---|
-| Issue report in | `api/routes_adaptation.py` | `submit_event`, `submit_mapped_events` (Alertmanager, Evidently and generic-JSON mappers in `config/mappers/`) | 4 |
-| 1. Model Intake | `orchestrator/jobs.py`, `registry/onboarding.py` | event validation, idempotency, stale-version check; `onboard_model` | 4 / 1 |
-| 2. Independent Verification | `analysis/engine.py`, `analysis/comparison.py` | `analyze`: KS and PSI per feature via Evidently AI | 1 |
-| 3. Data Retrieval & Analysis | `analysis/retrieval.py`, `datastore/versioning.py`, `datastore/access.py` | historical and drifted data by version or by reference | 1 |
-| 4. Decision Engine: reuse | `analysis/version_eval.py`, `analysis/reuse_decision.py` | `evaluate_versions`, `decide_reuse`: promote an earlier version when it clearly beats LIVE | 1 |
-| 4. Decision Engine: adapt | `decision/engine.py` (with `constraints.py`, `llm_selector.py`, `fallback.py`, `report.py`) | `decide`: `FINE_TUNING`, `FULL_RETRAINING`, `ROLLBACK` or `NO_ACTION` | 2 |
-| 5a / 5b. Fine-tune / Retrain | `adaptation/finetune.py`, `retrain.py`, `torch_engine.py`, `engines.py`, `adapters/model_types/` | the model type's engine for the chosen strategy | 3 |
-| 5. Fallback for unknown models | `adaptation/llm_adapter.py`, `sandbox/security.py`, `sandbox/runner.py` | `adapt_via_llm`: generated code, AST-checked and run isolated | 3 |
-| 6. Validate | `validation/engine.py`, `validation/gate.py` | `validate_candidate`; gate `decide`: deploy only if the 95 % paired-bootstrap interval lies above the margin, with latency, size and calibration guardrails | 4 |
-| 7. Rollback | `registry/promotion.py`, `delivery/controller.py` | the previous LIVE is kept on rejection; `POST /models/{id}/rollback` | 4 |
-| 8. Register | `registry/publishing.py`, `registry/promotion.py` | `register_candidate`, `promote_version`, `start_rollout` | 4 |
-| PostgreSQL store | `db/`, `migrations/` | jobs, events, datasets, lineage, audit | — |
-| MLflow registry | `adapters/registry/mlflow/` | versions, artefacts, the `live` alias, tags | — |
+| Issue report in | [`api/routes_adaptation.py`](src/oran_adapt/api/routes_adaptation.py), [`config/mappers/`](config/mappers/) | `submit_event`, `submit_mapped_events` (Alertmanager, Evidently and generic-JSON mappers) | Tamilselvan R |
+| 1. Model Intake | [`orchestrator/jobs.py`](src/oran_adapt/orchestrator/jobs.py), [`registry/onboarding.py`](src/oran_adapt/registry/onboarding.py) | idempotency by `event_id`, stale-version check; `onboard_model` | Tamilselvan R |
+| 2. Independent Verification | [`analysis/engine.py`](src/oran_adapt/analysis/engine.py), [`analysis/comparison.py`](src/oran_adapt/analysis/comparison.py), [`analysis/reuse.py`](src/oran_adapt/analysis/reuse.py) | `analyze`: KS test and PSI per feature (Evidently AI); is the reported drift corroborated? | Tamilselvan R |
+| 3. Data Retrieval & Analysis | [`analysis/retrieval.py`](src/oran_adapt/analysis/retrieval.py), [`analysis/merge.py`](src/oran_adapt/analysis/merge.py), [`datastore/access.py`](src/oran_adapt/datastore/access.py) | historical baseline and drifted window, by version or by reference | Tamilselvan R · Nitesh N D |
+| Historical dataset registry (PostgreSQL) | [`datastore/versioning.py`](src/oran_adapt/datastore/versioning.py), [`db/models.py`](src/oran_adapt/db/models.py), [`migrations/`](migrations/) | SHA-256 content-hashed versions, parent lineage, model ↔ data links | Nitesh N D |
+| 4. Decision Engine: reuse (Similar Model Exchange) | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py), [`analysis/reuse_decision.py`](src/oran_adapt/analysis/reuse_decision.py) | `evaluate_versions`, `decide_reuse`: promote an earlier version that clearly beats LIVE | Nitesh N D |
+| 4. Decision Engine: adapt | [`decision/engine.py`](src/oran_adapt/decision/engine.py), [`decision/constraints.py`](src/oran_adapt/decision/constraints.py), [`decision/llm_selector.py`](src/oran_adapt/decision/llm_selector.py), [`decision/fallback.py`](src/oran_adapt/decision/fallback.py), [`decision/report.py`](src/oran_adapt/decision/report.py) | `decide`: `FINE_TUNING`, `FULL_RETRAINING`, `ROLLBACK` or `NO_ACTION` | Ramanujam P |
+| MLKTL Scenario Module (PSI severity) | [`analysis/summary.py`](src/oran_adapt/analysis/summary.py), [`decision/constraints.py`](src/oran_adapt/decision/constraints.py) | drift magnitude and severity; PSI ≥ 0.5 rules out fine-tuning | Ramanujam P |
+| 5a / 5b. Fine-tune / Retrain | [`adaptation/finetune.py`](src/oran_adapt/adaptation/finetune.py), [`adaptation/retrain.py`](src/oran_adapt/adaptation/retrain.py), [`adaptation/torch_engine.py`](src/oran_adapt/adaptation/torch_engine.py), [`adaptation/model_types.py`](src/oran_adapt/adaptation/model_types.py) | the model type's engine for the chosen strategy (Generic Model Adapters) | shared |
+| 5. Fallback for unknown models | [`adaptation/llm_adapter.py`](src/oran_adapt/adaptation/llm_adapter.py), [`sandbox/security.py`](src/oran_adapt/sandbox/security.py), [`sandbox/runner.py`](src/oran_adapt/sandbox/runner.py) | `adapt_via_llm`: generated code, AST-checked and run isolated | shared |
+| 6. Validate | [`validation/engine.py`](src/oran_adapt/validation/engine.py), [`validation/gate.py`](src/oran_adapt/validation/gate.py) | `validate_candidate`; gate `decide`: deploy only if the 95 % paired-bootstrap interval lies above the margin, plus latency, size and calibration guardrails | Bhuvaneshwar T S |
+| 7. Rollback | [`registry/promotion.py`](src/oran_adapt/registry/promotion.py), [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) | the previous LIVE is kept on rejection; `POST /models/{id}/rollback` | Bhuvaneshwar T S |
+| 8. Register | [`registry/publishing.py`](src/oran_adapt/registry/publishing.py), [`registry/promotion.py`](src/oran_adapt/registry/promotion.py), [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) | `register_candidate`, `promote_version`, `start_rollout`, served-version read-back | Bhuvaneshwar T S |
+| Experiments and evaluation | [`scripts/demo.py`](scripts/demo.py), [`scripts/demo_models.py`](scripts/demo_models.py), [`scripts/walkthrough.py`](scripts/walkthrough.py) | 15-stage demo, multi-model demo, clone-to-canary walkthrough | Bhuvaneshwar T S |
+| MLflow registry | [`adapters/registry/mlflow/`](src/oran_adapt/adapters/registry/mlflow/) | versions, artefacts, the `live` alias, tags | — |
 
 ## B.4 One drift event through the code
 
-```
- 1  api/routes_adaptation.py      POST /api/v1/adaptation/events   (or /events/from/{mapper})
- 2  orchestrator/jobs.py          dedupe by event_id, create the AdaptationJob, enqueue it
- 3  orchestrator/worker.py        lease the job (or run inline), enforce the deadline
- 4  orchestrator/pipeline.py      Algorithm 1 — calls, in order:
- 5    analysis/engine.py            analyze()                 drift statistics          [M1]
- 6    analysis/version_eval.py      evaluate_versions()       score every version       [M1]
- 7    analysis/reuse_decision.py    decide_reuse()            reuse → promote and stop  [M1]
- 8    decision/engine.py            decide()                  constraints → LLM/fallback[M2]
- 9    adaptation/model_types.py     pick the plugin           fine-tune / retrain       [M3]
-10    adaptation/llm_adapter.py     adapt_via_llm()           only if no engine fits    [M3]
-11    validation/engine.py          validate_candidate()      → validation/gate.py      [M4]
-12    registry/publishing.py        register_candidate()      MLflow version + lineage  [M4]
-13    delivery/controller.py        start_rollout()           shadow/canary/ab/manual   [M4]
-14    registry/deployment.py        move traffic, read the served version back        [M4]
-15  notifications/dispatcher.py   signed event for every state change
-```
+| Step | File | What happens | Owner |
+|---|---|---|---|
+| 1 | [`api/routes_adaptation.py`](src/oran_adapt/api/routes_adaptation.py) | `POST /api/v1/adaptation/events` (or `/events/from/{mapper}`) | Tamilselvan R |
+| 2 | [`orchestrator/jobs.py`](src/oran_adapt/orchestrator/jobs.py) | dedupe by `event_id`, create the AdaptationJob, enqueue it | Tamilselvan R |
+| 3 | [`orchestrator/worker.py`](src/oran_adapt/orchestrator/worker.py) | lease the job (or run inline), enforce the deadline | shared |
+| 4 | [`orchestrator/pipeline.py`](src/oran_adapt/orchestrator/pipeline.py) | Algorithm 1 — calls steps 5–14 in order | shared |
+| 5 | [`analysis/engine.py`](src/oran_adapt/analysis/engine.py) | `analyze()`: retrieval, merge, KS + PSI, corroboration | Tamilselvan R |
+| 6 | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py) | `evaluate_versions()`: score every registered version | Nitesh N D |
+| 7 | [`analysis/reuse_decision.py`](src/oran_adapt/analysis/reuse_decision.py) | `decide_reuse()`: Similar Model Exchange, or hand over | Nitesh N D |
+| 8 | [`decision/engine.py`](src/oran_adapt/decision/engine.py) | `decide()`: constraints → LLM (validated) or fallback | Ramanujam P |
+| 9 | [`adaptation/model_types.py`](src/oran_adapt/adaptation/model_types.py) | pick the plugin; fine-tune or retrain | shared |
+| 10 | [`adaptation/llm_adapter.py`](src/oran_adapt/adaptation/llm_adapter.py) | `adapt_via_llm()`, only if no engine fits | shared |
+| 11 | [`validation/engine.py`](src/oran_adapt/validation/engine.py) | `validate_candidate()` → paired-bootstrap gate | Bhuvaneshwar T S |
+| 12 | [`registry/publishing.py`](src/oran_adapt/registry/publishing.py) | `register_candidate()`: MLflow version + lineage | Bhuvaneshwar T S |
+| 13 | [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) | `start_rollout()`: shadow / canary / A/B / manual | Bhuvaneshwar T S |
+| 14 | [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) | move traffic, read the served version back | Bhuvaneshwar T S |
+| 15 | [`notifications/dispatcher.py`](src/oran_adapt/notifications/dispatcher.py) | signed event for every state change | shared |
 
-`scripts/walkthrough.py` drives exactly this path and asserts each step. Reading the two
+[`scripts/walkthrough.py`](scripts/walkthrough.py) drives exactly this path and asserts each step. Reading the two
 side by side is the quickest way into the code.
 
 ## B.5 Who reads and writes what
 
 | Store | Written by | Read by |
 |---|---|---|
-| App database: SQLite by default, PostgreSQL in production | `orchestrator/jobs.py`, `datastore/`, `registry/promotion.py`, `delivery/controller.py`, `notifications/` | every stage; `api/` for status |
-| MLflow: model versions, artefacts, `live` alias, tags | `registry/publishing.py`, `registry/promotion.py` | `analysis/version_eval.py`, `validation/`, `registry/deployment.py` |
-| Dataset versions (SHA-256 content hash, parent, role `TRAINING`, `VALIDATION` or `DRIFT_OBSERVED`) | `datastore/versioning.py`; `POST /datasets/{id}/versions`; `cdc/` | `analysis/retrieval.py`, `adaptation/data.py` |
-| Audit trail and Prometheus metrics | every stage via `orchestrator/context.py`, `core/metrics.py` | `GET /api/v1/metrics`, `GET /adaptation/jobs/{id}` |
+| App database: SQLite by default, PostgreSQL in production ([`db/models.py`](src/oran_adapt/db/models.py)) | [`orchestrator/jobs.py`](src/oran_adapt/orchestrator/jobs.py), [`datastore/`](src/oran_adapt/datastore/), [`registry/promotion.py`](src/oran_adapt/registry/promotion.py), [`delivery/controller.py`](src/oran_adapt/delivery/controller.py), [`notifications/`](src/oran_adapt/notifications/) | every stage; [`api/`](src/oran_adapt/api/) for status |
+| MLflow: model versions, artefacts, `live` alias, tags | [`registry/publishing.py`](src/oran_adapt/registry/publishing.py), [`registry/promotion.py`](src/oran_adapt/registry/promotion.py) | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py), [`validation/`](src/oran_adapt/validation/), [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) |
+| Dataset versions (SHA-256 content hash, parent, role `TRAINING`, `VALIDATION` or `DRIFT_OBSERVED`) | [`datastore/versioning.py`](src/oran_adapt/datastore/versioning.py); `POST /datasets/{id}/versions` ([`api/routes_data.py`](src/oran_adapt/api/routes_data.py)); [`cdc/`](src/oran_adapt/cdc/) | [`analysis/retrieval.py`](src/oran_adapt/analysis/retrieval.py), [`adaptation/data.py`](src/oran_adapt/adaptation/data.py) |
+| Audit trail and Prometheus metrics | every stage via [`orchestrator/context.py`](src/oran_adapt/orchestrator/context.py), [`core/metrics.py`](src/oran_adapt/core/metrics.py) | `GET /api/v1/metrics`, `GET /adaptation/jobs/{id}` |
 
 ## B.6 Configuration files and where they apply
 
 | File | Used by | Purpose |
 |---|---|---|
-| `.env` (from `.env.example`) | `core/config.py` | every setting, for example `DATABASE_URL`, `MLFLOW_TRACKING_URI`, `LLM_PROVIDER`, `DELIVERY_STRATEGY`, `API_KEYS` |
-| `config/examples/*.toml` | `ORAN_CONFIG_FILE` | ten reference stacks: development, production, airgapped, MLflow+KServe, SageMaker, Vertex, Seldon, Triton, BentoML, rankpi |
-| `config/policies/gate.toml` | `validation/gate.py` | gate mode, margin, confidence, resamples, guardrails |
-| `config/policies/delivery.toml`, `delivery-rankpi.toml` | `delivery/controller.py` | canary steps, hold times, health limits, approval TTL |
-| `config/mappers/*.toml` | `POST /events/from/{mapper}` | turn Alertmanager, Evidently or generic JSON alerts into drift events |
+| `.env` (from [`.env.example`](.env.example)) | [`core/config.py`](src/oran_adapt/core/config.py) | every setting, for example `DATABASE_URL`, `MLFLOW_TRACKING_URI`, `LLM_PROVIDER`, `DELIVERY_STRATEGY`, `API_KEYS` |
+| [`config/examples/*.toml`](config/examples/) | `ORAN_CONFIG_FILE` | ten reference stacks: development, production, airgapped, MLflow+KServe, SageMaker, Vertex, Seldon, Triton, BentoML, rankpi |
+| [`config/policies/gate.toml`](config/policies/gate.toml) | [`validation/gate.py`](src/oran_adapt/validation/gate.py) | gate mode, margin, confidence, resamples, guardrails |
+| [`config/policies/delivery.toml`](config/policies/delivery.toml), [`delivery-rankpi.toml`](config/policies/delivery-rankpi.toml) | [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) | canary steps, hold times, health limits, approval TTL |
+| [`config/mappers/*.toml`](config/mappers/) | `POST /events/from/{mapper}` | turn Alertmanager, Evidently or generic JSON alerts into drift events |
 
-Key thresholds in `core/config.py`:
+Key thresholds in [`core/config.py`](src/oran_adapt/core/config.py):
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -359,9 +382,9 @@ Key thresholds in `core/config.py`:
 
 | Folder | Covers |
 |---|---|
-| `tests/unit/` | each member's module, the gate, the state machine, every route, security, config lint, the import boundary, the rankpi integration (`test_rankpi_integration.py`) |
-| `tests/integration/` | real SQLite and MLflow end to end; PostgreSQL, Docker sandbox and compose (these skip themselves when the infrastructure is absent) |
-| `src/oran_adapt/conformance/` | one suite per port; every adapter must pass its port's suite |
+| [`tests/unit/`](tests/unit/) | each module, the gate, the state machine, every route, security, config lint, the import boundary, the rankpi integration ([`test_rankpi_integration.py`](tests/unit/test_rankpi_integration.py)) |
+| [`tests/integration/`](tests/integration/) | real SQLite and MLflow end to end; PostgreSQL, Docker sandbox and compose (these skip themselves when the infrastructure is absent) |
+| [`src/oran_adapt/conformance/`](src/oran_adapt/conformance/) | one suite per port; every adapter must pass its port's suite |
 
 Markers: `smoke` is the fast tier, unmarked tests form the gate tier, and `heavy` (cluster,
 large data, soak) is excluded by default via `addopts = -m "not heavy"`.
@@ -370,13 +393,13 @@ large data, soak) is excluded by default via `addopts = -m "not heavy"`.
 
 | Read | For |
 |---|---|
-| `RUN.md` | the short copy-paste run guide |
-| `docs/MANUAL.md` | full operator reference: endpoints, settings, troubleshooting |
-| `docs/DEMO_MANUAL.md` | the demo's output, stage by stage |
-| `docs/DEPLOYMENT.md`, `docs/integration-guide.md` | compose, Helm, wiring a real stack |
-| `docs/integration/rankpi.md` | the OAI RAN `rankpi` database integration |
-| `docs/LIMITATIONS.md`, `docs/PRODUCTION-READINESS.md` | what is and is not verified |
-| `docs/adr/` | architecture decision records |
+| [`RUN.md`](RUN.md) | the short copy-paste run guide |
+| [`docs/MANUAL.md`](docs/MANUAL.md) | full operator reference: endpoints, settings, troubleshooting |
+| [`docs/DEMO_MANUAL.md`](docs/DEMO_MANUAL.md) | the demo's output, stage by stage |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`docs/integration-guide.md`](docs/integration-guide.md) | compose, Helm, wiring a real stack |
+| [`docs/integration/rankpi.md`](docs/integration/rankpi.md) | the OAI RAN `rankpi` database integration |
+| [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md), [`docs/PRODUCTION-READINESS.md`](docs/PRODUCTION-READINESS.md) | what is and is not verified |
+| [`docs/adr/`](docs/adr/) | architecture decision records |
 
 ---
 
@@ -401,4 +424,4 @@ large data, soak) is excluded by default via `addopts = -m "not heavy"`.
 - Docker and Kubernetes run in CI only; the development laptop has neither.
 - The demo and walkthrough data are synthetic KPIs from fixed seeds, not an operator trace.
 
-`docs/LIMITATIONS.md` has the full, current list.
+[`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) has the full, current list.
