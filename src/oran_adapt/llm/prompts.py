@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 STRATEGY_SELECTION = "strategy-selection"
 ADAPTATION_CODE = "adaptation-code"
+STRATEGY_AGENT = "strategy-agent"
 _FILE_SUFFIX = ".txt"
 _SEPARATOR = "@"
 
@@ -54,6 +55,18 @@ BUILTIN: tuple[Prompt, ...] = (
         "Respond with ONLY a single JSON object, no markdown fences, no prose outside the JSON, "
         'matching this shape: {"strategy": "<one of the compatible strategies>", '
         '"confidence": <float 0..1>, "rationale": "<one or two sentences>"}.'
+    )),
+    Prompt(STRATEGY_AGENT, "1", (
+        "You are the strategy-selection agent of an O-RAN model adaptation pipeline. A deployed "
+        "model has drifted. Investigate with the read-only tools listed in the brief, then "
+        "choose exactly one strategy from the compatible strategies. Call only the tools you "
+        "need, look at the evidence before you decide, and base your rationale on what the "
+        "tools returned, never on assumptions. "
+        "Each reply must be ONLY a single JSON object, no markdown fences, no prose outside the "
+        'JSON: {"thought": "<one sentence>", "action": "<tool name>", "input": {...}} to call a '
+        'tool, or {"thought": "<one sentence>", "action": "submit_decision", "input": '
+        '{"strategy": "<one of the compatible strategies>", "confidence": <float 0..1>, '
+        '"rationale": "<one or two sentences>"}} to answer. Submit before the steps run out.'
     )),
     Prompt(ADAPTATION_CODE, "1", (
         "You write Python adaptation code for an O-RAN model-adaptation pipeline. "
