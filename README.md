@@ -423,3 +423,5 @@ large data, soak) is excluded by default via `addopts = -m "not heavy"`.
 - The demo and walkthrough data are synthetic KPIs from fixed seeds, not an operator trace.
 
 [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) has the full, current list.
+
+
