@@ -83,3 +83,6 @@ class CandidateModel(BaseModel):
     # the artifact cannot support natively runs as FULL_RETRAINING), and why.
     applied_strategy: Strategy | None = None
     adaptation_note: str = ""
+    # LLM-generated candidates: each code generation attempt, its outcome and, for a failed
+    # one, the stage and error the LLM was shown before it wrote the next (llm_adapter).
+    generation_attempts: list[dict] = Field(default_factory=list)

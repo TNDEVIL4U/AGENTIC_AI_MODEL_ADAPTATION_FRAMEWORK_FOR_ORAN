@@ -307,6 +307,10 @@ class Settings(BaseSettings):
     sandbox_backend: Literal["docker", "subprocess"] = "subprocess"
     sandbox_timeout_s: int = Field(120, gt=0)
     sandbox_memory_mb: int = Field(1024, gt=63)
+    # LLM adaptation code: how many write -> check -> run -> fix attempts it gets. Above 1, code
+    # the security scan rejects or that fails in the sandbox goes back to the LLM with the error
+    # to be fixed (adaptation.llm_adapter); 1 keeps the single attempt.
+    adaptation_agent_max_attempts: int = Field(1, ge=1, le=10)
     # Required with SANDBOX_BACKEND=docker, and pinned by digest (image@sha256:...): a mutable
     # tag could change the code that runs LLM-written adaptations without a config change.
     sandbox_docker_image: str | None = None
@@ -463,6 +467,11 @@ class Settings(BaseSettings):
     decision_memory_copies: int = Field(3, ge=1)
     # Confidence reported for a rule-based decision that carries no score of its own.
     decision_default_confidence: float = Field(0.5, ge=0, le=1)
+    # With the LLM on, DECISION_AGENT_ENABLED replaces the single strategy-selection prompt with
+    # the agent loop (decision.agent): the LLM calls read-only tools over the evidence before it
+    # submits, in at most DECISION_AGENT_MAX_STEPS LLM calls per decision.
+    decision_agent_enabled: bool = False
+    decision_agent_max_steps: int = Field(6, ge=1, le=20)
 
     # Member 4 (validation). A candidate needs at least validation_min_rows rows of held-out
     # data to be scored at all. The hold-out is the newest validation_holdout_fraction of the

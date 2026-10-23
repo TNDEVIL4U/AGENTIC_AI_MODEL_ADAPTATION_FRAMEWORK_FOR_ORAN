@@ -1,5 +1,8 @@
 """Member 2 - decision engine entry point: hard constraints -> LLM (if configured) -> fallback.
 
+The LLM step is one strategy-selection prompt, or with DECISION_AGENT_ENABLED the agent loop of
+decision.agent, which calls read-only tools over the evidence before it submits.
+
 This is the single call the orchestrator (Phase 9) makes into Member 2, given the DecisionPackage
 Member 1 produced. It never invents evidence and it never lets an LLM choose outside what the hard
 constraints allow.
@@ -10,6 +13,7 @@ from __future__ import annotations
 from oran_adapt.analysis.schemas import DecisionPackage
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy
+from oran_adapt.decision.agent import run_agent
 from oran_adapt.decision.constraints import ConstraintResult, evaluate_constraints
 from oran_adapt.decision.fallback import select_strategy_fallback
 from oran_adapt.decision.llm_selector import select_strategy_checked
@@ -86,10 +90,17 @@ def _select(
     # Whether the LLM was consulted, with which prompt, and why its answer was not used.
     llm: dict = {"used": False, "fallback_reason": calls.FALLBACK_DISABLED}
     if llm_client is not None:
-        llm_choice, reason, prompt = select_strategy_checked(
-            llm_client, package, compatible, settings
-        )
-        llm = {**prompt.stamp(), "used": llm_choice is not None, "fallback_reason": reason}
+        if settings.decision_agent_enabled:
+            outcome = run_agent(llm_client, package, constraint_result, settings)
+            llm_choice, reason, prompt = outcome.choice, outcome.fallback_reason, outcome.prompt
+            agent: dict = {"mode": "agent", "steps": outcome.steps, "trace": outcome.trace}
+        else:
+            llm_choice, reason, prompt = select_strategy_checked(
+                llm_client, package, compatible, settings
+            )
+            agent = {"mode": "single"}
+        llm = {**prompt.stamp(), **agent, "used": llm_choice is not None,
+               "fallback_reason": reason}
         if llm_choice is not None:
             # The LLM cannot be surer than the evidence allows; its own figure is kept.
             confidence = llm_choice.confidence
