@@ -307,6 +307,10 @@ class Settings(BaseSettings):
     sandbox_backend: Literal["docker", "subprocess"] = "subprocess"
     sandbox_timeout_s: int = Field(120, gt=0)
     sandbox_memory_mb: int = Field(1024, gt=63)
+    # LLM adaptation code: how many write -> check -> run -> fix attempts it gets. Above 1, code
+    # the security scan rejects or that fails in the sandbox goes back to the LLM with the error
+    # to be fixed (adaptation.llm_adapter); 1 keeps the single attempt.
+    adaptation_agent_max_attempts: int = Field(1, ge=1, le=10)
     # Required with SANDBOX_BACKEND=docker, and pinned by digest (image@sha256:...): a mutable
     # tag could change the code that runs LLM-written adaptations without a config change.
     sandbox_docker_image: str | None = None
