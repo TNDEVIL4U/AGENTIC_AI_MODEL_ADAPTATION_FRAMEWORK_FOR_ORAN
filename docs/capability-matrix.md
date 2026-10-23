@@ -26,7 +26,7 @@ edit by hand: change the adapter's descriptor and regenerate.
 | [`job_executor`](#job-executor) | `JOB_EXECUTION_MODE` | `process` | `process`, `thread` |
 | [`job_queue`](#job-queue) | `JOB_QUEUE_BACKEND` | `database` | `celery`, `database`, `inline`, `kubernetes`, `rq` |
 | [`notification`](#notification) | `NOTIFICATION_BACKEND` | `log` | `email`, `kafka`, `log`, `nats`, `pagerduty`, `pubsub`, `slack`, `sns`, `sqs`, `webhook` |
-| [`llm`](#llm) | `LLM_PROVIDER` | `none` | `anthropic`, `gemini`, `openai-compatible` |
+| [`llm`](#llm) | `LLM_PROVIDER` | `gemini` | `anthropic`, `gemini`, `openai-compatible` |
 | [`rollout_metrics`](#rollout-metrics) | `ROLLOUT_METRICS_BACKEND` | `api` | `api`, `prometheus`, `rankpi` |
 | [`auth`](#auth) | `AUTH_BACKEND` | `api-key` | `api-key`, `gateway`, `mtls`, `oidc` |
 | [`policy`](#policy) | `POLICY_BACKEND` | `static-rbac` | `opa`, `static-rbac` |

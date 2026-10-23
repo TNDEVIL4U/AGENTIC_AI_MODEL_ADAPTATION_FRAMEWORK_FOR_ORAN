@@ -31,7 +31,7 @@ Copy the example environment file and fill in real values if you need them:
 cp .env.example .env
 ```
 
-Every setting has a safe local default except LLM keys (only needed for the LLM-fallback path).
+Every setting has a safe local default. The LLM is on by default with Gemini; set `GEMINI_API_KEY` to use it (without a key the rules decide and nothing is sent).
 See §7 for the full variable reference.
 
 ---
@@ -354,9 +354,10 @@ server together with its uvicorn worker. Set
 | `MLFLOW_TRACKING_URI` | `sqlite:///./data/mlflow.db` | MLflow tracking + registry store |
 | `MLFLOW_REGISTRY_URI` | unset (falls back to tracking URI) | Only needed if registry and tracking store diverge |
 | `ARTIFACT_WORKDIR` | `./data/artifacts` | Scratch dir for training jobs' working files |
-| `LLM_PROVIDER` | `none` | `anthropic` \| `gemini` \| `none` |
-| `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | unset | Required when `LLM_PROVIDER` selects that provider |
-| `ANTHROPIC_MODEL` / `GEMINI_MODEL` | none; required with that provider | Model id used for LLM calls |
+| `LLM_ENABLED` | `true` | `false` switches the LLM off |
+| `LLM_PROVIDER` | `gemini` | `gemini` \| `anthropic` \| `openai-compatible` \| `none` |
+| `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | unset | The selected provider's key; without it the LLM is skipped and the rules decide |
+| `ANTHROPIC_MODEL` / `GEMINI_MODEL` | none / `gemini-3.8-flash` | Model id used for LLM calls (required with Anthropic) |
 | `LLM_TIMEOUT_S` | `60` | Timeout for LLM calls |
 | `SANDBOX_BACKEND` | `subprocess` | `subprocess` (restricted, resource-limited) \| `docker` (network-isolated container) |
 | `SANDBOX_TIMEOUT_S` / `SANDBOX_MEMORY_MB` | `120` / `1024` | Limits on LLM-generated adaptation code |

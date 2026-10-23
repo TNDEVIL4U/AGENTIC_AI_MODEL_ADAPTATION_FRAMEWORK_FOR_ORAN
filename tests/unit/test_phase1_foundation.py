@@ -116,14 +116,22 @@ def test_missing_model_raises_not_found(settings) -> None:
 
 
 # ---- config / logging / schemas ------------------------------------------------------------
-def test_settings_reject_provider_without_key() -> None:
-    for provider in ("anthropic", "gemini"):
-        with pytest.raises(ConfigurationError) as exc:
-            Settings(_env_file=None, llm_enabled=True, llm_provider=provider)
-        assert exc.value.context["key"] == f"{provider.upper()}_API_KEY"
-        assert exc.value.context["selected_by"] == "LLM_PROVIDER"
-        # LLM_ENABLED=false (the default) selects no provider, so no key is needed.
-        assert Settings(_env_file=None, llm_provider=provider).llm_enabled is False
+def test_a_provider_without_its_key_starts_and_takes_the_deterministic_path() -> None:
+    from oran_adapt.bootstrap import build_llm
+
+    # The LLM is on by default (Gemini); a missing key is not a startup error.
+    settings = Settings(_env_file=None)
+    assert settings.llm_enabled is True and settings.llm_provider == "gemini"
+    assert build_llm(settings) is None
+    anthropic = Settings(_env_file=None, llm_provider="anthropic", anthropic_model="m")
+    assert build_llm(anthropic) is None
+    # A missing model id is still refused: it is not a secret, and it has no default there.
+    with pytest.raises(ConfigurationError) as exc:
+        Settings(_env_file=None, llm_provider="anthropic")
+    assert exc.value.context["key"] == "ANTHROPIC_MODEL"
+    assert exc.value.context["selected_by"] == "LLM_PROVIDER"
+    assert Settings(_env_file=None, llm_enabled=False, llm_provider="anthropic").llm_enabled \
+        is False
     assert Settings(_env_file=None, llm_provider="none").llm_provider == "none"
 
 

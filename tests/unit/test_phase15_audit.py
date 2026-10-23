@@ -71,7 +71,7 @@ def test_kafka_consumer_is_not_built_without_its_keys(missing) -> None:
 
 
 @pytest.mark.smoke
-@pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+@pytest.mark.parametrize("provider", ["anthropic"])
 def test_an_llm_provider_requires_its_model_id(provider) -> None:
     keys = {"llm_enabled": True, "llm_provider": provider, f"{provider}_api_key": "k"}
     with pytest.raises(REFUSED, match=f"{provider.upper()}_MODEL"):
@@ -83,9 +83,11 @@ def test_an_llm_provider_requires_its_model_id(provider) -> None:
 @pytest.mark.smoke
 def test_no_model_id_topic_group_or_image_has_a_default() -> None:
     fields = Settings.model_fields
-    for key in ("anthropic_model", "gemini_model", "sandbox_docker_image", "cdc_kafka_topic",
+    for key in ("anthropic_model", "sandbox_docker_image", "cdc_kafka_topic",
                 "cdc_consumer_group"):
         assert fields[key].default is None, key
+    # Gemini is the enabled default provider, so it ships with a model id (GEMINI_MODEL).
+    assert fields["gemini_model"].default
 
 
 def _pins(text: str) -> dict[str, str]:

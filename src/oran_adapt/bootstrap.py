@@ -11,17 +11,21 @@ and a span per call. ``configure_tracing`` installs the TRACING_EXPORTER span ex
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from oran_adapt import plugins
 from oran_adapt.core import observed
 from oran_adapt.core.config import selected_adapters
+from oran_adapt.core.errors import LlmUnavailableError
 from oran_adapt.datastore.access import DataAccess
 from oran_adapt.llm.client import InstrumentedLlmClient
 from oran_adapt.llm.guard import GuardedLlmClient
 from oran_adapt.registry.deployment import Deployer
 from oran_adapt.registry.handlers import ModelHandlers
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from oran_adapt.core.config import Settings
@@ -129,14 +133,23 @@ def build_artifact_store(settings: Settings) -> ArtifactStorePort:
 
 
 def build_llm(settings: Settings) -> LLMPort | None:
-    """None means "no LLM" (LLM_ENABLED=false, the default, or LLM_PROVIDER=none): callers keep
-    a deterministic path for that case rather than treating it as an error, and nothing is sent
-    anywhere. Otherwise the provider comes wrapped in the guard (caps, retries, breaker)."""
+    """None means "no LLM": LLM_ENABLED=false, LLM_PROVIDER=none, or the provider (Gemini by
+    default) has no API key configured. Callers keep a deterministic path for that case rather
+    than treating it as an error, and nothing is sent anywhere. Otherwise the provider comes
+    wrapped in the guard (caps, retries, breaker)."""
     if not selected_adapters(settings, "llm_provider"):
         return None
     provider = settings.llm_provider
+    try:
+        adapter = _make("llm", settings, "llm_provider")
+    except LlmUnavailableError as exc:
+        logger.warning(
+            "LLM enabled but not usable; decisions and adaptation take the deterministic path",
+            extra={"provider": provider, "reason": str(exc)},
+        )
+        return None
     return GuardedLlmClient.from_settings(
-        InstrumentedLlmClient(_make("llm", settings, "llm_provider"), provider), provider, settings
+        InstrumentedLlmClient(adapter, provider), provider, settings
     )
 
 

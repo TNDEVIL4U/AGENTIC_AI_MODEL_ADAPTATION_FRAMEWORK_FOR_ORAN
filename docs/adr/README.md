@@ -26,7 +26,7 @@ record that says which one it replaces; records are not rewritten.
 | [0102-default-deployment-backend.md](0102-default-deployment-backend.md) | `DEPLOYMENT_BACKEND` | `registry-alias` | `bentoml`, `gitops`, `k8s`, `kserve`, `sagemaker`, `seldon`, `triton`, `vertex`, `webhook` |
 | [0103-default-model-format.md](0103-default-model-format.md) | `MODEL_FORMAT` | `mlflow-flavors` | `native` |
 | [0104-default-artifact-store-backend.md](0104-default-artifact-store-backend.md) | `ARTIFACT_STORE_BACKEND` | `filesystem` | `fsspec` |
-| [0105-default-llm-provider.md](0105-default-llm-provider.md) | `LLM_PROVIDER` | `none` | `anthropic`, `gemini`, `openai-compatible` |
+| [0105-default-llm-provider.md](0105-default-llm-provider.md) | `LLM_PROVIDER` | `gemini` (on by default) | `anthropic`, `openai-compatible`, `none` |
 | [0106-default-job-execution-mode.md](0106-default-job-execution-mode.md) | `JOB_EXECUTION_MODE` | `process` | `thread` |
 | [0107-default-job-queue-backend.md](0107-default-job-queue-backend.md) | `JOB_QUEUE_BACKEND` | `database` | `celery`, `inline`, `kubernetes`, `rq` |
 | [0108-default-cdc-mode.md](0108-default-cdc-mode.md) | `CDC_MODE` | `disabled` | `kafka`, `polling` |

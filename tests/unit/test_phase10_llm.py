@@ -108,11 +108,14 @@ def _ask(client) -> str:
 
 # ---- off by default ----------------------------------------------------------------------------
 @pytest.mark.smoke
-def test_llm_is_off_by_default_and_build_llm_returns_none() -> None:
-    settings = Settings(_env_file=None, llm_provider="openai-compatible",
-                        llm_openai_base_url="https://llm.example.com/v1", llm_openai_model="m")
-    assert Settings(_env_file=None).llm_enabled is False
-    assert build_llm(settings) is None  # a provider is named, but LLM_ENABLED is off
+def test_llm_is_on_by_default_with_gemini_and_without_a_key_build_llm_returns_none() -> None:
+    default = Settings(_env_file=None)
+    assert default.llm_enabled is True and default.llm_provider == "gemini"
+    assert default.gemini_model
+    assert build_llm(default) is None  # no GEMINI_API_KEY: the deterministic path, no egress
+    off = Settings(_env_file=None, llm_enabled=False, llm_provider="openai-compatible",
+                   llm_openai_base_url="https://llm.example.com/v1", llm_openai_model="m")
+    assert build_llm(off) is None  # a provider is named, but LLM_ENABLED is off
 
 
 @pytest.mark.smoke

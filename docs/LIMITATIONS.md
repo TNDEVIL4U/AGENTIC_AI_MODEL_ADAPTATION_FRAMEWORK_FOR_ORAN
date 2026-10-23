@@ -68,7 +68,7 @@ to a canary.
   ([runbooks/OranAdaptDeliveryFailures.md](runbooks/OranAdaptDeliveryFailures.md)).
 - **Migrations are expand-only.** Columns and tables that are no longer used are left in place
   until a later, separately planned contract migration.
-- **The LLM is optional and fenced.** It is off by default, and a failure never fails a job.
+- **The LLM is on by default (Gemini) and fenced.** Without `GEMINI_API_KEY` it is skipped, and a failure never fails a job.
   Its circuit breaker is kept per provider **per process**, so each replica and worker opens
   its own ([adapters/llm.md](adapters/llm.md)).
 - **Triton needs a shared model repository.** The framework stages artifacts into a directory
