@@ -1,10 +1,11 @@
-"""Member 1 - analysis engine entry point: retrieval -> timestamp merge -> comparison -> reuse
--> package.
+"""Member 1 - analysis engine entry point: retrieval -> timestamp merge -> comparison ->
+package.
 
-This is the single call the orchestrator (Phase 9) makes into Member 1. It either concludes the
-job needs no action (REUSE), hands a fully-formed DecisionPackage to Member 2 (PACKAGED), or
-reports that there isn't enough data to say anything yet (INSUFFICIENT_DATA). It never decides a
-strategy itself - that is Member 2's job.
+This is the single call the orchestrator (Phase 9) makes into Member 1. A drift event that the
+caller reports is acted on: the comparison statistics are packaged as severity evidence for the
+Similar Model Exchange and the Decision Engine (PACKAGED). The job needs no action only when the
+caller itself reports no drift (REUSE), and stops when there is not enough data to compare
+(INSUFFICIENT_DATA). It never decides a strategy itself - that is Member 2's job.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from sqlalchemy.orm import Session
 from oran_adapt.analysis.comparison import compare_segments
 from oran_adapt.analysis.merge import timestamp_merge
 from oran_adapt.analysis.retrieval import DataSlice, retrieve_context
-from oran_adapt.analysis.reuse import assess_reuse
 from oran_adapt.analysis.schemas import (
     AnalysisResult,
     DataVersionRef,
@@ -72,22 +72,15 @@ def analyze(
 
     merged = timestamp_merge(context.historical, context.drifted)
     comparison = compare_segments(merged)
-    assessment = assess_reuse(
-        event,
-        comparison,
-        psi_threshold=settings.analysis_psi_reuse_threshold,
-        ks_pvalue_threshold=settings.analysis_ks_pvalue_reuse_threshold,
-        drift_score_threshold=settings.analysis_drift_score_reuse_threshold,
-        min_psi_rows=settings.analysis_min_psi_rows,
-    )
 
-    if assessment.reuse:
+    if not event.drift_detected:
         return AnalysisResult(
             status="REUSE",
             model_id=event.model_id,
             reuse=True,
-            reason=assessment.reason,
+            reason="caller reported no drift",
         )
+    reason = "drift reported by the caller; statistics passed on as severity evidence"
 
     recent_performance = {p.metric_name: p.value for p in context.recent_performance}
     package = DecisionPackage(
@@ -96,7 +89,7 @@ def analyze(
         framework=context.model.framework,
         task_type=context.model.task_type,
         drift_event=event,
-        reuse_reason=assessment.reason,
+        reuse_reason=reason,
         historical_data=_ref(context.historical),
         drifted_data=_ref(context.drifted),
         feature_shifts=[FeatureShift(**vars(f)) for f in comparison.features],
@@ -117,6 +110,6 @@ def analyze(
         status="PACKAGED",
         model_id=event.model_id,
         reuse=False,
-        reason=assessment.reason,
+        reason=reason,
         decision_package=package,
     )

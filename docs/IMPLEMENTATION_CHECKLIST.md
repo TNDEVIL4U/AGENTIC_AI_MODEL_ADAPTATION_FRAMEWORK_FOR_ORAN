@@ -42,7 +42,7 @@ grepping for markers.
 - [x] Retrieval — `src/oran_adapt/analysis/retrieval.py:129-157`. Real SQLAlchemy `select()` queries against `ModelMetadata`/`DataVersion`/`DataRecord`/`ModelDataAssociation`; raises `ModelNotFoundError` for unknown models, returns `None` slices (not an error) when data is merely missing. **DONE — verified**.
 - [x] Timestamp merge — `src/oran_adapt/analysis/merge.py:26-49`. Real boundary computation (`max` of historical timestamps) and overlap-count detection for late-arriving/clock-skewed drifted rows. **DONE — verified**.
 - [x] Comparison (PSI + KS) — `src/oran_adapt/analysis/comparison.py:55-101`. Genuine math: `scipy.stats.ks_2samp` for the KS statistic/p-value, and a real quantile-binned Population Stability Index (`np.histogram` + `sum((c_frac-b_frac)*log(c_frac/b_frac))`, lines 55-65) — this is the textbook PSI formula, not a placeholder. **DONE — verified**.
-- [x] Reuse decision — `src/oran_adapt/analysis/reuse.py:21-58`. Real threshold logic combining caller-reported `drift_score`, PSI, and KS p-value; conservatively refuses reuse when drift is reported but there's no comparable data. **DONE — verified**.
+- [x] Shift classification — `src/oran_adapt/analysis/comparison.py` (`is_shifted`). PSI and KS p-value describe the shift for the drift summary and decision report; there is no corroboration gate, so every reported drift is packaged. **DONE**.
 - [x] Engine entry point (`analyze()`) — `src/oran_adapt/analysis/engine.py:41-93`. Wires retrieval → merge → comparison → reuse → `DecisionPackage`/`AnalysisResult`, three real statuses (`INSUFFICIENT_DATA`, `REUSE`, `PACKAGED`). **DONE — verified**.
 
 **Phase 2 verdict: DONE — verified.**

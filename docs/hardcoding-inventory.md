@@ -51,7 +51,7 @@ environment- or vendor-specific and needs review; **INFRA** = deployment files.
 | B2 | `core/integrity.py:12` | `_CHUNK = 1 MiB` | – (hash read chunk) | `artifacts.hash_chunk_bytes` |
 | B3 | `adaptation/torch_engine.py:84-85` | `epochs=5, lr=1e-2` | `torch_fine_tune_epochs`, `torch_learning_rate` | remove defaults |
 | B4 | `adaptation/torch_engine.py:119-120` | `epochs=300, lr=1e-2` | `torch_full_retrain_epochs`, `torch_learning_rate` | remove defaults |
-| B5 | `analysis/reuse.py:45` | `min_psi_rows=30` | `analysis_min_psi_rows` | remove default |
+| B5 | `analysis/comparison.py` (`is_shifted`) | `min_psi_rows=30` | `analysis_min_psi_rows` | remove default |
 | B6 | `registry/onboarding.py:83,176` | `live_alias="live"` | `live_alias` | remove default |
 | B7 | `adaptation/llm_adapter.py:73-74` | `sandbox_backend="subprocess"`, `sandbox_docker_image=""` | `sandbox_backend`, `sandbox_docker_image` | remove defaults |
 

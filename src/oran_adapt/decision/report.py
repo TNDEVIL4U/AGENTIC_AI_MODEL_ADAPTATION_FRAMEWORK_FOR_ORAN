@@ -12,7 +12,7 @@ None otherwise.
 from __future__ import annotations
 
 from oran_adapt.adaptation.model_types import supported_frameworks
-from oran_adapt.analysis.reuse import is_shifted
+from oran_adapt.analysis.comparison import is_shifted
 from oran_adapt.analysis.schemas import DecisionPackage, VersionEvaluation
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy

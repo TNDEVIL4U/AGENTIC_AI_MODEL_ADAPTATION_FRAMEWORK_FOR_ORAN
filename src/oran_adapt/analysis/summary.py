@@ -7,9 +7,8 @@ once, how the model has been doing, which version is LIVE, and what adapting it 
 from __future__ import annotations
 
 from oran_adapt.adaptation.model_types import build_model_types, supported_frameworks
-from oran_adapt.analysis.comparison import ComparisonResult
+from oran_adapt.analysis.comparison import ComparisonResult, is_shifted
 from oran_adapt.analysis.merge import MergedSeries
-from oran_adapt.analysis.reuse import is_shifted
 from oran_adapt.analysis.schemas import DriftSummary
 from oran_adapt.core.config import Settings
 from oran_adapt.core.enums import Strategy

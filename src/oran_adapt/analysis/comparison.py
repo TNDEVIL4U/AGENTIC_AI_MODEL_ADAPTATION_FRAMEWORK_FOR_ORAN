@@ -20,6 +20,7 @@ from evidently.metrics import ValueDrift
 from scipy import stats
 
 from oran_adapt.analysis.merge import MergedSeries
+from oran_adapt.analysis.schemas import FeatureShift
 
 _RESERVED_KEYS = {"observed_at", "segment"}
 
@@ -123,3 +124,22 @@ def compare_segments(merged: MergedSeries) -> ComparisonResult:
         result.max_psi = max(f.psi for f in result.features)
         result.min_ks_pvalue = min(f.ks_pvalue for f in result.features)
     return result
+
+
+def is_shifted(
+    feature: FeatureComparison | FeatureShift,
+    *,
+    psi_threshold: float,
+    ks_pvalue_threshold: float,
+    min_psi_rows: int,
+) -> bool:
+    """Classify one feature as shifted, for the MLKTL drift summary and the decision report.
+
+    A feature has shifted when its KS test is significant, or when its PSI crosses the
+    threshold on at least ``min_psi_rows`` rows in both segments. PSI bins a handful of rows
+    into mostly-empty buckets and swings wildly, so on its own, on a small sample, it is
+    noise. This only describes the shift; it never decides whether to act on a report."""
+    if feature.ks_pvalue < ks_pvalue_threshold:
+        return True
+    enough = min(feature.n_historical, feature.n_drifted) >= min_psi_rows
+    return enough and feature.psi >= psi_threshold

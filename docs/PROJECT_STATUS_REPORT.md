@@ -33,7 +33,7 @@ laptop (Docker, the LLM decision call), a few small improvements, and some scope
 | Phase | What it does | Status | How it was verified |
 |---|---|---|---|
 | 1 — Foundation | Settings from `.env`, logging, DB models, Alembic migrations, MLflow client, health/ready endpoints | ✅ Done | Unit tests; `/api/v1/ready` → 200 in today's demo |
-| 2 — Analysis | Loads historical + drifted data, KS test and PSI per feature (Evidently AI), decides "reuse" vs "adapt" | ✅ Done | Unit tests; demo: `kpi-stable-sgd` reused, second cycle detects shift |
+| 2 — Analysis | Loads historical + drifted data, drift statistics per feature (Evidently AI), packages every reported drift for the Decision Engine | ✅ Done | Unit tests; demo: `kpi-stable-sgd` (no drift reported) reused, second cycle detects shift |
 | 3 — Decision | Hard constraints (min rows, framework support, PSI cut-off), LLM strategy choice, rule fallback | 🟡 Partly | Rules and fallback verified; live LLM **decision** call never returned a success (see §4) |
 | 4 — Adaptation: inspection | Detects framework, estimator type, `partial_fit` / warm-start support | ✅ Done | Unit tests |
 | 5 — Adaptation: sklearn/xgboost engines | `partial_fit` fine-tuning, clone-and-refit full retraining | ✅ Done | Unit tests; demo: SGD, Ridge, RandomForest, XGBoost all REGISTERED |
@@ -164,7 +164,6 @@ These are **defaults, not hardcoded** — each can be changed without editing co
 |---|---|---|
 | `ANALYSIS_PSI_REUSE_THRESHOLD` | 0.1 | PSI above this = feature shifted |
 | `ANALYSIS_KS_PVALUE_REUSE_THRESHOLD` | 0.05 | KS p-value below this = feature shifted |
-| `ANALYSIS_DRIFT_SCORE_REUSE_THRESHOLD` | 0.3 | Caller drift score that forces adaptation |
 | `DECISION_MIN_DRIFTED_ROWS` | 10 | Fewer rows → `INSUFFICIENT_INFORMATION` |
 | `DECISION_FULL_RETRAIN_PSI_THRESHOLD` | 0.5 | PSI at/above this rules out fine-tuning |
 | `VALIDATION_MIN_ROWS` | 5 | Minimum rows to validate at all |

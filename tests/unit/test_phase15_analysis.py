@@ -9,10 +9,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from oran_adapt.analysis.comparison import ComparisonResult, FeatureComparison, compare_segments
+from oran_adapt.analysis.comparison import (
+    ComparisonResult,
+    FeatureComparison,
+    compare_segments,
+    is_shifted,
+)
 from oran_adapt.analysis.merge import MergedSeries, timestamp_merge
 from oran_adapt.analysis.retrieval import DataSlice
-from oran_adapt.analysis.reuse import assess_reuse, is_shifted
 from oran_adapt.analysis.schemas import DataVersionRef, DecisionPackage, FeatureShift
 from oran_adapt.analysis.summary import framework_capabilities, summarize_drift
 from oran_adapt.core.config import Settings
@@ -68,14 +72,6 @@ def _settings(**overrides) -> Settings:
 def test_high_psi_on_a_small_sample_without_significance_is_not_a_shift():
     small = _feature(psi=0.9, ks_pvalue=0.3, n=10)
     assert not is_shifted(small, **THRESHOLDS)
-
-    assessment = assess_reuse(
-        DriftEvent(model_id="m", drift_detected=True),
-        _comparison(small),
-        drift_score_threshold=0.3,
-        **THRESHOLDS,
-    )
-    assert assessment.reuse is True
 
 
 def test_high_psi_on_a_sample_large_enough_is_a_shift():
