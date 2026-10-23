@@ -425,13 +425,12 @@ class Settings(BaseSettings):
     job_queue_k8s_class_pods: dict[str, dict[str, Any]] = {}
     job_queue_k8s_ttl_after_finished_s: int = Field(3600, ge=0)
 
-    # Member 1 (analysis) reuse thresholds. A feature is treated as "shifted" once its PSI
-    # crosses analysis_psi_reuse_threshold OR its KS test p-value drops below
-    # analysis_ks_pvalue_reuse_threshold; a caller-supplied drift_score at or above
-    # analysis_drift_score_reuse_threshold forces non-reuse outright.
+    # Member 1 (analysis) shift classification for the drift summary and decision report. A
+    # feature is described as "shifted" once its PSI crosses analysis_psi_reuse_threshold OR its
+    # KS test p-value drops below analysis_ks_pvalue_reuse_threshold. Neither decides whether a
+    # reported drift is acted on: every reported drift is packaged for the Decision Engine.
     analysis_psi_reuse_threshold: float = Field(0.1, ge=0)
     analysis_ks_pvalue_reuse_threshold: float = Field(0.05, gt=0, lt=1)
-    analysis_drift_score_reuse_threshold: float = Field(0.3, ge=0, le=1)
     # PSI alone counts a feature as shifted only with at least this many rows in both segments;
     # below it, only a significant KS test does (PSI on a few rows is noise).
     analysis_min_psi_rows: int = Field(30, ge=2)

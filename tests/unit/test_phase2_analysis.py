@@ -7,11 +7,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from oran_adapt.analysis.comparison import ComparisonResult, FeatureComparison, compare_segments
+from oran_adapt.analysis.comparison import compare_segments
 from oran_adapt.analysis.engine import analyze
 from oran_adapt.analysis.merge import timestamp_merge
 from oran_adapt.analysis.retrieval import DataSlice, retrieve_context
-from oran_adapt.analysis.reuse import assess_reuse
 from oran_adapt.core.enums import AssociationRole, DataKind
 from oran_adapt.core.errors import ModelNotFoundError
 from oran_adapt.core.schemas import DriftEvent
@@ -295,78 +294,6 @@ def test_comparison_ignores_non_numeric_features() -> None:
     assert {f.feature for f in result.features} == {"prb_util"}
 
 
-# ---- reuse ----------------------------------------------------------------------------------
-_THRESHOLDS = {"psi_threshold": 0.1, "ks_pvalue_threshold": 0.05, "drift_score_threshold": 0.3,
-               "min_psi_rows": 30}
-
-
-def test_reuse_true_when_no_drift_detected() -> None:
-    event = DriftEvent(model_id="m", drift_detected=False)
-    assessment = assess_reuse(event, ComparisonResult(), **_THRESHOLDS)
-    assert assessment.reuse is True
-
-
-def test_reuse_false_when_reported_drift_score_high() -> None:
-    event = DriftEvent(model_id="m", drift_detected=True, drift_score=0.9)
-    assessment = assess_reuse(event, ComparisonResult(), **_THRESHOLDS)
-    assert assessment.reuse is False
-    assert "drift_score" in assessment.reason
-
-
-def test_reuse_false_when_drift_reported_with_no_comparable_features() -> None:
-    event = DriftEvent(model_id="m", drift_detected=True)
-    assessment = assess_reuse(event, ComparisonResult(), **_THRESHOLDS)
-    assert assessment.reuse is False
-    assert "no comparable" in assessment.reason
-
-
-def test_reuse_true_when_stats_dont_corroborate_reported_drift() -> None:
-    event = DriftEvent(model_id="m", drift_detected=True)
-    comparison = ComparisonResult(
-        features=[
-            FeatureComparison(
-                feature="prb_util",
-                historical_mean=1.0,
-                drifted_mean=1.01,
-                historical_std=0.1,
-                drifted_std=0.1,
-                ks_statistic=0.05,
-                ks_pvalue=0.9,
-                psi=0.01,
-            )
-        ],
-        max_psi=0.01,
-        min_ks_pvalue=0.9,
-    )
-    assessment = assess_reuse(event, comparison, **_THRESHOLDS)
-    assert assessment.reuse is True
-    assert "did not" not in assessment.reason  # sanity: real reason string, not a stub
-    assert "PSI/KS" in assessment.reason
-
-
-def test_reuse_false_when_stats_confirm_shift() -> None:
-    event = DriftEvent(model_id="m", drift_detected=True)
-    comparison = ComparisonResult(
-        features=[
-            FeatureComparison(
-                feature="prb_util",
-                historical_mean=1.0,
-                drifted_mean=50.0,
-                historical_std=0.1,
-                drifted_std=0.1,
-                ks_statistic=1.0,
-                ks_pvalue=0.0001,
-                psi=2.5,
-            )
-        ],
-        max_psi=2.5,
-        min_ks_pvalue=0.0001,
-    )
-    assessment = assess_reuse(event, comparison, **_THRESHOLDS)
-    assert assessment.reuse is False
-    assert "prb_util" in assessment.reason
-
-
 # ---- end-to-end analyze() ---------------------------------------------------------------------
 def test_analyze_raises_model_not_found(session_factory, migrated_settings) -> None:
     with session_scope(session_factory) as session, pytest.raises(ModelNotFoundError):
@@ -397,7 +324,25 @@ def test_analyze_reuses_when_no_drift_detected(session_factory, migrated_setting
     assert result.decision_package is None
 
 
-def test_analyze_packages_decision_when_drift_confirmed(session_factory, migrated_settings) -> None:
+def test_analyze_packages_reported_drift_even_without_a_statistical_shift(
+    session_factory, migrated_settings
+) -> None:
+    """There is no corroboration gate: a reported drift is always handed on, with the
+    statistics as severity evidence, even when no feature shows a shift."""
+    _seed(
+        session_factory,
+        historical_values=[float(i) for i in range(30)],
+        drifted_values=[float(i) for i in range(30)],
+    )
+    with session_scope(session_factory) as session:
+        event = DriftEvent(model_id="ran-kpi-v1", drift_detected=True)
+        result = analyze(session, event, migrated_settings)
+    assert result.status == "PACKAGED"
+    assert result.reuse is False
+    assert result.decision_package is not None
+
+
+def test_analyze_packages_decision_when_drift_reported(session_factory, migrated_settings) -> None:
     _seed(
         session_factory,
         historical_values=[float(i) for i in range(30)],

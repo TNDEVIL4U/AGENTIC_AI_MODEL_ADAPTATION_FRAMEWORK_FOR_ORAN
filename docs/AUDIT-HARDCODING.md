@@ -52,7 +52,7 @@ repository root.
 | B2 | `_CHUNK = 1 MiB` | `src/oran_adapt/core/integrity.py` (`ArtifactPolicy`) | `ARTIFACT_HASH_CHUNK_BYTES` | closed |
 | B3 | `epochs=5, lr=1e-2` (fine-tune) | `src/oran_adapt/adaptation/torch_engine.py` (required arguments, from `TorchBudget`) | `TORCH_FINE_TUNE_EPOCHS`, `TORCH_LEARNING_RATE` | closed |
 | B4 | `epochs=300, lr=1e-2` (full retrain) | `src/oran_adapt/adaptation/torch_engine.py` (required arguments, from `TorchBudget`) | `TORCH_FULL_RETRAIN_EPOCHS`, `TORCH_LEARNING_RATE` | closed |
-| B5 | `min_psi_rows=30` | `src/oran_adapt/analysis/reuse.py` (a required argument) | `ANALYSIS_MIN_PSI_ROWS` | closed |
+| B5 | `min_psi_rows=30` | `src/oran_adapt/analysis/comparison.py` (a required argument) | `ANALYSIS_MIN_PSI_ROWS` | closed |
 | B6 | `live_alias="live"` | `src/oran_adapt/registry/onboarding.py` (a required argument) | `LIVE_ALIAS` | closed |
 | B7 | `sandbox_backend="subprocess"`, `sandbox_docker_image=""` | `src/oran_adapt/adaptation/llm_adapter.py` (required arguments) | `SANDBOX_BACKEND`, `SANDBOX_DOCKER_IMAGE` | closed |
 

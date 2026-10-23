@@ -8,7 +8,7 @@ A deployed O-RAN prediction model, such as cell throughput from PRB utilisation,
 RSRP, degrades as the network changes. When the framework receives a drift or degradation
 event for that model, it runs these steps:
 
-1. It confirms the model has really degraded.
+1. It validates the report and analyses the drift (PSI per feature) as severity evidence.
 2. It checks whether an already-registered version fits the new data.
 3. Otherwise it decides how to adapt the model: fine-tune, fully retrain, or LLM-generated
    code run in a sandbox.
@@ -28,7 +28,7 @@ project. **Part B** explains how the files link together.
 
 | Name | Roll No. | Individual contribution | Code |
 |---|---|---|---|
-| **Tamilselvan R** | 2024503515 | Model Intake Agent and Independent Verification (KS-test confirmation) | [`api/routes_adaptation.py`](src/oran_adapt/api/routes_adaptation.py) · [`orchestrator/jobs.py`](src/oran_adapt/orchestrator/jobs.py) · [`registry/onboarding.py`](src/oran_adapt/registry/onboarding.py) · [`analysis/engine.py`](src/oran_adapt/analysis/engine.py) · [`analysis/retrieval.py`](src/oran_adapt/analysis/retrieval.py) · [`analysis/merge.py`](src/oran_adapt/analysis/merge.py) · [`analysis/comparison.py`](src/oran_adapt/analysis/comparison.py) · [`analysis/reuse.py`](src/oran_adapt/analysis/reuse.py) |
+| **Tamilselvan R** | 2024503515 | Model Intake Agent | [`api/routes_adaptation.py`](src/oran_adapt/api/routes_adaptation.py) · [`orchestrator/jobs.py`](src/oran_adapt/orchestrator/jobs.py) · [`registry/onboarding.py`](src/oran_adapt/registry/onboarding.py) · [`config/mappers/`](config/mappers/) |
 | **Nitesh N D** | 2024503529 | Similar Model Exchange and the historical dataset registry (PostgreSQL) | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py) · [`analysis/reuse_decision.py`](src/oran_adapt/analysis/reuse_decision.py) · [`datastore/versioning.py`](src/oran_adapt/datastore/versioning.py) · [`datastore/access.py`](src/oran_adapt/datastore/access.py) · [`datastore/current_data.py`](src/oran_adapt/datastore/current_data.py) · [`db/models.py`](src/oran_adapt/db/models.py) · [`migrations/`](migrations/) · [`adapters/datasets_sql.py`](src/oran_adapt/adapters/datasets_sql.py) |
 | **Ramanujam P** | 2024503525 | Agentic AI Decision Engine and the MLKTL Scenario Module (PSI severity) | [`decision/engine.py`](src/oran_adapt/decision/engine.py) · [`decision/constraints.py`](src/oran_adapt/decision/constraints.py) · [`decision/llm_selector.py`](src/oran_adapt/decision/llm_selector.py) · [`decision/fallback.py`](src/oran_adapt/decision/fallback.py) · [`decision/report.py`](src/oran_adapt/decision/report.py) · [`analysis/summary.py`](src/oran_adapt/analysis/summary.py) · [`llm/client.py`](src/oran_adapt/llm/client.py) |
 | **Bhuvaneshwar T S** | 2024503565 | Validation & Registration Agent, deployment gate, experiments and evaluation | [`validation/engine.py`](src/oran_adapt/validation/engine.py) · [`validation/gate.py`](src/oran_adapt/validation/gate.py) · [`registry/publishing.py`](src/oran_adapt/registry/publishing.py) · [`registry/promotion.py`](src/oran_adapt/registry/promotion.py) · [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) · [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) · [`scripts/demo.py`](scripts/demo.py) · [`scripts/demo_models.py`](scripts/demo_models.py) · [`scripts/walkthrough.py`](scripts/walkthrough.py) |
@@ -51,8 +51,8 @@ Every path in this README is a link to the file in the repository.
 
 | | |
 |---|---|
-| Application code | 186 Python modules, about 33,000 lines, under [`src/oran_adapt/`](src/oran_adapt/) |
-| Tests | 951 collected: 904 in the default gate tier, 336 in the fast `smoke` tier, 47 in the `heavy` tier (CI only) |
+| Application code | 186 Python modules, about 33,500 lines, under [`src/oran_adapt/`](src/oran_adapt/) |
+| Tests | 962 collected: 915 in the default gate tier, 347 in the fast `smoke` tier, 47 in the `heavy` tier (CI only) |
 | REST API | 39 endpoints under `/api/v1` |
 | CLI | `oran-adapt` with 11 command groups: `db`, `data`, `model`, `event`, `auth`, `config`, `jobs`, `rollout`, `worker`, `cdc`, `notifications` |
 | Pluggable adapters | registries, deployment, model types, LLM providers, queues, auth, notifications, data sources; one entry-point group per port in [`pyproject.toml`](pyproject.toml) |
@@ -146,7 +146,7 @@ Then:
 | 1 | onboarding |
 | 2 | historical data |
 | 3 | drifted data |
-| 4 | drift detection (PSI, KS) |
+| 4 | drift statistics |
 | 5 | reuse analysis |
 | 6 | strategy decision |
 | 7 | adaptation |
@@ -241,7 +241,7 @@ AGENTIC_AI_MODEL_ADAPTATION_FRAMEWORK_FOR_ORAN/
 ├── src/oran_adapt/            application code
 │   ├── api/                   FastAPI app (app.py, main.py), 7 route modules, auth, rate limits
 │   ├── orchestrator/          pipeline.py (Algorithm 1), jobs.py, worker.py, locks.py   [shared · Tamilselvan: jobs.py intake]
-│   ├── analysis/              drift statistics, version scoring, reuse decision          [Tamilselvan · Nitesh · Ramanujam]
+│   ├── analysis/              drift statistics, version scoring, reuse decision          [shared · Nitesh · Ramanujam]
 │   ├── decision/              constraints, LLM selector, fallback, decision report       [Ramanujam]
 │   ├── adaptation/            inspector, capability, fine-tune / retrain / torch engines,
 │   │                          leakage checks, llm_adapter                                 [shared]
@@ -262,7 +262,7 @@ AGENTIC_AI_MODEL_ADAPTATION_FRAMEWORK_FOR_ORAN/
 │   ├── bootstrap.py           composition root: reads config, resolves adapters, wires the app
 │   ├── plugins.py             entry-point discovery for adapters
 │   └── cli.py                 the oran-adapt command
-├── tests/                     unit/, integration/, conftest.py, skip_policy.py (951 tests)
+├── tests/                     unit/, integration/, conftest.py, skip_policy.py (962 tests)
 ├── scripts/                   walkthrough.py, demo.py, demo_models.py, verify.sh, audits, CI helpers
 ├── config/                    examples/ (10 reference stacks), mappers/ (alert formats), policies/ (gate, delivery)
 ├── migrations/                Alembic migrations (expand-only)
@@ -311,17 +311,16 @@ pipeline runs unchanged against MLflow, a plain filesystem, SageMaker or Vertex.
 |---|---|---|---|
 | Issue report in | [`api/routes_adaptation.py`](src/oran_adapt/api/routes_adaptation.py), [`config/mappers/`](config/mappers/) | `submit_event`, `submit_mapped_events` (Alertmanager, Evidently and generic-JSON mappers) | Tamilselvan R |
 | 1. Model Intake | [`orchestrator/jobs.py`](src/oran_adapt/orchestrator/jobs.py), [`registry/onboarding.py`](src/oran_adapt/registry/onboarding.py) | idempotency by `event_id`, stale-version check; `onboard_model` | Tamilselvan R |
-| 2. Independent Verification | [`analysis/engine.py`](src/oran_adapt/analysis/engine.py), [`analysis/comparison.py`](src/oran_adapt/analysis/comparison.py), [`analysis/reuse.py`](src/oran_adapt/analysis/reuse.py) | `analyze`: KS test and PSI per feature (Evidently AI); is the reported drift corroborated? | Tamilselvan R |
-| 3. Data Retrieval & Analysis | [`analysis/retrieval.py`](src/oran_adapt/analysis/retrieval.py), [`analysis/merge.py`](src/oran_adapt/analysis/merge.py), [`datastore/access.py`](src/oran_adapt/datastore/access.py) | historical baseline and drifted window, by version or by reference | Tamilselvan R · Nitesh N D |
+| 2. Data Retrieval & Analysis | [`analysis/engine.py`](src/oran_adapt/analysis/engine.py), [`analysis/retrieval.py`](src/oran_adapt/analysis/retrieval.py), [`analysis/merge.py`](src/oran_adapt/analysis/merge.py), [`analysis/comparison.py`](src/oran_adapt/analysis/comparison.py), [`datastore/access.py`](src/oran_adapt/datastore/access.py) | historical baseline and drifted window, by version or by reference; drift statistics per feature as severity evidence | shared · Nitesh N D |
 | Historical dataset registry (PostgreSQL) | [`datastore/versioning.py`](src/oran_adapt/datastore/versioning.py), [`db/models.py`](src/oran_adapt/db/models.py), [`migrations/`](migrations/) | SHA-256 content-hashed versions, parent lineage, model ↔ data links | Nitesh N D |
-| 4. Decision Engine: reuse (Similar Model Exchange) | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py), [`analysis/reuse_decision.py`](src/oran_adapt/analysis/reuse_decision.py) | `evaluate_versions`, `decide_reuse`: promote an earlier version that clearly beats LIVE | Nitesh N D |
-| 4. Decision Engine: adapt | [`decision/engine.py`](src/oran_adapt/decision/engine.py), [`decision/constraints.py`](src/oran_adapt/decision/constraints.py), [`decision/llm_selector.py`](src/oran_adapt/decision/llm_selector.py), [`decision/fallback.py`](src/oran_adapt/decision/fallback.py), [`decision/report.py`](src/oran_adapt/decision/report.py) | `decide`: `FINE_TUNING`, `FULL_RETRAINING`, `ROLLBACK` or `NO_ACTION` | Ramanujam P |
+| 3. Decision Engine: reuse (Similar Model Exchange) | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py), [`analysis/reuse_decision.py`](src/oran_adapt/analysis/reuse_decision.py) | `evaluate_versions`, `decide_reuse`: promote an earlier version that clearly beats LIVE | Nitesh N D |
+| 3. Decision Engine: adapt | [`decision/engine.py`](src/oran_adapt/decision/engine.py), [`decision/constraints.py`](src/oran_adapt/decision/constraints.py), [`decision/llm_selector.py`](src/oran_adapt/decision/llm_selector.py), [`decision/fallback.py`](src/oran_adapt/decision/fallback.py), [`decision/report.py`](src/oran_adapt/decision/report.py) | `decide`: `FINE_TUNING`, `FULL_RETRAINING`, `ROLLBACK` or `NO_ACTION` | Ramanujam P |
 | MLKTL Scenario Module (PSI severity) | [`analysis/summary.py`](src/oran_adapt/analysis/summary.py), [`decision/constraints.py`](src/oran_adapt/decision/constraints.py) | drift magnitude and severity; PSI ≥ 0.5 rules out fine-tuning | Ramanujam P |
-| 5a / 5b. Fine-tune / Retrain | [`adaptation/finetune.py`](src/oran_adapt/adaptation/finetune.py), [`adaptation/retrain.py`](src/oran_adapt/adaptation/retrain.py), [`adaptation/torch_engine.py`](src/oran_adapt/adaptation/torch_engine.py), [`adaptation/model_types.py`](src/oran_adapt/adaptation/model_types.py) | the model type's engine for the chosen strategy (Generic Model Adapters) | shared |
-| 5. Fallback for unknown models | [`adaptation/llm_adapter.py`](src/oran_adapt/adaptation/llm_adapter.py), [`sandbox/security.py`](src/oran_adapt/sandbox/security.py), [`sandbox/runner.py`](src/oran_adapt/sandbox/runner.py) | `adapt_via_llm`: generated code, AST-checked and run isolated | shared |
-| 6. Validate | [`validation/engine.py`](src/oran_adapt/validation/engine.py), [`validation/gate.py`](src/oran_adapt/validation/gate.py) | `validate_candidate`; gate `decide`: deploy only if the 95 % paired-bootstrap interval lies above the margin, plus latency, size and calibration guardrails | Bhuvaneshwar T S |
-| 7. Rollback | [`registry/promotion.py`](src/oran_adapt/registry/promotion.py), [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) | the previous LIVE is kept on rejection; `POST /models/{id}/rollback` | Bhuvaneshwar T S |
-| 8. Register | [`registry/publishing.py`](src/oran_adapt/registry/publishing.py), [`registry/promotion.py`](src/oran_adapt/registry/promotion.py), [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) | `register_candidate`, `promote_version`, `start_rollout`, served-version read-back | Bhuvaneshwar T S |
+| 4a / 4b. Fine-tune / Retrain | [`adaptation/finetune.py`](src/oran_adapt/adaptation/finetune.py), [`adaptation/retrain.py`](src/oran_adapt/adaptation/retrain.py), [`adaptation/torch_engine.py`](src/oran_adapt/adaptation/torch_engine.py), [`adaptation/model_types.py`](src/oran_adapt/adaptation/model_types.py) | the model type's engine for the chosen strategy (Generic Model Adapters) | shared |
+| 4. Fallback for unknown models | [`adaptation/llm_adapter.py`](src/oran_adapt/adaptation/llm_adapter.py), [`sandbox/security.py`](src/oran_adapt/sandbox/security.py), [`sandbox/runner.py`](src/oran_adapt/sandbox/runner.py) | `adapt_via_llm`: generated code, AST-checked and run isolated | shared |
+| 5. Validate | [`validation/engine.py`](src/oran_adapt/validation/engine.py), [`validation/gate.py`](src/oran_adapt/validation/gate.py) | `validate_candidate`; gate `decide`: deploy only if the 95 % paired-bootstrap interval lies above the margin, plus latency, size and calibration guardrails | Bhuvaneshwar T S |
+| 6. Rollback | [`registry/promotion.py`](src/oran_adapt/registry/promotion.py), [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) | the previous LIVE is kept on rejection; `POST /models/{id}/rollback` | Bhuvaneshwar T S |
+| 7. Register | [`registry/publishing.py`](src/oran_adapt/registry/publishing.py), [`registry/promotion.py`](src/oran_adapt/registry/promotion.py), [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) | `register_candidate`, `promote_version`, `start_rollout`, served-version read-back | Bhuvaneshwar T S |
 | Experiments and evaluation | [`scripts/demo.py`](scripts/demo.py), [`scripts/demo_models.py`](scripts/demo_models.py), [`scripts/walkthrough.py`](scripts/walkthrough.py) | 15-stage demo, multi-model demo, clone-to-canary walkthrough | Bhuvaneshwar T S |
 | MLflow registry | [`adapters/registry/mlflow/`](src/oran_adapt/adapters/registry/mlflow/) | versions, artefacts, the `live` alias, tags | — |
 
@@ -333,7 +332,7 @@ pipeline runs unchanged against MLflow, a plain filesystem, SageMaker or Vertex.
 | 2 | [`orchestrator/jobs.py`](src/oran_adapt/orchestrator/jobs.py) | dedupe by `event_id`, create the AdaptationJob, enqueue it | Tamilselvan R |
 | 3 | [`orchestrator/worker.py`](src/oran_adapt/orchestrator/worker.py) | lease the job (or run inline), enforce the deadline | shared |
 | 4 | [`orchestrator/pipeline.py`](src/oran_adapt/orchestrator/pipeline.py) | Algorithm 1 — calls steps 5–14 in order | shared |
-| 5 | [`analysis/engine.py`](src/oran_adapt/analysis/engine.py) | `analyze()`: retrieval, merge, KS + PSI, corroboration | Tamilselvan R |
+| 5 | [`analysis/engine.py`](src/oran_adapt/analysis/engine.py) | `analyze()`: retrieval, merge, drift statistics, DecisionPackage | shared |
 | 6 | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py) | `evaluate_versions()`: score every registered version | Nitesh N D |
 | 7 | [`analysis/reuse_decision.py`](src/oran_adapt/analysis/reuse_decision.py) | `decide_reuse()`: Similar Model Exchange, or hand over | Nitesh N D |
 | 8 | [`decision/engine.py`](src/oran_adapt/decision/engine.py) | `decide()`: constraints → LLM (validated) or fallback | Ramanujam P |
@@ -371,8 +370,7 @@ Key thresholds in [`core/config.py`](src/oran_adapt/core/config.py):
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `analysis_psi_reuse_threshold` | 0.1 | PSI below which the model may be reused |
-| `analysis_ks_pvalue_reuse_threshold` | 0.05 | KS significance |
+| `analysis_psi_reuse_threshold` | 0.1 | PSI at which a feature is described as shifted |
 | `decision_full_retrain_psi_threshold` | 0.5 | PSI at or above which fine-tuning is ruled out |
 | `decision_min_drifted_rows` | 10 | fewer drifted rows than this means no adaptation |
 | `validation_holdout_fraction` | 0.2 | newest share of the data held out for the gate |
