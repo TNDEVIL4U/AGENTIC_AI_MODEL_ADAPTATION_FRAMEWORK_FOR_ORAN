@@ -1,11 +1,20 @@
 # LLM adapters, the guard and prompts
 
-The LLM is **optional**. With `LLM_ENABLED=false` (the default) `bootstrap.build_llm` returns
-`None`, the decision engine picks the strategy by its rules and the adaptation step uses the
-native engines only. Nothing is sent anywhere: `tests/unit/test_phase10_llm.py` runs the whole
-pipeline with every outbound connection and name lookup failing the test.
+The LLM is **on by default**, with Google Gemini (`LLM_ENABLED=true`, `LLM_PROVIDER=gemini`,
+`GEMINI_MODEL=gemini-3.8-flash`). It does two jobs: the decision engine asks it to choose among
+the strategies the hard constraints allow, and the Engine Selection step asks it to write an
+adaptation engine when the model type has no specific engine and the generic engines cannot
+run the strategy (that code is AST-checked by `sandbox/security.py` and run only by
+`sandbox/runner.py`).
 
-Turning it on takes `LLM_ENABLED=true` **and** an adapter in `LLM_PROVIDER`; `LLM_ENABLED=true`
+It needs `GEMINI_API_KEY`. Without the selected provider's key the framework still starts:
+`bootstrap.build_llm` logs a warning and returns `None`, the decision engine picks the
+strategy by its rules and the adaptation step uses the native engines only. Nothing is sent
+anywhere: `tests/unit/test_phase10_llm.py` runs the whole pipeline with every outbound
+connection and name lookup failing the test, and the test suite drops any provider key from
+the environment. A missing model id is still refused at startup.
+
+`LLM_ENABLED=false` (or `LLM_PROVIDER=none`) switches it off; an explicit `LLM_ENABLED=true`
 with `LLM_PROVIDER=none` is refused at startup.
 
 An **LLM adapter** implements `oran_adapt.ports.LLMPort` (`complete(*, system, prompt) -> str`).

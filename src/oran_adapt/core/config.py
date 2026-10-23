@@ -257,11 +257,15 @@ class Settings(BaseSettings):
     registry_tags_checksum: str = Field("artifact.sha256", min_length=1)
     registry_tags_status: str = Field("oran.status", min_length=1)
 
-    # The LLM is off unless LLM_ENABLED is true: every decision and adaptation then takes the
-    # deterministic path and nothing is sent anywhere. LLM_PROVIDER names the adapter
-    # (oran_adapt.llm group) used when it is on.
-    llm_enabled: bool = False
-    llm_provider: str = "none"
+    # The LLM is ON by default, with Google Gemini: the decision engine asks it to choose among
+    # the strategies the hard constraints allow, and the adaptation step asks it to write an
+    # engine when no native engine fits (AST-checked, then run in the sandbox). It needs
+    # GEMINI_API_KEY; without the selected provider's key the framework still starts, logs a
+    # warning and takes the deterministic path (bootstrap.build_llm returns None), so nothing
+    # is sent anywhere. LLM_ENABLED=false switches it off; LLM_PROVIDER names the adapter
+    # (oran_adapt.llm group).
+    llm_enabled: bool = True
+    llm_provider: str = "gemini"
     anthropic_api_key: SecretStr | None = None
     # Model ids have no default: which model a site may use is its decision, and a default
     # id goes stale when the provider retires it. Required with the provider (C4, C5).
@@ -269,7 +273,8 @@ class Settings(BaseSettings):
     # Messages API base URL; unset means the SDK default (api.anthropic.com).
     anthropic_base_url: str | None = None
     gemini_api_key: SecretStr | None = None
-    gemini_model: str | None = None
+    # The enabled default provider ships with a current model id; override with GEMINI_MODEL.
+    gemini_model: str | None = "gemini-3.8-flash"
     # generate_content base URL; unset means the SDK default (generativelanguage.googleapis.com).
     gemini_base_url: str | None = None
     llm_timeout_s: float = Field(60.0, gt=0)
@@ -897,7 +902,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _llm_switch_consistent(self) -> Settings:
-        if self.llm_enabled and self.llm_provider == DISABLED["llm_provider"]:
+        # LLM_ENABLED is true by default; only an explicit LLM_ENABLED=true with
+        # LLM_PROVIDER=none is contradictory. LLM_PROVIDER=none on its own switches it off.
+        if (self.llm_enabled and "llm_enabled" in self.model_fields_set
+                and self.llm_provider == DISABLED["llm_provider"]):
             raise ConfigurationError(
                 "LLM_ENABLED=true requires LLM_PROVIDER to name an LLM adapter",
                 key="LLM_PROVIDER",
@@ -1004,6 +1012,10 @@ class Settings(BaseSettings):
             spec = plugins.resolve(port, name, config_key=selector)
             for key in spec.capability.required_keys:
                 if self._secrets_external and is_secret_field(type(self).model_fields[key]):
+                    continue
+                # A missing LLM API key is not a startup error: the LLM is on by default, and
+                # without its key build_llm() returns None and the pipeline runs on its rules.
+                if selector == "llm_provider" and is_secret_field(type(self).model_fields[key]):
                     continue
                 value = getattr(self, key)
                 if value is None or value == "" or value == [] or value == {}:

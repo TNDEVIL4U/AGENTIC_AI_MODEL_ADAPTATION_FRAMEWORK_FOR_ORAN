@@ -242,7 +242,7 @@ Defaults and assumptions, with the key that changes each:
 
 | Assumption | Why | Key |
 |---|---|---|
-| The LLM is off; nothing is sent anywhere. | The framework must work with egress blocked; the rules decide. | `LLM_ENABLED` |
+| The LLM is on (Gemini) but needs a key; without one nothing is sent anywhere. | The framework must work with egress blocked; the rules decide. | `LLM_ENABLED`, `GEMINI_API_KEY` |
 | No token or cost budget (0); the input cap is 16000 estimated tokens. | A budget depends on the operator's contract; the input cap stops runaway prompts regardless. | `LLM_TOKEN_BUDGET`, `LLM_COST_BUDGET`, `LLM_BUDGET_WINDOW_S`, `LLM_MAX_INPUT_TOKENS` |
 | Prices are 0, so cost is not tracked until set. | Prices change and differ by contract; none is shipped. | `LLM_COST_PER_1K_INPUT_TOKENS`, `LLM_COST_PER_1K_OUTPUT_TOKENS` |
 | Without provider usage counts, tokens are estimated at 4 characters per token (rows flagged `estimated`). | A conservative average for English and code. | `LLM_CHARS_PER_TOKEN` |

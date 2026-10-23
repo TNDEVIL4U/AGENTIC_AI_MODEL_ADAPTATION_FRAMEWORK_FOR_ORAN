@@ -22,7 +22,7 @@ unsupervised rollout, because the integrations below have never run against real
 | Execution | leases, deadlines that kill, cancel, retries, poison quarantine and drain, on the database queue | Celery, RQ or Kubernetes Jobs, if chosen |
 | Validation and delivery | superiority gate with guardrails; shadow, canary, A/B, blue/green and manual strategies; automatic rollback | the rollout metrics source (Prometheus or the serving layer's posts) |
 | Security | deny-by-default authorization over every route, OIDC against a local issuer, SSRF suite, secret-leak scan | the real identity provider, gateway or mTLS, Vault, and the CVE scans (CI) |
-| LLM | off by default; the pipeline runs with egress blocked; the fallbacks and budgets | the live provider, if enabled |
+| LLM | on by default (Gemini); without a key the pipeline runs with egress blocked; the fallbacks and budgets | the live provider with a real key |
 | Packaging | static checks of the Dockerfile, compose file, chart and kustomize tree | image builds, `docker compose up`, `helm lint/template`, a cluster install, upgrade and rollback |
 | Observability | metrics, traces and logs in-process; alert rules and one runbook per alert | OTLP export, the Prometheus rules loaded, dashboards imported |
 

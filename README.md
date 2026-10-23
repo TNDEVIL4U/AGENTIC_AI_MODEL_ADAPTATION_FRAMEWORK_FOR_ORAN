@@ -10,9 +10,12 @@ event for that model, it runs these steps:
 
 1. It validates the report and analyses the drift (PSI per feature) as severity evidence.
 2. It checks whether an already-registered version fits the new data.
-3. Otherwise it decides how to adapt the model: fine-tune, fully retrain, or LLM-generated
-   code run in a sandbox.
-4. It runs that adaptation.
+3. Otherwise the Agentic AI Decision Engine decides how to adapt the model: fine-tune or
+   fully retrain. The LLM (Google Gemini, on by default) chooses among the strategies the hard
+   constraints allow; without a key, or on any invalid answer, the rules decide.
+4. The Engine Selection Agent picks the engine that runs it: the model type's specific
+   engine, else the generic fine-tune / retrain engine, else an engine the LLM writes. That
+   code is checked on its syntax tree (AST) and run only in the sandbox.
 5. It validates the candidate against the live model with a statistical gate.
 6. Only then does it register the candidate in MLflow and deliver it (shadow, canary, A/B,
    manual approval or blue-green), verifying what the serving side actually reports.
@@ -31,7 +34,7 @@ project. **Part B** explains how the files link together.
 | **Tamilselvan R** | 2024503515 | Model Intake Agent | [`api/routes_adaptation.py`](src/oran_adapt/api/routes_adaptation.py) · [`orchestrator/jobs.py`](src/oran_adapt/orchestrator/jobs.py) · [`registry/onboarding.py`](src/oran_adapt/registry/onboarding.py) · [`config/mappers/`](config/mappers/) |
 | **Nitesh N D** | 2024503529 | Similar Model Exchange and the historical dataset registry (PostgreSQL) | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py) · [`analysis/reuse_decision.py`](src/oran_adapt/analysis/reuse_decision.py) · [`datastore/versioning.py`](src/oran_adapt/datastore/versioning.py) · [`datastore/access.py`](src/oran_adapt/datastore/access.py) · [`datastore/current_data.py`](src/oran_adapt/datastore/current_data.py) · [`db/models.py`](src/oran_adapt/db/models.py) · [`migrations/`](migrations/) · [`adapters/datasets_sql.py`](src/oran_adapt/adapters/datasets_sql.py) |
 | **Ramanujam P** | 2024503525 | Agentic AI Decision Engine and the MLKTL Scenario Module (PSI severity) | [`decision/engine.py`](src/oran_adapt/decision/engine.py) · [`decision/constraints.py`](src/oran_adapt/decision/constraints.py) · [`decision/llm_selector.py`](src/oran_adapt/decision/llm_selector.py) · [`decision/fallback.py`](src/oran_adapt/decision/fallback.py) · [`decision/report.py`](src/oran_adapt/decision/report.py) · [`analysis/summary.py`](src/oran_adapt/analysis/summary.py) · [`llm/client.py`](src/oran_adapt/llm/client.py) |
-| **Bhuvaneshwar T S** | 2024503565 | Validation & Registration Agent, deployment gate, experiments and evaluation | [`validation/engine.py`](src/oran_adapt/validation/engine.py) · [`validation/gate.py`](src/oran_adapt/validation/gate.py) · [`registry/publishing.py`](src/oran_adapt/registry/publishing.py) · [`registry/promotion.py`](src/oran_adapt/registry/promotion.py) · [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) · [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) · [`scripts/demo.py`](scripts/demo.py) · [`scripts/demo_models.py`](scripts/demo_models.py) · [`scripts/walkthrough.py`](scripts/walkthrough.py) |
+| **Bhuvaneshwar T S** | 2024503565 | Engine Selection Agent (specific engine → generic adapter → LLM-generated engine, AST-verified and sandboxed), Validation & Registration Agent, deployment gate, experiments and evaluation | [`orchestrator/pipeline.py`](src/oran_adapt/orchestrator/pipeline.py) `_produce_candidate` · [`adaptation/engines.py`](src/oran_adapt/adaptation/engines.py) · [`adaptation/llm_adapter.py`](src/oran_adapt/adaptation/llm_adapter.py) · [`sandbox/security.py`](src/oran_adapt/sandbox/security.py) · [`sandbox/runner.py`](src/oran_adapt/sandbox/runner.py) · [`validation/engine.py`](src/oran_adapt/validation/engine.py) · [`validation/gate.py`](src/oran_adapt/validation/gate.py) · [`registry/publishing.py`](src/oran_adapt/registry/publishing.py) · [`registry/promotion.py`](src/oran_adapt/registry/promotion.py) · [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) · [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) · [`scripts/demo.py`](scripts/demo.py) · [`scripts/demo_models.py`](scripts/demo_models.py) · [`scripts/walkthrough.py`](scripts/walkthrough.py) |
 
 **Shared by the team:**
 
@@ -56,7 +59,7 @@ Every path in this README is a link to the file in the repository.
 | REST API | 39 endpoints under `/api/v1` |
 | CLI | `oran-adapt` with 11 command groups: `db`, `data`, `model`, `event`, `auth`, `config`, `jobs`, `rollout`, `worker`, `cdc`, `notifications` |
 | Pluggable adapters | registries, deployment, model types, LLM providers, queues, auth, notifications, data sources; one entry-point group per port in [`pyproject.toml`](pyproject.toml) |
-| Defaults | SQLite and a local MLflow store, no LLM, shadow delivery. It runs offline with no GPU and no Docker |
+| Defaults | SQLite and a local MLflow store, the LLM on with Google Gemini (set `GEMINI_API_KEY`; without it the framework runs on its rules, offline), shadow delivery. No GPU and no Docker needed |
 
 ---
 
@@ -70,7 +73,7 @@ Every path in this README is a link to the file in the repository.
 | CPU / RAM | 2 cores and 4 GB RAM minimum; 4 cores and 8 GB recommended. No GPU |
 | Disk | 5 GB free, mostly PyTorch |
 | OS | Windows, macOS or Linux |
-| Optional | PostgreSQL 14+ for production; Docker for the compose stack and the hard-limit sandbox; an Anthropic or Gemini key for the optional LLM paths |
+| Optional | PostgreSQL 14+ for production; Docker for the compose stack and the hard-limit sandbox; a Gemini key (`GEMINI_API_KEY`) for the LLM, which is on by default; Anthropic or an OpenAI-compatible server instead |
 
 ## A.2 Install
 
@@ -198,7 +201,7 @@ python -m oran_adapt.cli rollout approve --rollout-id <id> # when DELIVERY_STRAT
 
 Supported model families: scikit-learn, XGBoost, LightGBM, CatBoost, PyTorch (tabular and
 sequence models), Keras, statsmodels forecasters and ONNX. Any other family can use the
-sandboxed LLM path, once `LLM_PROVIDER` is set.
+sandboxed LLM path once `GEMINI_API_KEY` is set (the LLM is on by default).
 
 ## A.7 Container stack and Kubernetes (optional)
 
@@ -244,8 +247,9 @@ AGENTIC_AI_MODEL_ADAPTATION_FRAMEWORK_FOR_ORAN/
 │   ├── analysis/              drift statistics, version scoring, reuse decision          [shared · Nitesh · Ramanujam]
 │   ├── decision/              constraints, LLM selector, fallback, decision report       [Ramanujam]
 │   ├── adaptation/            inspector, capability, fine-tune / retrain / torch engines,
-│   │                          leakage checks, llm_adapter                                 [shared]
-│   ├── sandbox/               AST security scan and isolated runner for generated code    [shared]
+│   │                          leakage checks                                              [shared]
+│   │                          engines.py select_engine, llm_adapter (Engine Selection)    [Bhuvaneshwar]
+│   ├── sandbox/               AST security scan and isolated runner for generated code    [Bhuvaneshwar]
 │   ├── validation/            gate.py (paired bootstrap + guardrails), engine, metrics    [Bhuvaneshwar]
 │   ├── registry/              onboarding, publishing, promotion, deployment read-back     [Bhuvaneshwar · Tamilselvan]
 │   ├── delivery/              rollout controller: shadow, canary, A/B, manual, blue-green [Bhuvaneshwar]
@@ -317,7 +321,7 @@ pipeline runs unchanged against MLflow, a plain filesystem, SageMaker or Vertex.
 | 3. Decision Engine: adapt | [`decision/engine.py`](src/oran_adapt/decision/engine.py), [`decision/constraints.py`](src/oran_adapt/decision/constraints.py), [`decision/llm_selector.py`](src/oran_adapt/decision/llm_selector.py), [`decision/fallback.py`](src/oran_adapt/decision/fallback.py), [`decision/report.py`](src/oran_adapt/decision/report.py) | `decide`: `FINE_TUNING`, `FULL_RETRAINING`, `ROLLBACK` or `NO_ACTION` | Ramanujam P |
 | MLKTL Scenario Module (PSI severity) | [`analysis/summary.py`](src/oran_adapt/analysis/summary.py), [`decision/constraints.py`](src/oran_adapt/decision/constraints.py) | drift magnitude and severity; PSI ≥ 0.5 rules out fine-tuning | Ramanujam P |
 | 4a / 4b. Fine-tune / Retrain | [`adaptation/finetune.py`](src/oran_adapt/adaptation/finetune.py), [`adaptation/retrain.py`](src/oran_adapt/adaptation/retrain.py), [`adaptation/torch_engine.py`](src/oran_adapt/adaptation/torch_engine.py), [`adaptation/model_types.py`](src/oran_adapt/adaptation/model_types.py) | the model type's engine for the chosen strategy (Generic Model Adapters) | shared |
-| 4. Fallback for unknown models | [`adaptation/llm_adapter.py`](src/oran_adapt/adaptation/llm_adapter.py), [`sandbox/security.py`](src/oran_adapt/sandbox/security.py), [`sandbox/runner.py`](src/oran_adapt/sandbox/runner.py) | `adapt_via_llm`: generated code, AST-checked and run isolated | shared |
+| 4. Engine Selection Agent | [`orchestrator/pipeline.py`](src/oran_adapt/orchestrator/pipeline.py) `_produce_candidate`, [`adaptation/engines.py`](src/oran_adapt/adaptation/engines.py), [`adaptation/llm_adapter.py`](src/oran_adapt/adaptation/llm_adapter.py), [`sandbox/security.py`](src/oran_adapt/sandbox/security.py), [`sandbox/runner.py`](src/oran_adapt/sandbox/runner.py) | model type's specific engine → generic engine (`select_engine`) → `adapt_via_llm`: LLM-generated code, AST-checked, run isolated | Bhuvaneshwar T S |
 | 5. Validate | [`validation/engine.py`](src/oran_adapt/validation/engine.py), [`validation/gate.py`](src/oran_adapt/validation/gate.py) | `validate_candidate`; gate `decide`: deploy only if the 95 % paired-bootstrap interval lies above the margin, plus latency, size and calibration guardrails | Bhuvaneshwar T S |
 | 6. Rollback | [`registry/promotion.py`](src/oran_adapt/registry/promotion.py), [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) | the previous LIVE is kept on rejection; `POST /models/{id}/rollback` | Bhuvaneshwar T S |
 | 7. Register | [`registry/publishing.py`](src/oran_adapt/registry/publishing.py), [`registry/promotion.py`](src/oran_adapt/registry/promotion.py), [`registry/deployment.py`](src/oran_adapt/registry/deployment.py) | `register_candidate`, `promote_version`, `start_rollout`, served-version read-back | Bhuvaneshwar T S |
@@ -336,8 +340,8 @@ pipeline runs unchanged against MLflow, a plain filesystem, SageMaker or Vertex.
 | 6 | [`analysis/version_eval.py`](src/oran_adapt/analysis/version_eval.py) | `evaluate_versions()`: score every registered version | Nitesh N D |
 | 7 | [`analysis/reuse_decision.py`](src/oran_adapt/analysis/reuse_decision.py) | `decide_reuse()`: Similar Model Exchange, or hand over | Nitesh N D |
 | 8 | [`decision/engine.py`](src/oran_adapt/decision/engine.py) | `decide()`: constraints → LLM (validated) or fallback | Ramanujam P |
-| 9 | [`adaptation/model_types.py`](src/oran_adapt/adaptation/model_types.py) | pick the plugin; fine-tune or retrain | shared |
-| 10 | [`adaptation/llm_adapter.py`](src/oran_adapt/adaptation/llm_adapter.py) | `adapt_via_llm()`, only if no engine fits | shared |
+| 9 | [`orchestrator/pipeline.py`](src/oran_adapt/orchestrator/pipeline.py), [`adaptation/model_types.py`](src/oran_adapt/adaptation/model_types.py) | Engine Selection Agent: the model type's specific engine, else the generic fine-tune / retrain engine | Bhuvaneshwar T S |
+| 10 | [`adaptation/llm_adapter.py`](src/oran_adapt/adaptation/llm_adapter.py) | `adapt_via_llm()`, only if no engine fits: AST check, then the sandbox | Bhuvaneshwar T S |
 | 11 | [`validation/engine.py`](src/oran_adapt/validation/engine.py) | `validate_candidate()` → paired-bootstrap gate | Bhuvaneshwar T S |
 | 12 | [`registry/publishing.py`](src/oran_adapt/registry/publishing.py) | `register_candidate()`: MLflow version + lineage | Bhuvaneshwar T S |
 | 13 | [`delivery/controller.py`](src/oran_adapt/delivery/controller.py) | `start_rollout()`: shadow / canary / A/B / manual | Bhuvaneshwar T S |

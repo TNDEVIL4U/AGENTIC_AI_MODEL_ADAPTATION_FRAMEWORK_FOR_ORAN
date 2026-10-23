@@ -26,8 +26,21 @@ def framework_capabilities(framework: str | None, settings: Settings) -> dict[st
     return {
         "fine_tuning": fw in supported and fw in types.frameworks(Strategy.FINE_TUNING),
         "full_retraining": fw in supported and fw in types.frameworks(Strategy.FULL_RETRAINING),
-        "llm_adapter": settings.llm_provider != "none",
+        "llm_adapter": llm_configured(settings),
     }
+
+
+def llm_configured(settings: Settings) -> bool:
+    """The LLM adapter can be used: switched on (the default), a provider named, and every key
+    that provider requires set (GEMINI_API_KEY for the default Gemini provider)."""
+    from oran_adapt import plugins
+    from oran_adapt.core.config import selected_adapters
+
+    if not selected_adapters(settings, "llm_provider"):
+        return False
+    spec = plugins.resolve("llm", settings.llm_provider, config_key="llm_provider")
+    return all(getattr(settings, key) not in (None, "", [], {})
+               for key in spec.capability.required_keys)
 
 
 def summarize_drift(
