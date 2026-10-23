@@ -374,7 +374,7 @@ server together with its uvicorn worker. Set
 | `LOG_LEVEL` / `LOG_JSON` | `INFO` / `true` | Logging verbosity/format |
 | `JOB_MAX_RETRIES` / `JOB_RETRY_BACKOFF_S` | `2` / `1.0` | Retry policy for transient MLflow/DB errors |
 | `JOB_TIMEOUT_S` | `600` | Wall-clock ceiling per adaptation job |
-| `ANALYSIS_PSI_REUSE_THRESHOLD` / `ANALYSIS_KS_PVALUE_REUSE_THRESHOLD` / `ANALYSIS_DRIFT_SCORE_REUSE_THRESHOLD` | `0.1` / `0.05` / `0.3` | When Member 1 decides the existing model can just be reused |
+| `ANALYSIS_PSI_REUSE_THRESHOLD` / `ANALYSIS_KS_PVALUE_REUSE_THRESHOLD` | `0.1` / `0.05` | When a feature is described as shifted in the drift summary and decision report; every reported drift is acted on |
 | `DECISION_MIN_DRIFTED_ROWS` | `10` | Minimum drifted rows before any strategy is actionable |
 | `DECISION_FULL_RETRAIN_PSI_THRESHOLD` | `0.5` | PSI above which fine-tuning is ruled out in favor of full retraining |
 | `DECISION_SUPPORTED_FRAMEWORKS` | `[]` (every framework an installed model type plugin can adapt) | Frameworks the decision layer may adapt |
