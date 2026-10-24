@@ -32,7 +32,7 @@ GREY, BLUE, ORANGE = "0.55", "#1f5aa6", "#d9822b"
 def rmse_by_action(rem: list[dict], out: Path) -> None:
     ids = [r["id"] for r in rem]
     x = np.arange(len(ids))
-    fig, ax = plt.subplots(figsize=(WIDTH, 1.9))
+    fig, ax = plt.subplots(figsize=(WIDTH, 1.65))
     for k, (key, label, color) in enumerate((("rmse_none", "No remediation", GREY),
                                              ("rmse_finetune", "Finetune", BLUE),
                                              ("rmse_regenerate", "Regenerate", ORANGE))):
@@ -56,7 +56,7 @@ def rmse_by_action(rem: list[dict], out: Path) -> None:
 def gain_vs_psi(rem: list[dict], out: Path) -> None:
     x = np.arange(len(rem))
     gains = [r["gain_pct"] for r in rem]
-    fig, ax = plt.subplots(figsize=(WIDTH, 1.8))
+    fig, ax = plt.subplots(figsize=(WIDTH, 1.55))
     bars = ax.bar(x, gains, 0.6, color=[ORANGE if r["concept"] else GREY for r in rem],
                   linewidth=0.4, edgecolor="0.2")
     for bar, r in zip(bars, rem, strict=True):
@@ -76,7 +76,7 @@ def gain_vs_psi(rem: list[dict], out: Path) -> None:
 
 def bootstrap(gate: list[dict], out: Path) -> None:
     picks = [g for g in gate if g["candidate"] in ("SGD, other seed", "boosted stumps")]
-    fig, axes = plt.subplots(len(picks), 1, figsize=(WIDTH, 2.4), sharex=True)
+    fig, axes = plt.subplots(len(picks), 1, figsize=(WIDTH, 2.05), sharex=True)
     for ax, g in zip(axes, picks, strict=True):
         d = 1e3 * np.asarray(g["diffs"])
         ax.hist(d, bins=40, color=BLUE if g["verdict"] == "ACCEPT" else GREY, linewidth=0)
@@ -99,7 +99,7 @@ def cost(costs: dict[str, dict[str, float]], out: Path) -> None:
     means = [costs[s]["mean_ms"] for s in stages]
     stds = [costs[s]["std_ms"] for s in stages]
     total = sum(means)
-    fig, ax = plt.subplots(figsize=(WIDTH, 1.5))
+    fig, ax = plt.subplots(figsize=(WIDTH, 1.3))
     y = np.arange(len(stages))[::-1]
     ax.barh(y, means, xerr=stds, color=BLUE, height=0.55,
             error_kw={"linewidth": 0.6, "capsize": 2})

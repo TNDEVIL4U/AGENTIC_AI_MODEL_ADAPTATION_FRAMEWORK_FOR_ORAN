@@ -41,25 +41,23 @@
 \maketitle
 
 \begin{abstract}
-AI/ML models deployed in the Open Radio Access Network (O-RAN) degrade as traffic, load and
+AI/ML models deployed in the Open Radio Access Network (O-RAN) degrade as traffic, load, and
 radio conditions evolve, and current MLOps workflows leave the choice of remedy to human
 operators. This paper presents an Agentic AI-based model regeneration framework that acts on a
 reported degradation and decides, without human intervention, how the deployed model should be
-readapted. The framework first quantifies the shift between the training data and the current
-data with the Kolmogorov--Smirnov test and the Population Stability Index (PSI), then attempts a
-\emph{similar model exchange}: every registered version is re-scored on held-out current data and
-an earlier version that measurably beats the deployed one is promoted without training.
-Otherwise a Decision Engine, which combines hard constraints with an optional large language
+readapted. After quantifying the shift with the Kolmogorov--Smirnov test and the Population
+Stability Index (PSI), the framework attempts a \emph{similar model exchange} that re-scores every
+registered version on held-out current data and promotes one that measurably beats the deployed
+model. Otherwise a Decision Engine, combining hard constraints with an optional large language
 model (LLM) agent that calls read-only evidence tools, selects Finetune, Regenerate, Rollback, or
-No Action, and an Engine Selection stage runs the action with the model type's native engine or,
-only if none exists, with LLM-written code that is checked against an abstract-syntax-tree (AST)
-whitelist and executed in a sandbox. A paired-bootstrap gate admits a candidate only when its
-improvement is established. On eight controlled drift scenarios, remediation reduces held-out
-RMSE by 62.5--97.5\,\% where the input--output relationship changed, whereas under pure
-covariate shift it changes RMSE by less than 1\,\% although PSI reaches 15.6: PSI is useful as a
-severity measure but unsafe as a trigger. The gate rejects a candidate whose 95\,\% interval
-straddles zero although its point estimate is larger in magnitude than that of an accepted
-candidate.
+No Action, and an engine selection stage runs the action with a native engine or, only if none
+exists, with LLM-written code that is checked against an abstract-syntax-tree whitelist and
+sandboxed. A paired-bootstrap gate admits a candidate only when its improvement is established.
+On eight controlled drift scenarios, remediation reduces held-out RMSE by 62.5--97.5\,\% under
+concept drift but changes it by less than 1\,\% under pure covariate shift although PSI reaches
+15.6, so PSI is a sound severity measure but an unsafe trigger. The gate rejects a candidate whose
+95\,\% interval straddles zero although its point estimate exceeds in magnitude that of an
+accepted candidate.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -127,8 +125,9 @@ which is the decision the Decision Engine makes.
 \centering
 \caption{Summary of the Reviewed Literature}
 \label{tab:lit}
-\footnotesize
-\begin{tabular}{@{}r p{3.3cm} p{2.9cm} p{3.0cm} p{6.4cm}@{}}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}r p{3.0cm} p{3.3cm} p{2.8cm} p{7.5cm}@{}}
 \toprule
 No. & Work & Venue, year & Category & Key points and gap with respect to this work\\
 \midrule
@@ -397,6 +396,7 @@ figure in Section~\ref{sec:results}.
 \label{tab:scen}
 \footnotesize
 \setlength{\tabcolsep}{3.2pt}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{@{}lcccccccc@{}}
 \toprule
 ID & S0 & S1 & S2 & S3 & S4 & S5 & S6 & S7\\
@@ -408,7 +408,7 @@ $\beta$ & 1.0 & 1.0 & 1.0 & 1.5 & 2.5 & 1.5 & 2.5 & 4.0\\
 $P(y\mid X)$ changed & no & no & no & yes & yes & yes & yes & yes\\
 $\mathrm{PSI}_{\max}$ & 0.058 & 4.949 & 15.635 & 0.058 & 0.103 & 5.283 & 15.638 & 16.090\\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \begin{table}[t]
@@ -417,6 +417,7 @@ $\mathrm{PSI}_{\max}$ & 0.058 & 4.949 & 15.635 & 0.058 & 0.103 & 5.283 & 15.638 
 \label{tab:rmse}
 \footnotesize
 \setlength{\tabcolsep}{2.6pt}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{@{}lcccccccc@{}}
 \toprule
 Action & S0 & S1 & S2 & S3 & S4 & S5 & S6 & S7\\
@@ -427,7 +428,7 @@ Regenerate & \textbf{0.0936} & 0.1059 & 0.0908 & \textbf{0.0953} & \textbf{0.092
 \midrule
 Gain (\%) & $-2.29$ & 0.52 & 0.63 & 62.49 & 88.05 & 69.29 & 93.63 & 97.50\\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 
 \vspace{2pt}
 \parbox{\columnwidth}{\scriptsize Gain: RMSE reduction of the better remediation arm (bold)
@@ -487,6 +488,7 @@ had become invalid; PSI must never trigger remediation on its own.
 \label{tab:gate}
 \footnotesize
 \setlength{\tabcolsep}{2.4pt}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{@{}lccccc@{}}
 \toprule
 Candidate & $\Delta$ & $\ell$ & $u$ & ${>}0$ (\%) & Verdict\\
@@ -498,7 +500,7 @@ Copy of incumbent & $0.00000$ & $0.00000$ & $0.00000$ & 0.0 & Reject\\
 Stale (baseline fit) & $-0.25842$ & $-0.27477$ & $-0.24131$ & 0.0 & Reject\\
 Constant (mean) & $-0.11486$ & $-0.13934$ & $-0.09204$ & 0.0 & Reject\\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 
 \vspace{2pt}
 \parbox{\columnwidth}{\scriptsize $\Delta$: RMSE reduction against the incumbent (RMSE 0.1008);
