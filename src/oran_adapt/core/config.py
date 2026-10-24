@@ -56,6 +56,11 @@ DISABLED = {
     "notification_backend": "none",
     "dataset_backends": "none",
 }
+# LLM_PROVIDER=auto (the behaviour when it is unset): the provider is chosen by the API key that
+# is set, and gets this model when its own model key is not set. Gemini's default model is the
+# gemini_model field default.
+LLM_DEFAULT_MODELS = {"openai-compatible": "gpt-5-mini", "anthropic": "claude-sonnet-5-5"}
+OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 # Selectors switched on by a separate boolean key: with the switch false the selector selects
 # nothing, so its adapter is neither built nor checked for its required keys.
 ENABLE_SWITCHES = {"llm_provider": "llm_enabled"}
@@ -257,15 +262,20 @@ class Settings(BaseSettings):
     registry_tags_checksum: str = Field("artifact.sha256", min_length=1)
     registry_tags_status: str = Field("oran.status", min_length=1)
 
-    # The LLM is ON by default, with Google Gemini: the decision engine asks it to choose among
-    # the strategies the hard constraints allow, and the adaptation step asks it to write an
-    # engine when no native engine fits (AST-checked, then run in the sandbox). It needs
-    # GEMINI_API_KEY; without the selected provider's key the framework still starts, logs a
-    # warning and takes the deterministic path (bootstrap.build_llm returns None), so nothing
-    # is sent anywhere. LLM_ENABLED=false switches it off; LLM_PROVIDER names the adapter
-    # (oran_adapt.llm group).
+    # The LLM is ON by default: the decision engine asks it to choose among the strategies the
+    # hard constraints allow, and the adaptation step asks it to write an engine when no native
+    # engine fits (AST-checked, then run in the sandbox). It is not tied to one vendor: unless
+    # LLM_PROVIDER names an adapter, the API key that is set picks it (_llm_provider_from_key):
+    # GEMINI_API_KEY -> gemini, OPENAI_API_KEY (or LLM_OPENAI_API_KEY) -> openai-compatible on
+    # api.openai.com, ANTHROPIC_API_KEY -> anthropic, checked in that order. With no key the
+    # framework still starts, logs a warning and takes the deterministic path
+    # (bootstrap.build_llm returns None), so nothing is sent anywhere. LLM_ENABLED=false
+    # switches it off; LLM_PROVIDER=auto (or unset) selects by key, any other value names the
+    # adapter (oran_adapt.llm group).
     llm_enabled: bool = True
     llm_provider: str = "gemini"
+    # The standard OpenAI key variable; used as LLM_OPENAI_API_KEY when that is not set.
+    openai_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     # Model ids have no default: which model a site may use is its decision, and a default
     # id goes stale when the provider retires it. Required with the provider (C4, C5).
@@ -899,6 +909,41 @@ class Settings(BaseSettings):
 
             check_mappers(self.drift_mappers)
         return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def _llm_provider_from_key(cls, data: Any) -> Any:
+        """LLM_PROVIDER unset or "auto": the API key that is set picks the provider."""
+        if not isinstance(data, dict):
+            return data
+        chosen = str(data.get("llm_provider") or "auto").strip().lower()
+        if chosen != "auto":
+            return data
+
+        def has(key: str) -> bool:
+            value = data.get(key)
+            if isinstance(value, SecretStr):
+                value = value.get_secret_value()
+            return value is not None and str(value).strip() != ""
+
+        out = dict(data)
+        if has("gemini_api_key"):
+            out["llm_provider"] = "gemini"
+        elif has("llm_openai_api_key") or has("openai_api_key"):
+            out["llm_provider"] = "openai-compatible"
+            if not has("llm_openai_api_key"):
+                out["llm_openai_api_key"] = data["openai_api_key"]
+            if not has("llm_openai_base_url"):
+                out["llm_openai_base_url"] = OPENAI_DEFAULT_BASE_URL
+            if not has("llm_openai_model"):
+                out["llm_openai_model"] = LLM_DEFAULT_MODELS["openai-compatible"]
+        elif has("anthropic_api_key"):
+            out["llm_provider"] = "anthropic"
+            if not has("anthropic_model"):
+                out["anthropic_model"] = LLM_DEFAULT_MODELS["anthropic"]
+        else:
+            out.pop("llm_provider", None)  # no key: the default provider, deterministic path
+        return out
 
     @model_validator(mode="after")
     def _llm_switch_consistent(self) -> Settings:

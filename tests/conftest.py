@@ -22,9 +22,11 @@ for _key, _value in (("API_RATE_LIMIT_PER_MINUTE", "0"),
                      ("API_AUTH_FAILURE_LIMIT_PER_MINUTE", "0"),
                      ("OUTBOUND_RESOLVE_HOSTS", "false")):
     os.environ.setdefault(_key, _value)
-# The LLM is on by default (Gemini). Tests never use a real provider: a key in the developer's
-# shell is dropped, so build_llm() returns None unless a test sets up its own double.
-for _key in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "LLM_OPENAI_API_KEY"):
+# The LLM is on by default and the API key that is set picks the provider. Tests never use a
+# real provider: a key in the developer's shell is dropped, so build_llm() returns None unless
+# a test sets up its own double.
+for _key in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "LLM_OPENAI_API_KEY", "OPENAI_API_KEY",
+             "LLM_PROVIDER"):
     os.environ.pop(_key, None)
 
 
