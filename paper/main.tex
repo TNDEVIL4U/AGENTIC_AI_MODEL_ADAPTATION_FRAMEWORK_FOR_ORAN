@@ -186,19 +186,19 @@ and reason.
   stage/.style={draw, rounded corners=1.5pt, align=center, minimum height=13.5mm,
     text width=19.5mm, inner sep=2pt, fill=blue!4},
   store/.style={draw, align=center, text width=24mm, inner sep=2pt, fill=gray!10},
-  out/.style={draw, rounded corners=1.5pt, align=center, text width=21mm, inner sep=2pt},
+  term/.style={draw, rounded corners=1.5pt, align=center, text width=21mm, inner sep=2pt},
   arr/.style={-{Latex[length=1.6mm]}, semithick},
   lab/.style={font=\tiny, inner sep=1pt}]
-\node[out] (rep) {Degradation report\\ (model ID, data)};
+\node[term] (rep) {Degradation report\\ (model ID, data)};
 \node[stage, right=of rep] (intake) {\textbf{1. Intake}\\ schema check,\\ model in registry,\\ job queued};
 \node[stage, right=of intake] (an) {\textbf{2. Analysis}\\ KS test and PSI per\\ feature (Eq.~\ref{eq:psi})};
 \node[stage, right=of an] (sme) {\textbf{3. Similar model}\\ \textbf{exchange}\\ re-score versions\\ on held-out data};
 \node[stage, right=of sme] (dec) {\textbf{4. Decision}\\ \textbf{Engine}\\ constraints, LLM\\ agent, fallback};
 \node[stage, right=of dec] (eng) {\textbf{5. Engine}\\ \textbf{selection}\\ native engine,\\ else LLM code};
 \node[stage, right=of eng] (gate) {\textbf{6. Validation}\\ \textbf{gate}\\ paired bootstrap\\ (Eq.~\ref{eq:gate})};
-\node[out, above=7mm of gate, fill=green!6] (reg) {\textbf{Register} in MLflow;\\ roll out (shadow,\\ canary, A/B, manual)};
-\node[out, below=7mm of gate, fill=red!5] (keep) {\textbf{Retain} the\\ deployed version};
-\node[out, above=7mm of sme, fill=green!6] (promote) {\textbf{Promote} the\\ earlier version};
+\node[term, above=7mm of gate, fill=green!6] (reg) {\textbf{Register} in MLflow;\\ roll out (shadow,\\ canary, A/B, manual)};
+\node[term, below=7mm of gate, fill=red!5] (keep) {\textbf{Retain} the\\ deployed version};
+\node[term, above=7mm of sme, fill=green!6] (promote) {\textbf{Promote} the\\ earlier version};
 \node[store, below=7mm of an] (pg) {Data versions and\\ lineage (PostgreSQL)};
 \node[store, below=7mm of sme] (ml) {Model versions\\ (MLflow registry)};
 \coordinate (decengtop) at ($(dec.north)!0.5!(eng.north)$);

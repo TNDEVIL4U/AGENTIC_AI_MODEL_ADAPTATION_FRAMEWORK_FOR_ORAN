@@ -28,7 +28,13 @@ jobs:
 
       - name: Build
         working-directory: paper
-        run: latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex
+        run: |
+          # -f runs to the end so the log lists every error, not only the first.
+          latexmk -pdf -f -interaction=nonstopmode main.tex || true
+          if grep -q "^!" main.log; then
+            echo "== LaTeX errors"; grep -n -A3 "^!" main.log; exit 1
+          fi
+          test -s main.pdf
 
       - name: Check the log and the fonts
         working-directory: paper
