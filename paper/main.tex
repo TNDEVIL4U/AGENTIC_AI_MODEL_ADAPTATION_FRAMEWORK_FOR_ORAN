@@ -173,10 +173,10 @@ is not established.
 \subsection{Pipeline Overview}
 Fig.~\ref{fig:arch} and Algorithm~\ref{alg:pipeline} give the pipeline end to end. The framework
 does not detect drift itself: an external monitor, or one of the framework's declarative event
-mappers, reports a degradation for a model and names the current data. Each report becomes a job
-that is validated, persisted, and queued; a separate worker executes it through the stages
-below, and every transition of its sixteen-state life cycle is recorded with a timestamp, actor,
-and reason.
+mappers, reports a degradation for a model and names the current data. The Intake Agent validates
+the report, checks that the model exists in the MLflow registry, and enqueues a job; a worker
+leases it (a crashed worker's job is picked up again) and executes the stages below, and every
+transition of the sixteen-state job life cycle is recorded with a timestamp, actor, and reason.
 
 \begin{figure*}[t]
 \centering
@@ -248,12 +248,6 @@ retrain when supported, else LLM-written code (AST check, sandbox, bounded repai
 \ENDIF
 \end{algorithmic}
 \end{algorithm}
-
-\subsection{Model Intake}
-The Intake Agent validates the report, checks that the model exists in the MLflow registry, and
-enqueues the job; it never runs the pipeline in the API process. A worker leases the job, so a
-crashed worker's job is picked up again, and an optional per-job deadline ends overdue jobs as
-timed out.
 
 \subsection{Shift Analysis}
 The current data and the deployed version's training data are retrieved from versioned,
@@ -451,9 +445,7 @@ Where only the input distribution moved (S1--S2), remediation changes RMSE by le
 and with no shift at all (S0) the better arm is 2.29\,\% worse than the deployed model. This is
 the expected behaviour of a correctly specified model: shifting $P(X)$ without altering
 $P(y\mid X)$ leaves the learned mapping valid, and refitting on a smaller window only adds
-estimation variance. Here the pipeline should retain the deployed model rather than spend
-computation on regeneration, which is what the gate enforces: a candidate whose improvement is
-not established is not deployed.
+estimation variance; the gate then keeps the deployed model, since no improvement is established.
 
 \begin{figure}[t]
 \centering
@@ -543,9 +535,8 @@ Fig.~\ref{fig:cost} gives the per-stage wall time of one Regenerate run, average
 repetitions after a warm-up run, about 385\,ms in total. The shift analysis
 ($213.1 \pm 19.5$\,ms), which builds an Evidently report for the KS test and PSI of every
 feature, and the gate ($166.7 \pm 21.9$\,ms) for its 1000 paired resamples dominate; the refit
-itself takes 4\,ms on this small linear model. Both costs are negligible against the cadence of
-readaptation requests. A similar model exchange skips the training and the candidate gate, but
-not the shift analysis or the scoring of the registered versions.
+itself takes 4\,ms on this small linear model. Both are negligible against the cadence of
+readaptation requests; a similar model exchange skips training and the candidate gate.
 
 \section{Limitations}
 The similar model exchange path runs end to end, but its benefit was not quantified; that needs
@@ -562,12 +553,8 @@ were tested with a scripted LLM. Finally, registries, serving systems, and broke
 against emulators rather than live managed services.
 
 \section{Conclusion and Future Work}
-This paper presented an Agentic AI-based model regeneration framework for O-RAN that addresses a
-question the reviewed work leaves open: when, and how, to readapt a degraded model. After
-measuring the shift, a readapter first attempts a similar model exchange from the version
-registry; otherwise a constraint-bounded Decision Engine selects Finetune, Regenerate, Rollback,
-or No Action, and the engine selection stage runs it, writing code with an LLM only when no
-native engine exists.
+This paper presented an Agentic AI-based model regeneration framework for O-RAN that decides
+when, and how, to readapt a degraded model.
 
 The measured results support three claims. Regeneration is the stronger remediation action under
 genuine concept drift, improving held-out RMSE by up to 97.5\,\%. Remediation brings no material
