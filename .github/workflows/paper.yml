@@ -1,0 +1,63 @@
+name: paper
+
+# Builds paper/main.tex with the IEEEtran class and commits paper/main.pdf back to the branch,
+# so the PDF always matches its source. A push made with GITHUB_TOKEN starts no new workflow run.
+on:
+  push:
+    paths:
+      - "paper/**"
+      - "!paper/main.pdf"
+      - ".github/workflows/paper.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install TeX Live (IEEEtran, algorithms, TikZ)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends latexmk texlive-latex-base \
+            texlive-latex-recommended texlive-latex-extra texlive-publishers \
+            texlive-science texlive-pictures texlive-fonts-recommended poppler-utils
+
+      - name: Build
+        working-directory: paper
+        run: latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex
+
+      - name: Check the log and the fonts
+        working-directory: paper
+        run: |
+          echo "== warnings"
+          grep -nE "Warning|Overfull|Underfull" main.log || true
+          echo "== undefined references or citations"
+          if grep -qE "(Citation|Reference) .* undefined|There were undefined" main.log; then
+            grep -nE "(Citation|Reference) .* undefined|There were undefined" main.log; exit 1
+          fi
+          echo "== pages"; pdfinfo main.pdf | grep -E "Pages|Page size"
+          echo "== fonts (all must be embedded)"; pdffonts main.pdf
+          if pdffonts main.pdf | awk 'NR>2 && $(NF-4)!="yes"' | grep -q .; then
+            echo "a font is not embedded"; exit 1
+          fi
+
+      - name: Commit the PDF
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f paper/main.pdf
+          if git diff --cached --quiet; then echo "PDF unchanged"; exit 0; fi
+          git commit -m "paper: rebuild main.pdf"
+          git push
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: paper
+          path: |
+            paper/main.pdf
+            paper/main.log
