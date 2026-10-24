@@ -201,7 +201,8 @@ and reason.
 \node[out, above=7mm of sme, fill=green!6] (promote) {\textbf{Promote} the\\ earlier version};
 \node[store, below=7mm of an] (pg) {Data versions and\\ lineage (PostgreSQL)};
 \node[store, below=7mm of sme] (ml) {Model versions\\ (MLflow registry)};
-\node[store, above=7mm of $(dec)!0.5!(eng)$] (llm) {External LLM (optional):\\ decision agent; code writer\\ with AST check, sandbox,\\ write--check--run--fix};
+\coordinate (decengtop) at ($(dec.north)!0.5!(eng.north)$);
+\node[store, above=7mm of decengtop, anchor=south] (llm) {External LLM (optional):\\ decision agent; code writer\\ with AST check, sandbox,\\ write--check--run--fix};
 \draw[arr] (rep) -- (intake);
 \draw[arr] (intake) -- (an);
 \draw[arr] (an) -- (sme);
@@ -657,14 +658,14 @@ D.~M. Manias, A.~Chouman, and A.~Shami, ``A model drift detection and adaptation
 J.~Lu, A.~Liu, F.~Dong, F.~Gu, J.~Gama, and G.~Zhang, ``Learning under concept drift: A
 review,'' \emph{IEEE Trans. Knowl. Data Eng.}, vol.~31, no.~12, pp.~2346--2363, 2019.
 
+\bibitem{zoubir1998bootstrap}
+A.~M. Zoubir and B.~Boashash, ``The bootstrap and its application in signal processing,''
+\emph{IEEE Signal Process. Mag.}, vol.~15, no.~1, pp.~56--76, 1998.
+
 \bibitem{kong2024overcoming}
 Y.~Kong, L.~Liu, H.~Chen, J.~Kacprzyk, and D.~Tao, ``Overcoming catastrophic forgetting in
 continual learning by exploring eigenvalues of Hessian matrix,'' \emph{IEEE Trans. Neural Netw.
 Learn. Syst.}, vol.~35, no.~11, pp.~16196--16210, 2024.
-
-\bibitem{zoubir1998bootstrap}
-A.~M. Zoubir and B.~Boashash, ``The bootstrap and its application in signal processing,''
-\emph{IEEE Signal Process. Mag.}, vol.~15, no.~1, pp.~56--76, 1998.
 
 \end{thebibliography}
 
