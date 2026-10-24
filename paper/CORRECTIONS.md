@@ -20,6 +20,7 @@ references are to `src/oran_adapt/`.
 | 10 | "The API key that is set selects the provider" | `LLM_PROVIDER` selects it (Gemini by default since PR #11); without a key every decision takes the deterministic path | `core/config.py`, `bootstrap.py` |
 | 11 | "Per-stage deadlines" | One optional per-job deadline (`JOB_DEADLINE_S`, off by default) | `core/config.py`, `orchestrator/worker.py` |
 | 12 | PSI formula without its binning | Evidently: Sturges bins over the pooled sample, empty bins floored at 1e-4 (why PSI exceeds 15) | `analysis/comparison.py` |
+| 14 | Intake checks that the model exists in the MLflow registry (stated in an earlier version of `main.tex`) | Intake validates the schema, removes duplicates and queues; an unknown model fails the job in the first worker stage with `MODEL_NOT_FOUND` | `api/routes_adaptation.py:33`, `orchestrator/jobs.py:368`, `analysis/retrieval.py:170` |
 | 13 | Gate only | The gate also applies configurable guardrails (slices, calibration, latency, size) | `validation/gate.py` |
 
 Verified as stated: 33 528 lines in 186 modules; 961 tests (939 passed, 3 failed, 19 skipped in

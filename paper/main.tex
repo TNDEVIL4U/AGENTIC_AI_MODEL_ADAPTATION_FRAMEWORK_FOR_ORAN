@@ -176,8 +176,8 @@ is not established.
 Fig.~\ref{fig:arch} and Algorithm~\ref{alg:pipeline} give the pipeline end to end. The framework
 does not detect drift itself: an external monitor, or one of the framework's declarative event
 mappers, reports a degradation for a model and names the current data. The Intake Agent validates
-the report, checks that the model exists in the MLflow registry, and enqueues a job; a worker
-leases it (a crashed worker's job is picked up again) and executes the stages below, and every
+the report against its schema, removes duplicates, and enqueues a job (a model that is not
+onboarded fails the job in the first worker stage); a worker leases it (a crashed worker's job is picked up again) and executes the stages below, and every
 transition of the sixteen-state job life cycle is recorded with a timestamp, actor, and reason.
 
 \begin{figure*}[t]
@@ -191,7 +191,7 @@ transition of the sixteen-state job life cycle is recorded with a timestamp, act
   arr/.style={-{Latex[length=1.6mm]}, semithick},
   lab/.style={font=\tiny, inner sep=1pt}]
 \node[term] (rep) {Degradation report\\ (model ID, data)};
-\node[stage, right=of rep] (intake) {\textbf{1. Intake}\\ schema check,\\ model in registry,\\ job queued};
+\node[stage, right=of rep] (intake) {\textbf{1. Intake}\\ schema check,\\ duplicates removed,\\ job queued};
 \node[stage, right=of intake] (an) {\textbf{2. Analysis}\\ KS test and PSI per\\ feature (Eq.~\ref{eq:psi})};
 \node[stage, right=of an] (sme) {\textbf{3. Similar model}\\ \textbf{exchange}\\ re-score versions\\ on held-out data};
 \node[stage, right=of sme] (dec) {\textbf{4. Decision}\\ \textbf{Engine}\\ constraints, LLM\\ agent, fallback};
@@ -231,7 +231,7 @@ Rollback (RB) and No Action (NA) retain the deployed version.}
 \label{alg:pipeline}
 \begin{algorithmic}[1]
 \REQUIRE model ID, reference to the current data $D_c$
-\STATE Validate the report; reject it if the schema check fails or the model is unknown
+\STATE Validate the report against its schema and drop duplicates; an unknown model fails the job
 \STATE Load the training data $D_r$ of the deployed version $M_t$ and the current data $D_c$
 \STATE Compute the KS $p$-value and PSI (Eq.~\ref{eq:psi}) of every feature
 \STATE Hold out the newest fraction $H$ of $D_c$ (never trained on)
