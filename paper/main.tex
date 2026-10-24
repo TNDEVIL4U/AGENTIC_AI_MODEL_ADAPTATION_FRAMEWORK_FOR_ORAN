@@ -127,7 +127,8 @@ which is the decision the Decision Engine makes.
 \label{tab:lit}
 \scriptsize
 \setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}r p{3.0cm} p{3.3cm} p{2.8cm} p{7.5cm}@{}}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\begin{tabular}{@{}r L{3.5cm} L{3.7cm} L{2.9cm} L{6.6cm}@{}}
 \toprule
 No. & Work & Venue, year & Category & Key points and gap with respect to this work\\
 \midrule
@@ -184,7 +185,7 @@ transition of the sixteen-state job life cycle is recorded with a timestamp, act
   font=\scriptsize, node distance=3.2mm and 3.6mm,
   stage/.style={draw, rounded corners=1.5pt, align=center, minimum height=13.5mm,
     text width=19.5mm, inner sep=2pt, fill=blue!4},
-  store/.style={draw, align=center, text width=24mm, inner sep=2pt, fill=gray!10},
+  store/.style={draw, align=center, text width=26mm, inner sep=2pt, fill=gray!10},
   term/.style={draw, rounded corners=1.5pt, align=center, text width=21mm, inner sep=2pt},
   arr/.style={-{Latex[length=1.6mm]}, semithick},
   lab/.style={font=\tiny, inner sep=1pt}]
@@ -201,13 +202,13 @@ transition of the sixteen-state job life cycle is recorded with a timestamp, act
 \node[store, below=7mm of an] (pg) {Data versions and\\ lineage (PostgreSQL)};
 \node[store, below=7mm of sme] (ml) {Model versions\\ (MLflow registry)};
 \coordinate (decengtop) at ($(dec.north)!0.5!(eng.north)$);
-\node[store, above=7mm of decengtop, anchor=south] (llm) {External LLM (optional):\\ decision agent; code writer\\ with AST check, sandbox,\\ write--check--run--fix};
+\node[store, above=7mm of decengtop, anchor=south, text width=44mm] (llm) {External LLM (optional): decision agent;\\ code writer with AST check, sandbox,\\ and write--check--run--fix loop};
 \draw[arr] (rep) -- (intake);
 \draw[arr] (intake) -- (an);
 \draw[arr] (an) -- (sme);
-\draw[arr] (sme) -- node[lab, above]{no match} (dec);
-\draw[arr] (dec) -- node[lab, above]{FT / RG} (eng);
-\draw[arr] (eng) -- node[lab, above]{candidate} (gate);
+\draw[arr] (sme) -- (dec);
+\draw[arr] (dec) -- (eng);
+\draw[arr] (eng) -- (gate);
 \draw[arr] (gate) -- node[lab, right]{$\ell>\delta$} (reg);
 \draw[arr] (gate) -- node[lab, right]{otherwise} (keep);
 \draw[arr] (sme) -- node[lab, right]{beats live} (promote);
@@ -218,7 +219,9 @@ transition of the sixteen-state job life cycle is recorded with a timestamp, act
 \draw[arr, dashed, <->] (llm.south east) ++(-4mm,0) -- ($(eng.north)+(-2mm,0)$);
 \end{tikzpicture}
 \caption{Architecture of the regeneration pipeline. Solid arrows: control flow; dashed arrows:
-data and optional LLM calls. FT: Finetune; RG: Regenerate; RB: Rollback; NA: No Action.}
+data and optional LLM calls. The exchange hands over to the Decision Engine only when no registered
+version beats the deployed one, and only Finetune (FT) and Regenerate (RG) reach engine selection;
+Rollback (RB) and No Action (NA) retain the deployed version.}
 \label{fig:arch}
 \end{figure*}
 

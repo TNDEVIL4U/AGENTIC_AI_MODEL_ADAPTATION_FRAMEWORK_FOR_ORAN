@@ -13,9 +13,15 @@ on:
 permissions:
   contents: write
 
+# A newer push supersedes a running build, so no stale PDF is committed over a newer one.
+concurrency:
+  group: paper-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
