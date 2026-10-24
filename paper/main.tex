@@ -12,6 +12,7 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{url}
+\usepackage{balance}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning,calc,fit}
 
@@ -555,6 +556,8 @@ agent nor the LLM-written engines and their repair loop were evaluated against a
 were tested with a scripted LLM. Finally, registries, serving systems, and brokers were exercised
 against emulators rather than live managed services.
 
+% The conclusion starts on the last page: balance its two columns (IEEE requirement).
+\balance
 \section{Conclusion and Future Work}
 This paper presented an Agentic AI-based model regeneration framework for O-RAN that decides
 when, and how, to readapt a degraded model.
@@ -572,8 +575,6 @@ operator drift events, add parameter-efficient fine-tuning for deep-learning mod
 candidates in a digital twin before the gate~\cite{masaracchia2023digital,zakihindi2026reference},
 and diagnose xApp conflicts separately from drift.
 
-% Balances the columns of the last page (IEEE requirement).
-\IEEEtriggeratref{11}
 \begin{thebibliography}{19}
 
 \bibitem{polese2023understanding}
