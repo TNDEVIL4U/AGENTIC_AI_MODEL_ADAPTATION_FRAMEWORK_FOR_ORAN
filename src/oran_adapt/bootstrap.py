@@ -133,8 +133,8 @@ def build_artifact_store(settings: Settings) -> ArtifactStorePort:
 
 
 def build_llm(settings: Settings) -> LLMPort | None:
-    """None means "no LLM": LLM_ENABLED=false, LLM_PROVIDER=none, or the provider (Gemini by
-    default) has no API key configured. Callers keep a deterministic path for that case rather
+    """None means "no LLM": LLM_ENABLED=false, LLM_PROVIDER=none, or no API key is configured
+    (the key that is set picks the provider: Gemini, OpenAI or Anthropic). Callers keep a deterministic path for that case rather
     than treating it as an error, and nothing is sent anywhere. Otherwise the provider comes
     wrapped in the guard (caps, retries, breaker)."""
     if not selected_adapters(settings, "llm_provider"):

@@ -1,13 +1,23 @@
 # LLM adapters, the guard and prompts
 
-The LLM is **on by default**, with Google Gemini (`LLM_ENABLED=true`, `LLM_PROVIDER=gemini`,
-`GEMINI_MODEL=gemini-3.8-flash`). It does two jobs: the decision engine asks it to choose among
+The LLM is **on by default** (`LLM_ENABLED=true`) and is not tied to one vendor: with
+`LLM_PROVIDER` unset or `auto`, the API key that is set picks the provider, checked in this
+order:
+
+| Key set | Provider | Model when its own model key is unset |
+|---|---|---|
+| `GEMINI_API_KEY` | `gemini` | `GEMINI_MODEL`, default `gemini-3.8-flash` |
+| `OPENAI_API_KEY` (or `LLM_OPENAI_API_KEY`) | `openai-compatible` on `https://api.openai.com/v1` | `gpt-5-mini` |
+| `ANTHROPIC_API_KEY` | `anthropic` | `claude-sonnet-5-5` |
+
+With no key the provider stays `gemini` (the default) and is unused. Naming a provider in
+`LLM_PROVIDER` pins it, whatever keys are set (`core/config.py`, `_llm_provider_from_key`). It does two jobs: the decision engine asks it to choose among
 the strategies the hard constraints allow, and the Engine Selection step asks it to write an
 adaptation engine when the model type has no specific engine and the generic engines cannot
 run the strategy (that code is AST-checked by `sandbox/security.py` and run only by
 `sandbox/runner.py`).
 
-It needs `GEMINI_API_KEY`. Without the selected provider's key the framework still starts:
+Without an API key the framework still starts:
 `bootstrap.build_llm` logs a warning and returns `None`, the decision engine picks the
 strategy by its rules and the adaptation step uses the native engines only. Nothing is sent
 anywhere: `tests/unit/test_phase10_llm.py` runs the whole pipeline with every outbound

@@ -59,7 +59,7 @@ Every path in this README is a link to the file in the repository.
 | REST API | 39 endpoints under `/api/v1` |
 | CLI | `oran-adapt` with 11 command groups: `db`, `data`, `model`, `event`, `auth`, `config`, `jobs`, `rollout`, `worker`, `cdc`, `notifications` |
 | Pluggable adapters | registries, deployment, model types, LLM providers, queues, auth, notifications, data sources; one entry-point group per port in [`pyproject.toml`](pyproject.toml) |
-| Defaults | SQLite and a local MLflow store, the LLM on with Google Gemini (set `GEMINI_API_KEY`; without it the framework runs on its rules, offline), shadow delivery. No GPU and no Docker needed |
+| Defaults | SQLite and a local MLflow store, the LLM on (set `GEMINI_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` and that provider is used; without a key the framework runs on its rules, offline), shadow delivery. No GPU and no Docker needed |
 
 ---
 
@@ -73,7 +73,7 @@ Every path in this README is a link to the file in the repository.
 | CPU / RAM | 2 cores and 4 GB RAM minimum; 4 cores and 8 GB recommended. No GPU |
 | Disk | 5 GB free, mostly PyTorch |
 | OS | Windows, macOS or Linux |
-| Optional | PostgreSQL 14+ for production; Docker for the compose stack and the hard-limit sandbox; a Gemini key (`GEMINI_API_KEY`) for the LLM, which is on by default; Anthropic or an OpenAI-compatible server instead |
+| Optional | PostgreSQL 14+ for production; Docker for the compose stack and the hard-limit sandbox; an API key for the LLM, which is on by default: `GEMINI_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (the key you set picks the provider), or an OpenAI-compatible server |
 
 ## A.2 Install
 
@@ -201,7 +201,7 @@ python -m oran_adapt.cli rollout approve --rollout-id <id> # when DELIVERY_STRAT
 
 Supported model families: scikit-learn, XGBoost, LightGBM, CatBoost, PyTorch (tabular and
 sequence models), Keras, statsmodels forecasters and ONNX. Any other family can use the
-sandboxed LLM path once `GEMINI_API_KEY` is set (the LLM is on by default).
+sandboxed LLM path once an API key is set (`GEMINI_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`; the LLM is on by default).
 
 ## A.7 Container stack and Kubernetes (optional)
 
